@@ -91,6 +91,8 @@ dsh plugin --profile dev add ./packages/<plugin-name>
 dsh --profile dev --dump-config
 ```
 
+> 当前仓库还没有第三方依赖，因此暂不提交 `pnpm-lock.yaml`；首个插件引入依赖后，把 `pnpm install` 生成的锁文件一并提交。
+
 开发与发布的具体约定（插件形态、manifest、命名、版本、发布检查清单）见 **[docs/plugin-guide.md](./docs/plugin-guide.md)**。
 
 ## 路线图
