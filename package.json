@@ -1,0 +1,12 @@
+{
+  "name": "oh-my-dsh-plugin",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Open-source plugin collection for DeepSeek Harness (DSH)",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck"
+  }
+}
