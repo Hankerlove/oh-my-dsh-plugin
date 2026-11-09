@@ -1,0 +1,54 @@
+{
+  "name": "@hankerlove/dsh-todo-list",
+  "version": "0.1.0",
+  "description": "Floating iOS-style todo list for the DeepSeek Harness Web UI: a day-by-day panel with a draggable pill, P0/P1/P2 priorities, workday/weekend/daily/weekly/monthly/yearly repeats backed by the China work calendar, completed and missed records, and due-time reminders that raise an in-panel alert with snooze plus a best-effort system notification and soft chime.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/en.json",
+    "locale/zh.json",
+    "icon.svg"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "todo",
+    "reminders",
+    "task-list"
+  ],
+  "homepage": "https://github.com/Hankerlove/oh-my-dsh-plugin/tree/main/packages/dsh-todo-list",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hankerlove/oh-my-dsh-plugin.git",
+    "directory": "packages/dsh-todo-list"
+  },
+  "bugs": {
+    "url": "https://github.com/Hankerlove/oh-my-dsh-plugin/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-theme"
+      ]
+    }
+  }
+}
