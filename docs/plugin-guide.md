@@ -105,6 +105,8 @@ export function apply(ctx: Context) {
 }
 ```
 
+**例外：纯 ESM 的 Client 半边。** 如果某个 bundle 的 Client 半边是手写的纯 ESM，通过 `dsh.client` 挂在 Web UI 上、并由 `package.json` 的 `exports["./client"]` 暴露，就不必走 `src/` → `lib/` 的 TypeScript 编译链路：DSH 把它当作浏览器侧产物加载，不需要 `tsc` 输出，包内也可以不出现 `src/`、`lib/` 和 `tsconfig.json`。这类包必须保证 `files` 与 `exports` 覆盖每一个运行时文件（Host 入口、`./client`、patch 文件、`locale/*.json`、图标等），否则安装后会漏文件；也建议在包内 README 里说明为什么偏离通用约定。本仓库的 [`@hankerlove/dsh-todo-list`](../packages/dsh-todo-list/README.md) 就是这种形态：Host 半边 `apply()` 为空，功能全部在浏览器侧。
+
 ## 4. 本仓库约定
 
 | 项 | 约定 |
@@ -183,6 +185,8 @@ git push origin main --tags
 - [ ] 根 README 的插件表已更新
 - [ ] `dsh plugin --profile dev add ./packages/<plugin-name>` 后 `--dump-config` 验证通过
 - [ ] 版本号与 tag 一致，`git push --tags` 完成
+
+> 纯 ESM 插件（如 [`@hankerlove/dsh-todo-list`](../packages/dsh-todo-list/README.md)）可以跳过构建相关的检查项（`pnpm --filter <包名> build`、`lib/` 不提交），但仍需确认 `files` / `exports` 列全运行时文件，并在 `--dump-config` 中看到对应插件层。
 
 ## 参考
 

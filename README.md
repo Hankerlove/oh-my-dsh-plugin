@@ -2,112 +2,106 @@
 
 # Oh My DSH Plugin
 
-**一组开源、可组合的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件集合**
+**面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）的开源插件集合**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Status: initializing](https://img.shields.io/badge/status-initializing-orange.svg)](#路线图)
 
 </div>
 
-## 简介
+## 这是什么
 
-`oh-my-dsh-plugin` 是一个 DSH 插件仓库兼实验场。每个插件都是**一个独立 npm 包**，声明 `dsh.bundle` manifest，通过 `dsh plugin add` 安装进任意 profile 后按需启用；插件之间互不耦合，可以独立开发、发布和升级。
+Oh My DSH Plugin 收集可以直接安装进 DSH 的插件。每个插件是一个独立的 npm 包，装好之后会在 DSH 的 Web UI 里增加一块能力，不需要修改 DSH 本身，也不需要自己编译。
 
-- **可组合** —— 每个插件只贡献一层 Cordis patch，不想要的插件不启用即可
-- **可独立发布** —— 一个插件 = 一个 npm 包 + 一个版本 tag，单独维护语义化版本
-- **开源** —— 全部以 [MIT](./LICENSE) 协议开放
+- **装好即用**：`dsh plugin add` 安装，刷新页面就能看到
+- **一个插件一个包**：按需安装，互不依赖
+- **数据留在本机**：插件默认只把数据存在本地，不上传
 
-> 当前状态：仓库初始化阶段，首个插件仍在规划中。插件清单见下方[插件](#插件)表格，开发约定见 [插件开发指南](./docs/plugin-guide.md)。
+## 插件列表
 
-## 插件
-
-| 插件 | 说明 | npm 包名 | 状态 |
+| 插件 | 能做什么 | npm 包名 | 状态 |
 | --- | --- | --- | --- |
-| _待添加_ | 首个插件筹备中 | — | 规划中 |
+| [待办清单](./packages/dsh-todo-list/README.md) | 悬浮在 Web UI 右上角的待办面板：可拖动、可收起，按天查看，支持优先级、重复规则与到点提醒 | `@hankerlove/dsh-todo-list` | 可用 |
 
-> 维护约定：每合并一个新插件，就在上表补一行，并在 [`docs/`](./docs) 下补充它的使用说明。
+后续插件会继续补充到这张表里。
+
+## 环境要求
+
+| 项 | 说明 |
+| --- | --- |
+| DSH | 桌面版或 Web 版，能够打开 Web UI（当前版本在 DSH `0.2.2-rc.1` 上验证） |
+| pnpm | 只有命令行安装需要：`dsh plugin` 会把参数转发给 profile 目录里的 pnpm |
+| 平台 | 插件运行在 DSH Web UI 内，macOS 已验证 |
 
 ## 安装
 
-前置条件：
+下面的 `<profile>` 换成你的 profile 名（例如 `desktop`）。
 
-- 已经安装 DSH（`dsh --version` 可输出 `0.1.x` 或更高版本）
-- 已经安装 pnpm（`npm i -g pnpm`）；`dsh plugin` 会把参数转发给 profile 目录里的 pnpm
-
-```sh
-# 安装插件到指定 profile（profile 不存在时会自动初始化）
-dsh plugin --profile <profile> add <插件包名>
-
-# 只查看组合后的配置，不启动，用于确认插件层是否生效
-dsh --profile <profile> --dump-config
-
-# 用该 profile 启动
-dsh --profile <profile>
-
-# 卸载
-dsh plugin --profile <profile> remove <插件包名>
-```
-
-插件支持两种分发方式：
-
-| 方式 | 适用场景 | 说明 |
-| --- | --- | --- |
-| npm registry | 正式发布 | `pnpm publish` 时已产出构建结果，开箱即用 |
-| tarball | 内测、预发布 | `pnpm pack` 出包后 `dsh plugin add ./<包名>-<版本>.tgz`，同样使用预构建产物 |
-| git | 尝鲜、未发布 | 拉取的是源码，需要包内自带 `prepare` 脚本，且用户需在 profile 的 `pnpm-workspace.yaml` 中显式允许该包的构建脚本。本仓库是多包（monorepo）结构，优先用 npm 或 tarball 分发 |
-
-## 仓库结构
-
-```text
-.
-├── README.md                  # 项目入口（本文件）：简介、插件清单、路线图
-├── LICENSE                    # MIT
-├── package.json               # 根 workspace：统一脚本，不发布
-├── pnpm-workspace.yaml        # 定义 packages/* 工作区
-├── docs/
-│   └── plugin-guide.md        # 插件开发与发布约定
-└── packages/                  # 规划中：每个子目录是一个独立 npm 包
-    └── <plugin-name>/
-        ├── package.json       # 声明 dsh.bundle
-        ├── cordis.patch.yml   # 插件层
-        └── src/index.ts       # 插件入口，导出 apply(ctx)
-```
-
-根目录不发布到 npm；`packages/*` 下的每个包单独发布。
-
-## 开发
+### 方式一：从 npm 安装
 
 ```sh
-# 安装依赖（pnpm workspace）
-pnpm install
-
-# 构建全部插件
-pnpm -r build
-
-# 把本地插件链接进一个用于调试的 profile
-dsh plugin --profile dev add ./packages/<plugin-name>
-
-# 校验 patch 层是否被正确组合
-dsh --profile dev --dump-config
+dsh plugin --profile <profile> add @hankerlove/dsh-todo-list
 ```
 
-> 当前仓库还没有第三方依赖，因此暂不提交 `pnpm-lock.yaml`；首个插件引入依赖后，把 `pnpm install` 生成的锁文件一并提交。
+> 如果 npm 上还取不到这个版本，用方式二或方式三。
 
-开发与发布的具体约定（插件形态、manifest、命名、版本、发布检查清单）见 **[docs/plugin-guide.md](./docs/plugin-guide.md)**。
+### 方式二：从 tarball 安装
 
-## 路线图
+```sh
+# 在仓库里打包
+cd packages/dsh-todo-list
+pnpm pack            # 生成 hankerlove-dsh-todo-list-0.1.0.tgz
 
-- [x] 初始化仓库：git、README、MIT LICENSE、.gitignore
-- [x] 沉淀插件开发与发布约定
-- [ ] 确定首批插件清单
-- [ ] 搭建第一个插件包（脚手架 + 本地调试）
-- [ ] 发布首个插件到 npm
-- [ ] 补充 CI：构建、类型检查、发布流水线
+# 安装这个 tarball
+dsh plugin --profile <profile> add ./hankerlove-dsh-todo-list-0.1.0.tgz
+```
 
-## 贡献
+也可以从本仓库的 [Releases](https://github.com/Hankerlove/oh-my-dsh-plugin/releases) 下载对应的 tarball，把路径换掉即可。
 
-欢迎 Issue 与 PR。提交信息建议使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/)，例如 `feat(<plugin>): 支持 xxx`、`docs: 更新插件清单`。新增插件请同时更新[插件](#插件)表格与对应文档。
+### 方式三：从源码目录安装
 
-## 开源协议
+```sh
+git clone https://github.com/Hankerlove/oh-my-dsh-plugin.git
+cd oh-my-dsh-plugin
+dsh plugin --profile <profile> add ./packages/dsh-todo-list
+```
 
-本项目基于 [MIT License](./LICENSE) 开源，`packages/*` 下的每个插件包沿用同一协议。
+### 安装之后
+
+1. 用该 profile 启动 DSH（桌面版重启即可）
+2. 刷新 Web UI 页面，插件就会出现在界面上（待办清单出现在页面右上角）
+3. 卸载：
+
+```sh
+dsh plugin --profile <profile> remove @hankerlove/dsh-todo-list
+```
+
+## 插件使用
+
+### 待办清单
+
+- **位置**：默认停在页面右上角。拖动标题栏可以把它放到任意位置；右上角的收起按钮会把它缩成一个小胶囊，胶囊也能拖动，点击胶囊重新展开；准星按钮或双击标题栏回到默认位置。
+- **按天查看**：默认只显示今天。用 `‹` `›` 逐日翻页，点击日期可以直接选任意一天；「逾期 N」「未来 N」会跳到最近的对应日期。翻到过去某天，可以看到当天完成了什么、哪些重复事项没有完成。
+- **添加待办**：标题 + 日期（默认今天）+ 可选时间 + 重复规则 + 优先级，按回车或点「＋」添加。
+- **重复规则**：不重复 / 工作日 / 周末 / 每天 / 每周 / 每月 / 每年。工作日与周末使用中国法定节假日与调休安排（内置 2026–2027 年）。
+- **优先级**：无 / P0 / P1 / P2，行首色条与彩色徽章区分（P0 红、P1 琥珀、P2 蓝）。
+- **完成与历史**：圆形勾选框，勾选后变灰划线并移到底部「已完成」；重复事项错过的当次会记录在「未完成」里，不会变成今天的逾期任务。
+- **到点提醒**：带时间的待办到点后，页面顶部会弹出提醒卡片（完成 / 稍后 10 分钟 / 知道了），同时播放轻提示音；系统与 WebView 支持时还会发系统通知并更新应用角标。提醒只在 Web UI 页面打开时生效。
+- **数据**：保存在浏览器 `localStorage`，不经过网络；卸载插件不会删除已有数据。
+
+更细的说明（重复规则、工作日历覆盖范围、存储项、已知限制）见[插件说明](./packages/dsh-todo-list/README.md)。
+
+## 数据与隐私
+
+- 插件默认把数据保存在本机，不上传，也不向第三方发起请求。
+- 卸载插件不会自动清理已有数据；需要清理时，请清除对应站点的浏览器数据。
+- 各插件具体存了哪些数据，见该插件的说明文档。
+
+## 已知限制
+
+- 插件都运行在 DSH Web UI 里，终端、headless 等没有 Web UI 的场景无法使用。
+- 待办清单的「工作日 / 周末」重复内置了 2026–2027 年的中国节假日安排；超出这两个年份会回退成周一至周五。
+- 待办提醒需要页面保持打开；系统通知与应用角标是否可用取决于 WebView 与操作系统。
+
+## 许可证
+
+[MIT](./LICENSE)
