@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-	id: '@hankerlove/dsh-todo-list',
+	id: '@ultraslow/dsh-todo-list',
 	/**
 	 * Client half of the todo list bundle.
 	 *

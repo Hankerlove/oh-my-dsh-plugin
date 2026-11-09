@@ -20,7 +20,7 @@ Oh My DSH Plugin 收集可以直接安装进 DSH 的插件。每个插件是一�
 
 | 插件 | 能做什么 | npm 包名 | 状态 |
 | --- | --- | --- | --- |
-| [待办清单](./packages/dsh-todo-list/README.md) | 悬浮在 Web UI 右上角的待办面板：可拖动、可收起，按天查看，支持优先级、重复规则与到点提醒 | `@hankerlove/dsh-todo-list` | 可用 |
+| [待办清单](./packages/dsh-todo-list/README.md) | 悬浮在 Web UI 右上角的待办面板：可拖动、可收起，按天查看，支持优先级、重复规则与到点提醒 | `@ultraslow/dsh-todo-list` | 可用 |
 
 后续插件会继续补充到这张表里。
 
@@ -39,7 +39,7 @@ Oh My DSH Plugin 收集可以直接安装进 DSH 的插件。每个插件是一�
 ### 方式一：从 npm 安装
 
 ```sh
-dsh plugin --profile <profile> add @hankerlove/dsh-todo-list
+dsh plugin --profile <profile> add @ultraslow/dsh-todo-list
 ```
 
 > 如果 npm 上还取不到这个版本，用方式二或方式三。
@@ -49,10 +49,10 @@ dsh plugin --profile <profile> add @hankerlove/dsh-todo-list
 ```sh
 # 在仓库里打包
 cd packages/dsh-todo-list
-pnpm pack            # 生成 hankerlove-dsh-todo-list-0.1.0.tgz
+pnpm pack            # 生成 ultraslow-dsh-todo-list-0.1.0.tgz
 
 # 安装这个 tarball
-dsh plugin --profile <profile> add ./hankerlove-dsh-todo-list-0.1.0.tgz
+dsh plugin --profile <profile> add ./ultraslow-dsh-todo-list-0.1.0.tgz
 ```
 
 如果维护者已经把对应版本的 tarball 传到 [Releases](https://github.com/Hankerlove/oh-my-dsh-plugin/releases)，也可以直接下载，把路径换成下载后的文件。
@@ -72,7 +72,7 @@ dsh plugin --profile <profile> add ./packages/dsh-todo-list
 3. 卸载：
 
 ```sh
-dsh plugin --profile <profile> remove @hankerlove/dsh-todo-list
+dsh plugin --profile <profile> remove @ultraslow/dsh-todo-list
 ```
 
 ## 插件使用

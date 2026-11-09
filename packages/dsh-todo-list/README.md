@@ -1,10 +1,10 @@
-# 待办清单 · @hankerlove/dsh-todo-list
+# 待办清单 · @ultraslow/dsh-todo-list
 
 悬浮在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web UI 里的待办面板，用法接近 iOS 的「提醒事项」。
 
 | 项 | 值 |
 | --- | --- |
-| npm 包名 | `@hankerlove/dsh-todo-list` |
+| npm 包名 | `@ultraslow/dsh-todo-list` |
 | 版本 | `0.1.0` |
 | 适用 | DSH Web UI（在 DSH `0.2.2-rc.1` 上验证） |
 | 协议 | [MIT](../../LICENSE) |
@@ -28,12 +28,12 @@
 
 ```sh
 # 从 npm 安装（npm 上发布之后可用；尚未发布时用下面两种方式）
-dsh plugin --profile <profile> add @hankerlove/dsh-todo-list
+dsh plugin --profile <profile> add @ultraslow/dsh-todo-list
 
 # 或从 tarball 安装
 cd packages/dsh-todo-list
 pnpm pack
-dsh plugin --profile <profile> add ./hankerlove-dsh-todo-list-0.1.0.tgz
+dsh plugin --profile <profile> add ./ultraslow-dsh-todo-list-0.1.0.tgz
 
 # 或从源码目录安装
 dsh plugin --profile <profile> add ./packages/dsh-todo-list
@@ -44,7 +44,7 @@ dsh plugin --profile <profile> add ./packages/dsh-todo-list
 卸载：
 
 ```sh
-dsh plugin --profile <profile> remove @hankerlove/dsh-todo-list
+dsh plugin --profile <profile> remove @ultraslow/dsh-todo-list
 ```
 
 ## 使用
