@@ -112,7 +112,7 @@ export function apply(ctx: Context) {
 | 项 | 约定 |
 | --- | --- |
 | 目录 | `packages/<plugin-name>/`，一个插件一个包，互不依赖 |
-| 包名 | 与官方生态对齐使用 `dsh-` 前缀：`dsh-<name>`；若需要 scope，则用 `@hankerlove/dsh-<name>`（首个插件发布前最终确认） |
+| 包名 | 与官方生态对齐使用 `dsh-` 前缀：`dsh-<name>`；若 npm 上该名字已被占用，则用 `@hankerlove/dsh-<name>`（首个插件已确认为 `@hankerlove/dsh-todo-list`，因为 `dsh-todo-list` 在 npm 上已被占用） |
 | 源码 / 产物 | `src/` → `lib/`，产物不提交；每个包自带 `tsconfig.json` |
 | 版本 | 每个插件独立语义化版本，互不联动 |
 | tag | `<包名>@<版本>`，例如 `dsh-example-plugin@0.1.0` |
