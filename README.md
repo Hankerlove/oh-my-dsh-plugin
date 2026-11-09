@@ -20,7 +20,7 @@ Oh My DSH Plugin 收集可以直接安装进 DSH 的插件。每个插件是一�
 
 | 插件 | 能做什么 | npm 包名 | 状态 |
 | --- | --- | --- | --- |
-| [待办清单](./packages/dsh-todo-list/README.md) | 悬浮在 Web UI 右上角的待办面板：可拖动、可收起，按天查看，支持优先级、重复规则与到点提醒 | `@ultraslow/dsh-todo-list` | 可用 |
+| [待办清单](./packages/dsh-todo-list/README.md) | 悬浮在 Web UI 右上角的待办面板：可拖动、可收起，按天查看，支持优先级、重复规则与到点提醒 | [`@ultraslow/dsh-todo-list`](https://www.npmjs.com/package/@ultraslow/dsh-todo-list) | 已发布 |
 
 后续插件会继续补充到这张表里。
 
@@ -42,7 +42,6 @@ Oh My DSH Plugin 收集可以直接安装进 DSH 的插件。每个插件是一�
 dsh plugin --profile <profile> add @ultraslow/dsh-todo-list
 ```
 
-> 如果 npm 上还取不到这个版本，用方式二或方式三。
 
 ### 方式二：从 tarball 安装
 

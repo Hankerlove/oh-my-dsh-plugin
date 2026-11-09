@@ -4,7 +4,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| npm 包名 | `@ultraslow/dsh-todo-list` |
+| npm 包名 | [`@ultraslow/dsh-todo-list`](https://www.npmjs.com/package/@ultraslow/dsh-todo-list) |
 | 版本 | `0.1.0` |
 | 适用 | DSH Web UI（在 DSH `0.2.2-rc.1` 上验证） |
 | 协议 | [MIT](../../LICENSE) |
@@ -27,7 +27,7 @@
 `<profile>` 换成你的 profile 名（例如 `desktop`）。
 
 ```sh
-# 从 npm 安装（npm 上发布之后可用；尚未发布时用下面两种方式）
+# 从 npm 安装
 dsh plugin --profile <profile> add @ultraslow/dsh-todo-list
 
 # 或从 tarball 安装
