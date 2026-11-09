@@ -27,7 +27,7 @@
 `<profile>` 换成你的 profile 名（例如 `desktop`）。
 
 ```sh
-# 从 npm 安装
+# 从 npm 安装（npm 上发布之后可用；尚未发布时用下面两种方式）
 dsh plugin --profile <profile> add @hankerlove/dsh-todo-list
 
 # 或从 tarball 安装

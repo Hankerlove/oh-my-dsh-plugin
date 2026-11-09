@@ -55,7 +55,7 @@ pnpm pack            # 生成 hankerlove-dsh-todo-list-0.1.0.tgz
 dsh plugin --profile <profile> add ./hankerlove-dsh-todo-list-0.1.0.tgz
 ```
 
-也可以从本仓库的 [Releases](https://github.com/Hankerlove/oh-my-dsh-plugin/releases) 下载对应的 tarball，把路径换掉即可。
+如果维护者已经把对应版本的 tarball 传到 [Releases](https://github.com/Hankerlove/oh-my-dsh-plugin/releases)，也可以直接下载，把路径换成下载后的文件。
 
 ### 方式三：从源码目录安装
 
