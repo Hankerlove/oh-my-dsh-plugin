@@ -1,12 +1,12 @@
 # 待办清单 · @ultraslow/dsh-todo-list
 
-悬浮在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web UI 里的待办面板，用法接近 iOS 的「提醒事项」。
+悬浮在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web UI 里的待办面板。
 
 | 项 | 值 |
 | --- | --- |
 | npm 包名 | [`@ultraslow/dsh-todo-list`](https://www.npmjs.com/package/@ultraslow/dsh-todo-list) |
-| 版本 | `0.1.0` |
-| 适用 | DSH Web UI（在 DSH `0.2.2-rc.1` 上验证） |
+| 版本 | `0.1.1` |
+| 适用 | DSH Web UI |
 | 协议 | [MIT](../../LICENSE) |
 
 ## 能做什么
@@ -22,24 +22,25 @@
 | 到点提醒 | 页内提醒卡片（完成 / 稍后 10 分钟 / 知道了）+ 轻提示音；系统与 WebView 支持时还会发系统通知、更新应用角标 |
 | 多语言 | 中英文界面，跟随 DSH 当前语言；日期与星期本地化 |
 
-## 安装
+## 安装方式
 
-`<profile>` 换成你的 profile 名（例如 `desktop`）。
+`<profile>` 换成你的 profile 名（例如 `desktop`、`web`）。
+
+### 从 npm 安装
 
 ```sh
-# 从 npm 安装
 dsh plugin --profile <profile> add @ultraslow/dsh-todo-list
+```
 
-# 或从 tarball 安装
-cd packages/dsh-todo-list
-pnpm pack
-dsh plugin --profile <profile> add ./ultraslow-dsh-todo-list-0.1.0.tgz
+### 从源码安装
 
-# 或从源码目录安装
+```sh
+git clone https://github.com/Hankerlove/oh-my-dsh-plugin.git
+cd oh-my-dsh-plugin
 dsh plugin --profile <profile> add ./packages/dsh-todo-list
 ```
 
-安装后用该 profile 启动 DSH 并刷新 Web UI 页面，面板会出现在页面右上角。
+安装后用该 profile 启动 DSH，并刷新 Web UI 页面，面板会出现在页面右上角。
 
 卸载：
 
@@ -83,6 +84,15 @@ dsh plugin --profile <profile> remove @ultraslow/dsh-todo-list
 - 工作日历取自国务院办公厅 2026 年与 2027 年节假日安排的通知；**只覆盖这两年**，之外「工作日」回退为周一至周五，「周末」回退为周六与周日。
 - 选择「工作日 / 周末」时，如果所选日期不匹配，会自动顺延到之后第一个匹配的日期。
 
+#### 更新内置的节假日表
+
+新一年的安排发布后，把日期补进插件里的两张表即可（不需要改逻辑，也不需要重新构建）：
+
+- `packages/dsh-todo-list/client.js` 顶部的 `CN_HOLIDAYS`：放假日期；
+- 同一处的 `CN_MAKEUP_WORKDAYS`：调休上班日（周末需要上班的日期）。
+
+两张表都用 `'YYYY-MM-DD'` 格式的字符串，按日期增删即可；没有列进去的年份会自动回退为「周一至周五 / 周六周日」。修改后刷新 Web UI 页面即可生效。
+
 ### 完成与历史
 
 - 圆形勾选框；勾选后该行变灰、划线，移到底部「已完成」分组，可以取消。
@@ -110,14 +120,6 @@ dsh plugin --profile <profile> remove @ultraslow/dsh-todo-list
 - 全部写在当前页面的浏览器 `localStorage` 里，不经过 Host、不上传、不发起网络请求。
 - 数据按浏览器 profile / 站点隔离，不跨设备同步。
 - 卸载插件不会自动删除这些数据；清除站点数据会一并丢失。
-
-## 已知限制
-
-- 只存在于 DSH Web UI；终端、headless 等场景不可用。
-- 工作日历只覆盖 2026–2027 年，之后需要更新内置的节假日表。
-- 提醒只在页面打开时工作；系统通知、应用角标与提示音的可用性取决于 WebView 与操作系统；后台标签页的定时器可能被节流，提醒可能稍有延迟。
-- 提醒卡片与「稍后 10 分钟」是页面内的临时状态，刷新后不会恢复。
-- 数据存在浏览器本地，不跨设备、不支持导入导出。
 
 ## 许可证
 

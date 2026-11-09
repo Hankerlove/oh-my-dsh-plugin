@@ -1,6 +1,6 @@
 {
   "name": "@ultraslow/dsh-todo-list",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Floating iOS-style todo list for the DeepSeek Harness Web UI: a day-by-day panel with a draggable pill, P0/P1/P2 priorities, workday/weekend/daily/weekly/monthly/yearly repeats backed by the China work calendar, completed and missed records, and due-time reminders that raise an in-panel alert with snooze plus a best-effort system notification and soft chime.",
   "license": "MIT",
   "type": "module",
