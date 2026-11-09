@@ -5,7 +5,7 @@
 | 项 | 值 |
 | --- | --- |
 | npm 包名 | [`@ultraslow/dsh-todo-list`](https://www.npmjs.com/package/@ultraslow/dsh-todo-list) |
-| 版本 | `0.1.1` |
+| 版本 | `0.1.2` |
 | 适用 | DSH Web UI |
 | 协议 | [MIT](../../LICENSE) |
 

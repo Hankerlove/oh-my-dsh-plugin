@@ -897,7 +897,7 @@ window.__ModuleLoader__.load({
 .dsh-todo-check:hover { border-color: var(--dsw-alias-brand-primary); }
 .dsh-todo-check:active { transform: scale(0.9); }
 .dsh-todo-check:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
-.dsh-todo-check.is-done { background: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary); color: #ffffff; }
+.dsh-todo-check.is-done { background: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-label-primary-foreground); }
 .dsh-todo-clickable:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; border-radius: 8px; }
 .dsh-todo-field { font: inherit; font-size: 12px; outline: none; transition: border-color 120ms ease; }
 .dsh-todo-field:focus { border-color: var(--dsw-alias-brand-primary) !important; }
@@ -935,14 +935,24 @@ window.__ModuleLoader__.load({
 		const COLOR = {
 			label: 'var(--dsw-alias-label-primary)',
 			label2: 'var(--dsw-alias-label-secondary)',
+			/** Text/icons drawn on a brand-primary or dark filled surface. */
+			foreground: 'var(--dsw-alias-label-primary-foreground)',
 			border: 'var(--dsw-alias-border-l1)',
 			border2: 'var(--dsw-alias-border-l2)',
+			layer1: 'var(--dsw-alias-bg-layer-1)',
 			layer2: 'var(--dsw-alias-bg-layer-2)',
 			overlay: 'var(--dsw-alias-bg-overlay)',
+			/** Panel surface: never pure white or pure black in either theme. */
+			surface: 'color-mix(in srgb, var(--dsw-alias-bg-overlay) 45%, var(--dsw-alias-bg-layer-1))',
 			accent: 'var(--dsw-alias-brand-primary)',
 			danger: 'var(--dsw-alias-state-error-primary)',
 			warn: 'var(--dsw-alias-state-warn-primary)',
 		};
+
+		/** A readable badge/chip tint over the panel surface's base layer. */
+		function tint(color, percent) {
+			return `color-mix(in srgb, ${color} ${percent}%, var(--dsw-alias-bg-layer-1))`;
+		}
 		const PRIORITY_COLOR = {
 			p0: 'var(--dsw-alias-state-error-primary)',
 			p1: 'var(--dsw-alias-state-warn-primary)',
@@ -1024,7 +1034,7 @@ window.__ModuleLoader__.load({
 						borderRadius: '50%',
 						border: done ? '1.5px solid transparent' : '1.5px solid var(--dsw-alias-border-l2)',
 						background: done ? COLOR.accent : 'transparent',
-						color: done ? '#ffffff' : 'transparent',
+						color: done ? COLOR.foreground : 'transparent',
 						cursor: 'pointer',
 						flex: 'none',
 					},
@@ -1083,7 +1093,7 @@ window.__ModuleLoader__.load({
 						fontSize: 9.5,
 						fontWeight: 700,
 						letterSpacing: '0.02em',
-						background: `color-mix(in srgb, ${color} 18%, transparent)`,
+						background: tint(color, 20),
 						color,
 					},
 				},
@@ -1210,7 +1220,7 @@ window.__ModuleLoader__.load({
 						borderRadius: '50%',
 						border: done ? '1.5px solid transparent' : `1.5px solid ${COLOR.border2}`,
 						background: done ? COLOR.label2 : 'transparent',
-						color: done ? '#ffffff' : COLOR.label2,
+						color: done ? COLOR.foreground : COLOR.label2,
 						flex: 'none',
 						opacity: done ? 0.7 : 0.9,
 					},
@@ -1300,7 +1310,7 @@ window.__ModuleLoader__.load({
 									padding: 4,
 									borderRadius: 10,
 									border: `0.5px solid ${COLOR.border}`,
-									background: COLOR.overlay,
+									background: COLOR.surface,
 									boxShadow: '0 14px 34px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.1)',
 									maxHeight: 236,
 									overflowY: 'auto',
@@ -1440,7 +1450,7 @@ window.__ModuleLoader__.load({
 								border: 'none',
 								borderRadius: 9,
 								background: title.trim() === '' ? COLOR.layer2 : COLOR.accent,
-								color: title.trim() === '' ? COLOR.label2 : '#ffffff',
+								color: title.trim() === '' ? COLOR.label2 : COLOR.foreground,
 								cursor: title.trim() === '' ? 'default' : 'pointer',
 								opacity: title.trim() === '' ? 0.6 : 1,
 								flex: 'none',
@@ -1586,7 +1596,7 @@ window.__ModuleLoader__.load({
 						padding: '14px 14px 12px',
 						borderRadius: 18,
 						border: `0.5px solid ${COLOR.border}`,
-						background: COLOR.overlay,
+						background: COLOR.surface,
 						boxShadow: '0 26px 64px rgba(0, 0, 0, 0.36), 0 4px 14px rgba(0, 0, 0, 0.18)',
 						backdropFilter: 'blur(28px) saturate(180%)',
 						WebkitBackdropFilter: 'blur(28px) saturate(180%)',
@@ -1607,7 +1617,7 @@ window.__ModuleLoader__.load({
 								width: 36,
 								height: 36,
 								borderRadius: 12,
-								background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 16%, transparent)',
+								background: tint(COLOR.danger, 20),
 								color: COLOR.danger,
 								flex: 'none',
 							},
@@ -1652,7 +1662,7 @@ window.__ModuleLoader__.load({
 							border: 'none',
 							borderRadius: 9,
 							background: COLOR.accent,
-							color: '#ffffff',
+							color: COLOR.foreground,
 							fontFamily: FONT,
 							fontSize: 12,
 							fontWeight: 600,
@@ -1707,9 +1717,9 @@ window.__ModuleLoader__.load({
 									pointerEvents: 'auto',
 									padding: '3px 10px',
 									borderRadius: 8,
-									background: COLOR.overlay,
+									background: COLOR.surface,
 									border: `0.5px solid ${COLOR.border}`,
-									color: COLOR.label2,
+									color: COLOR.label,
 									fontFamily: FONT,
 									fontSize: 11,
 									boxShadow: shadow,
@@ -1966,7 +1976,7 @@ window.__ModuleLoader__.load({
 							padding: '0 14px 0 12px',
 							borderRadius: 20,
 							border: `0.5px solid ${COLOR.border}`,
-							background: COLOR.overlay,
+							background: COLOR.surface,
 							boxShadow: shadow,
 							color: COLOR.label,
 							fontFamily: FONT,
@@ -1994,8 +2004,8 @@ window.__ModuleLoader__.load({
 										height: 18,
 										padding: '0 5px',
 										borderRadius: 9,
-										background: todayOverdue > 0 ? COLOR.danger : COLOR.accent,
-										color: '#ffffff',
+										background: todayOverdue > 0 ? tint(COLOR.danger, 26) : tint(COLOR.label, 16),
+										color: todayOverdue > 0 ? COLOR.danger : COLOR.accent,
 										fontSize: 10.5,
 										fontWeight: 600,
 										fontVariantNumeric: 'tabular-nums',
@@ -2025,7 +2035,7 @@ window.__ModuleLoader__.load({
 						maxHeight: 'min(72vh, 620px)',
 						borderRadius: 18,
 						border: `0.5px solid ${COLOR.border}`,
-						background: COLOR.overlay,
+						background: COLOR.surface,
 						boxShadow: shadow,
 						color: COLOR.label,
 						fontFamily: FONT,
@@ -2093,12 +2103,12 @@ window.__ModuleLoader__.load({
 							{ style: { display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', paddingLeft: 24, minHeight: 18 } },
 							h('span', { style: { fontSize: 11, color: COLOR.label2 } }, relative),
 							h('span', { style: { fontSize: 11, color: COLOR.label2, opacity: 0.6 } }, '·'),
-							h('span', { style: { fontSize: 11, color: COLOR.label2 } }, t('summary.open', { n: openCount })),
+							h('span', { style: { fontSize: 11, color: COLOR.label } }, t('summary.open', { n: openCount })),
 							!isToday
 								? h(SummaryChip, {
 										label: t('day.today'),
 										color: COLOR.accent,
-										background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent)',
+										background: tint(COLOR.accent, 16),
 										onClick: () => setSelectedDay(today),
 									})
 								: null,
@@ -2106,7 +2116,7 @@ window.__ModuleLoader__.load({
 								? h(SummaryChip, {
 										label: t('summary.overdue', { n: summary.overdue }),
 										color: COLOR.danger,
-										background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 16%, transparent)',
+										background: tint(COLOR.danger, 20),
 										onClick: () => setSelectedDay(summary.overdueDate),
 									})
 								: null,
@@ -2114,7 +2124,7 @@ window.__ModuleLoader__.load({
 								? h(SummaryChip, {
 										label: t('summary.future', { n: summary.future }),
 										color: COLOR.accent,
-										background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent)',
+										background: tint(COLOR.accent, 16),
 										onClick: () => setSelectedDay(summary.futureDate),
 									})
 								: null,
