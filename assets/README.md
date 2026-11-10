@@ -41,29 +41,28 @@ ffprobe -v error -show_entries stream=width,height,nb_frames,r_frame_rate \
 
 | 文件 | 内容 | 规格 |
 | --- | --- | --- |
-| `boot-skin-demo.gif` | 启动 → 开屏片头 → 主界面壁纸 | 660×426 / 8fps / 5.1s / 2.7MB |
-| `boot-skin-demo.mp4` | 同内容高画质版 | 880×568, H.264, 1.3MB |
+| `boot-skin-demo.gif` | 光标移动到 dock → 点击启动 → 开屏片头 → 主界面壁纸 | 620×403 / 10fps / 12.4s / **5.3MB** |
+| `boot-skin-demo.mp4` | 同内容高画质版（README 里以链接形式给出） | 1200×780, H.264, 3.3MB |
 
-生成方式（录制原片 3564×2064@30fps，24.3s）：
+> 这个动图偏大（5.3MB），原因是它包含两段**原速播放**的高细节动画（开屏片头 ~7s + 壁纸）。如果后续要控制体积，优先砍时长而不是降帧率/降色数——10fps / 64 色已经是观感的下限。
 
-```sh
-# 1) 裁到 DSH 窗口 + 分段变速：等待段 30×、启动黑屏 1×、开屏 3×、界面 1.5×
-ffmpeg -i raw.mp4 -filter_complex "
-[0:v]trim=start=0:end=10.4,setpts=(PTS-STARTPTS)/30,crop=2562:1654:619:47[a];
-[0:v]trim=start=10.4:end=10.9,setpts=PTS-STARTPTS,crop=2562:1654:619:47[b];
-[0:v]trim=start=10.9:end=18.15,setpts=(PTS-STARTPTS)/3.0,crop=2562:1654:619:47[c];
-[0:v]trim=start=18.15:end=20.9,setpts=(PTS-STARTPTS)/1.5,crop=2562:1654:619:47[d];
-[a][b][c][d]concat=n=4:v=1:a=0,scale=1760:-2:flags=lanczos[out]" \
-  -map "[out]" -r 30 -c:v libx264 -crf 18 -pix_fmt yuv420p edit.mp4
+### 生成方式（关键帧变换，不是整段裁切）
 
-# 2) Screen Studio 式缓慢推镜（1.00 → 1.06，中心锚定）
-ffmpeg -i edit.mp4 -vf "zoompan=z='min(1+0.06*on/155,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=880x568:fps=30" \
-  -c:v libx264 -crf 18 -pix_fmt yuv420p assets/boot-skin-demo.mp4
+原片 3592×2076@30fps，27.8s。步骤：
 
-# 3) 压成 GIF（660px / 8fps / 64 色 / bayer 抖动）
-ffmpeg -i assets/boot-skin-demo.mp4 -vf "fps=8,scale=660:-1:flags=lanczos,split[a][b];\
-[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5" \
-  -loop 0 assets/boot-skin-demo.gif
-```
+1. **卡时间点**（用中心区亮度变化定位）：片头录屏栏消失 ~1.5s、点击 ≈10.45s、窗口黑屏 10.95s、开屏动画 11.6–18.75s、UI 出现 19.0s、壁纸完全出现 ~22.0s。
+2. **定位光标**：在 `10.4s` 帧里裁 dock 区域放大，量出光标热点在 `(1455, 2032)`。
+3. **量窗口矩形**：对窗口帧做「暗像素行列覆盖率 > 85%」统计，得到 `2562×1667 @ (619,53)`；再按窗高比把画面横向裁到同比例（`3190×2076`，左右各裁 201px），保证最后推入窗口时四边不露桌面。
+4. **按关键帧逐帧重采样**（见 `render_kf.py` 的思路，不需要 ffmpeg 表达式）：
 
-裁剪框（`crop=2562:1654:619:47`）是用「窗口帧与桌面帧的逐像素差异」自动求出来的，换机器/换窗口大小时需要重算。
+   | 输出时间 | 缩放 | 锚点 |
+   | --- | --- | --- |
+   | 0.00s | 1.00 | 屏幕中心 |
+   | 0.65s | 2.40 | **光标位置**（放大到 dock） |
+   | 1.75s | 2.40 | 光标位置（保持，覆盖点击） |
+   | 2.10s | 1.00 | 屏幕中心（回到原始大小） |
+   | 2.75s | 1.245 | **窗口中心**（黑屏期间推入矩形窗口） |
+   | 之后 | 1.245 | 窗口中心（开屏 + 壁纸原速） |
+
+   缩放/平移之间用 `easeInOutCubic` 缓动，逐帧 `crop + LANCZOS resize` 到 1200×780。
+5. **编码**：帧序列 → `libx264 -crf 20`；GIF 走 `hqdn3d` 去噪 + `fps=10` + `palettegen 64 色`。

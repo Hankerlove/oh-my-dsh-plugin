@@ -4,7 +4,7 @@
 
 ![启动 → 开屏片头 → 主界面壁纸](https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/boot-skin-demo.gif)
 
-<sub>动图为 5s 剪辑（等待启动过程已快进）；[高画质 mp4](https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/boot-skin-demo.mp4)</sub>
+<sub>动图 12s：等待过程已剪掉，开屏与壁纸均为原速；[高画质 mp4](https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/boot-skin-demo.mp4)</sub>
 
 | 项 | 值 |
 | --- | --- |
