@@ -21,6 +21,7 @@ Oh My DSH Plugin 收集个人开发、好用的 DSH 插件。每个插件是一�
 | 插件 | 能做什么 | npm 包名 |
 | --- | --- | --- |
 | [待办清单](./packages/dsh-todo-list/README.md) | 悬浮在 Web UI 右上角的待办面板：可拖动、可收起，按天查看；重复事项每天一条独立实例，支持优先级、工作日历与到点提醒 | [`@ultraslow/dsh-todo-list`](https://www.npmjs.com/package/@ultraslow/dsh-todo-list) |
+| [开屏与壁纸](./packages/dsh-boot-skin/README.md) | 启动时全屏播你自己的视频，并把图片/视频铺成界面壁纸；不透明度、渐入渐隐、模糊、暗化、界面通透度都能在设置里实时调 | [`@ultraslow/dsh-boot-skin`](https://www.npmjs.com/package/@ultraslow/dsh-boot-skin) |
 
 ## 安装方式
 
@@ -30,6 +31,7 @@ Oh My DSH Plugin 收集个人开发、好用的 DSH 插件。每个插件是一�
 
 ```sh
 dsh plugin --profile <profile> add @ultraslow/dsh-todo-list
+dsh plugin --profile <profile> add @ultraslow/dsh-boot-skin
 ```
 
 ### 从源码安装
@@ -38,6 +40,7 @@ dsh plugin --profile <profile> add @ultraslow/dsh-todo-list
 git clone https://github.com/Hankerlove/oh-my-dsh-plugin.git
 cd oh-my-dsh-plugin
 dsh plugin --profile <profile> add ./packages/dsh-todo-list
+dsh plugin --profile <profile> add ./packages/dsh-boot-skin
 ```
 
 安装后用该 profile 启动 DSH，并刷新 Web UI 页面，插件会出现在界面上。
@@ -46,6 +49,7 @@ dsh plugin --profile <profile> add ./packages/dsh-todo-list
 
 ```sh
 dsh plugin --profile <profile> remove @ultraslow/dsh-todo-list
+dsh plugin --profile <profile> remove @ultraslow/dsh-boot-skin
 ```
 
 ## 插件使用
@@ -61,6 +65,22 @@ dsh plugin --profile <profile> remove @ultraslow/dsh-todo-list
 - **到点提醒**：带时间的当天实例到点后，页面顶部会弹出提醒卡片（完成 / 稍后 10 分钟 / 知道了），同时播放轻提示音；系统与 WebView 支持时还会发系统通知并更新应用角标。
 
 更细的说明（重复规则、工作日历覆盖范围、存储项等）见[插件说明](./packages/dsh-todo-list/README.md)。
+
+### 开屏与壁纸
+
+- **入口**：设置 → 插件 → 「开屏与壁纸」。
+- **开屏视频**：选一段本地视频（推荐 5–10 秒、H.264 的 mp4），打开「启用开屏视频」，下次启动 DSH 时全屏播放一次；点击画面或按 `Esc` 可跳过；超大或坏文件会自动放行，不会把界面卡在开屏后面。
+- **视频参数**：不透明度、渐入时长、渐隐时长、最长时长、静音、允许跳过、每次启动是否只播一次。
+- **壁纸**：选一张图片或一段视频，打开「启用壁纸」。若壁纸被界面挡住，把「界面不透明度」往低调（建议 75–90）。
+- **壁纸参数**：不透明度、模糊、暗化、填充方式（cover / contain / fill）、界面通透度。
+- **视频壁纸播放方式**：循环播放一直播；播放一次会在片头结束后播一遍并停住，切换会话时重播。
+- **立即看效果**：点「预览开屏」或刷新页面；滑杆松手即生效，不需要重启。
+- 媒体与配置全部保存在本机 `$DSH_HOME/boot-skin/`，不上传网络。
+- **素材来源**：感谢这两个项目开源的开屏 / 壁纸视频，可直接下载后上传（使用前请遵守对应仓库的许可与素材版权说明）：
+  - [NativeDog1/dsh-boot-animation · media](https://github.com/NativeDog1/dsh-boot-animation/tree/main/media)
+  - [lxj5820/dsh-boot-animation · assets/videos](https://github.com/lxj5820/dsh-boot-animation/tree/main/assets/videos)
+
+更细的说明（参数范围、素材建议、排查方法）见[插件说明](./packages/dsh-boot-skin/README.md)。
 
 ## 许可证
 
