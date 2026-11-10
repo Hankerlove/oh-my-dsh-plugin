@@ -1,0 +1,55 @@
+{
+  "name": "@ultraslow/dsh-boot-skin",
+  "version": "0.1.0",
+  "description": "Full-frame custom boot video and wallpaper for the DeepSeek Harness Web UI: upload your own clip or still from the settings panel, tune fades, opacity, blur, dim and fit, and keep every byte on local disk.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/en.json",
+    "locale/zh.json",
+    "icon.svg"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "wallpaper",
+    "boot-animation",
+    "skin",
+    "splash"
+  ],
+  "homepage": "https://github.com/Hankerlove/oh-my-dsh-plugin/tree/main/packages/dsh-boot-skin",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hankerlove/oh-my-dsh-plugin.git",
+    "directory": "packages/dsh-boot-skin"
+  },
+  "bugs": {
+    "url": "https://github.com/Hankerlove/oh-my-dsh-plugin/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-theme"
+      ]
+    }
+  }
+}

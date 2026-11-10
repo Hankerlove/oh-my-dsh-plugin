@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Boot film and wallpaper">
+  <defs>
+    <linearGradient id="bootskin-bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3F7EF7"/>
+      <stop offset="1" stop-color="#7A46E8"/>
+    </linearGradient>
+    <linearGradient id="bootskin-glow" x1="12" y1="40" x2="52" y2="14" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity=".55"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#bootskin-bg)"/>
+  <path d="M4 40c10-6 18 2 28-3s16-11 28-9v18a14 14 0 0 1-14 14H18A14 14 0 0 1 4 46z" fill="url(#bootskin-glow)"/>
+  <rect x="13" y="15" width="38" height="26" rx="6" fill="none" stroke="#FFFFFF" stroke-width="2.4" opacity=".95"/>
+  <path d="M29.5 23.4l9 4.6-9 4.6z" fill="#FFFFFF"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" opacity=".85">
+    <path d="M13 48h13"/>
+    <path d="M32 48h7"/>
+    <path d="M45 48h6"/>
+  </g>
+</svg>

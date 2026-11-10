@@ -1,0 +1,8 @@
+# Bundle patch for dsh-boot-skin.
+#
+# A dependency whose manifest declares `dsh.bundle.patch` joins the profile's
+# layer stack; this row mounts the plugin. `id` also names the settings
+# namespace used by the client half.
+- insert:
+    - id: boot-skin
+      name: '@ultraslow/dsh-boot-skin'
