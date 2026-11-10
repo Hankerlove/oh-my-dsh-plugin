@@ -17,7 +17,8 @@ window.__ModuleLoader__.load({
 		// #region constants
 		const NS = 'todo-list';
 		/** Browser-local storage keys (the desktop page origin is stable). */
-		const MODEL_KEY = 'dsh.todo-list.v2';
+		const MODEL_KEY = 'dsh.todo-list.v3';
+		const LEGACY_MODEL_KEY_V2 = 'dsh.todo-list.v2';
 		const LEGACY_MODEL_KEY = 'dsh.todo-list.v1';
 		const VIEW_KEY = 'dsh.todo-list.view.v3';
 		const SETTINGS_KEY = 'dsh.todo-list.settings.v1';
@@ -35,7 +36,12 @@ window.__ModuleLoader__.load({
 		const RIGHT_INSET = 24;
 		/** Room a collapsed pill needs around its centre. */
 		const PILL_HALF = 58;
-		const HISTORY_LIMIT = 200;
+		/** Legacy v1/v2 records kept for display; new occurrences are never pruned. */
+		const HISTORY_LIMIT = 1000;
+		/** How many days ahead of today occurrences are materialised. */
+		const OCCURRENCE_HORIZON_DAYS = 30;
+		/** Hard stop for catching up a long-closed app. */
+		const OCCURRENCE_GUARD = 4000;
 		const REPEATS = ['none', 'workdays', 'weekends', 'daily', 'weekly', 'monthly', 'yearly'];
 		const PRIORITIES = ['p0', 'p1', 'p2'];
 		const PRIORITY_RANK = { p0: 0, p1: 1, p2: 2 };
@@ -195,17 +201,6 @@ window.__ModuleLoader__.load({
 			return dateKey;
 		}
 
-		function nextOccurrenceFrom(dateKey, repeat, today) {
-			if (repeat === 'none' || !isDateKey(dateKey)) return dateKey;
-			let next = advanceDate(dateKey, repeat);
-			let guard = 0;
-			while (next < today && guard < 5000) {
-				next = advanceDate(next, repeat);
-				guard += 1;
-			}
-			return next;
-		}
-
 		function alignToRepeat(dateKey, repeat) {
 			if (repeat === 'workdays' && !isWorkday(dateKey)) {
 				let next = dateKey;
@@ -266,6 +261,28 @@ window.__ModuleLoader__.load({
 			}
 		}
 
+		/** A repeating rule; occurrences are generated from it. */
+		function normalizeSeries(item, seen) {
+			if (item === null || typeof item !== 'object') return null;
+			const title = typeof item.title === 'string' ? item.title.trim() : '';
+			if (title === '') return null;
+			const repeat = REPEATS.includes(item.repeat) && item.repeat !== 'none' ? item.repeat : null;
+			if (repeat === null || !isDateKey(item.startDate)) return null;
+			let id = typeof item.id === 'string' && item.id !== '' ? item.id : makeId();
+			if (seen.has(id)) id = makeId();
+			seen.add(id);
+			return {
+				id,
+				title: title.slice(0, MAX_TITLE),
+				time: normalizeTime(item.time),
+				repeat,
+				priority: PRIORITIES.includes(item.priority) ? item.priority : null,
+				startDate: item.startDate,
+				archived: item.archived === true,
+				createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
+			};
+		}
+
 		function normalizeTodo(item, seen) {
 			if (item === null || typeof item !== 'object') return null;
 			const title = typeof item.title === 'string' ? item.title.trim() : '';
@@ -275,6 +292,7 @@ window.__ModuleLoader__.load({
 			seen.add(id);
 			return {
 				id,
+				seriesId: typeof item.seriesId === 'string' && item.seriesId !== '' ? item.seriesId : null,
 				title: title.slice(0, MAX_TITLE),
 				date: isDateKey(item.date) ? item.date : todayKey(),
 				time: normalizeTime(item.time),
@@ -282,7 +300,7 @@ window.__ModuleLoader__.load({
 				priority: PRIORITIES.includes(item.priority) ? item.priority : null,
 				done: item.done === true,
 				doneAt: Number.isFinite(item.doneAt) ? item.doneAt : null,
-				nextDate: isDateKey(item.nextDate) ? item.nextDate : null,
+				skipped: item.skipped === true,
 				notifiedKey: typeof item.notifiedKey === 'string' ? item.notifiedKey : null,
 				createdAt: Number.isFinite(item.createdAt) ? item.createdAt : Date.now(),
 			};
@@ -315,74 +333,130 @@ window.__ModuleLoader__.load({
 			return history.slice(history.length - HISTORY_LIMIT);
 		}
 
+		/** Coerce a v3 document; occurrences without a live series become one-off records. */
 		function normalizeModel(raw) {
 			const source = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw : { todos: Array.isArray(raw) ? raw : [] };
 			const seen = new Set();
+			const series = [];
+			const seriesIds = new Set();
+			for (const item of Array.isArray(source.series) ? source.series : []) {
+				const entry = normalizeSeries(item, seen);
+				if (entry === null || seriesIds.has(entry.id)) continue;
+				seriesIds.add(entry.id);
+				series.push(entry);
+			}
 			const todos = [];
 			for (const item of Array.isArray(source.todos) ? source.todos : []) {
 				const todo = normalizeTodo(item, seen);
-				if (todo !== null) todos.push(todo);
+				if (todo === null) continue;
+				if (todo.seriesId !== null && !seriesIds.has(todo.seriesId)) todo.seriesId = null;
+				todos.push(todo);
 			}
 			const history = normalizeHistory(source.history, seen);
-			return { todos, history: pruneHistory(history) };
+			return { series, todos, history: pruneHistory(history) };
+		}
+
+		/** Convert the v1/v2 single-row-with-nextDate model into rules + occurrences. */
+		function migrateLegacyModel(raw) {
+			const source = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw : { todos: Array.isArray(raw) ? raw : [] };
+			const seen = new Set();
+			const series = [];
+			const todos = [];
+			for (const item of Array.isArray(source.todos) ? source.todos : []) {
+				const base = normalizeTodo(Object.assign({}, item, { seriesId: null }), seen);
+				if (base === null) continue;
+				if (base.repeat === 'none') {
+					todos.push(base);
+					continue;
+				}
+				const seriesEntry = {
+					id: makeId(),
+					title: base.title,
+					time: base.time,
+					repeat: base.repeat,
+					priority: base.priority,
+					startDate: base.date,
+					archived: false,
+					createdAt: base.createdAt,
+				};
+				series.push(seriesEntry);
+				todos.push(Object.assign({}, base, { seriesId: seriesEntry.id }));
+				if (base.done && item !== null && typeof item === 'object' && isDateKey(item.nextDate)) {
+					todos.push({
+						id: makeId(),
+						seriesId: seriesEntry.id,
+						title: seriesEntry.title,
+						date: item.nextDate,
+						time: seriesEntry.time,
+						repeat: seriesEntry.repeat,
+						priority: seriesEntry.priority,
+						done: false,
+						doneAt: null,
+						skipped: false,
+						notifiedKey: null,
+						createdAt: Date.now(),
+					});
+				}
+			}
+			const history = normalizeHistory(source.history, seen);
+			return { series, todos, history: pruneHistory(history) };
+		}
+
+		function loadStoredModel() {
+			const stored = loadJson(MODEL_KEY);
+			if (stored !== null) return normalizeModel(stored);
+			const v2 = loadJson(LEGACY_MODEL_KEY_V2);
+			if (v2 !== null) return migrateLegacyModel(v2);
+			const v1 = loadJson(LEGACY_MODEL_KEY);
+			if (v1 !== null) return migrateLegacyModel(v1);
+			return { series: [], todos: [], history: [] };
+		}
+
+		function makeOccurrence(series, date) {
+			return {
+				id: makeId(),
+				seriesId: series.id,
+				title: series.title,
+				date,
+				time: series.time,
+				repeat: series.repeat,
+				priority: series.priority,
+				done: false,
+				doneAt: null,
+				skipped: false,
+				notifiedKey: null,
+				createdAt: Date.now(),
+			};
 		}
 
 		/**
-		 * Advance every repeating todo to today, folding what happened meanwhile
-		 * into the history: a completed occurrence becomes a `done` entry, a
-		 * skipped occurrence becomes a `missed` entry. Pure: returns new arrays.
+		 * Materialise every occurrence of every live rule up to `endDate`.
+		 * Missing past days are created too, so a closed app still leaves an
+		 * independent (missed) row for each day instead of losing them.
 		 */
-		function settle(model, now) {
-			const today = todayKey(now);
-			const history = [...model.history];
-			let changed = false;
-			const todos = model.todos.map((todo) => {
-				let item = todo;
-				if (item.done && item.repeat !== 'none' && item.nextDate !== null) {
-					const arrived =
-						item.time === ''
-							? item.nextDate <= today
-							: (instantOf(item.nextDate, item.time) ?? Number.POSITIVE_INFINITY) <= now;
-					if (arrived) {
-						history.push({
-							id: makeId(),
-							title: item.title,
-							date: item.date,
-							time: item.time,
-							repeat: item.repeat,
-							priority: item.priority,
-							status: 'done',
-							at: item.doneAt ?? now,
-						});
-						item = { ...item, done: false, doneAt: null, date: item.nextDate, nextDate: null, notifiedKey: null };
-						changed = true;
-					}
+		function ensureOccurrences(model, endDate) {
+			const latest = new Map();
+			for (const todo of model.todos) {
+				if (todo.seriesId === null) continue;
+				const previous = latest.get(todo.seriesId);
+				if (previous === undefined || todo.date > previous) latest.set(todo.seriesId, todo.date);
+			}
+			const added = [];
+			for (const series of model.series) {
+				if (series.archived === true) continue;
+				const cursor = latest.get(series.id);
+				let date = cursor === undefined ? series.startDate : advanceDate(cursor, series.repeat);
+				let target = endDate;
+				if (series.startDate > target) target = series.startDate;
+				let guard = 0;
+				while (date <= target && guard < OCCURRENCE_GUARD) {
+					added.push(makeOccurrence(series, date));
+					date = advanceDate(date, series.repeat);
+					guard += 1;
 				}
-				if (!item.done && item.repeat !== 'none') {
-					let nextDate = item.date;
-					let guard = 0;
-					while (nextDate < today && guard < 400) {
-						history.push({
-							id: makeId(),
-							title: item.title,
-							date: nextDate,
-							time: item.time,
-							repeat: item.repeat,
-							priority: item.priority,
-							status: 'missed',
-							at: instantOf(nextDate, item.time) ?? now,
-						});
-						nextDate = advanceDate(nextDate, item.repeat);
-						guard += 1;
-						changed = true;
-					}
-					if (nextDate !== item.date) item = { ...item, date: nextDate, notifiedKey: null };
-				}
-				return item;
-			});
-			const pruned = pruneHistory(history);
-			if (pruned.length !== history.length) changed = true;
-			return { todos, history: pruned, changed };
+			}
+			if (added.length === 0) return { series: model.series, todos: model.todos, history: model.history, changed: false };
+			return { series: model.series, todos: [...model.todos, ...added], history: model.history, changed: true };
 		}
 
 		/** One todo row order: urgency first, then priority, then due time. */
@@ -397,11 +471,12 @@ window.__ModuleLoader__.load({
 			return left.createdAt - right.createdAt;
 		}
 
-		/** Items that reached their clock time and still owe a reminder. */
-		function collectDue(todos, now) {
+		/** Today's timed occurrences that still owe a reminder. */
+		function collectDue(todos, today, now) {
 			const due = [];
 			for (const todo of todos) {
-				if (todo.done || todo.time === '') continue;
+				if (todo.done || todo.skipped || todo.time === '') continue;
+				if (todo.date !== today) continue;
 				const instant = instantOf(todo.date, todo.time);
 				if (instant === null || instant > now) continue;
 				const key = `${todo.date} ${todo.time}`;
@@ -411,44 +486,54 @@ window.__ModuleLoader__.load({
 			return due;
 		}
 
-		/** Everything shown for one calendar day. */
-		function dayView(todos, history, day) {
+		/**
+		 * Everything shown for one calendar day: active occurrences, completed
+		 * rows (occurrences plus migrated legacy records), and that day's misses.
+		 */
+		function dayView(todos, history, day, today) {
 			const active = [];
 			const doneEntries = [];
-			for (const todo of todos) {
-				if (todo.date !== day) continue;
-				if (todo.done) doneEntries.push({ kind: 'todo', at: todo.doneAt ?? 0, todo });
-				else active.push(todo);
-			}
-			active.sort(compareOpen);
 			const missed = [];
-			for (const entry of history) {
-				if (entry.date !== day) continue;
-				if (entry.status === 'done') doneEntries.push({ kind: 'history', at: entry.at, history: entry });
-				else missed.push(entry);
-			}
-			doneEntries.sort((left, right) => right.at - left.at);
-			missed.sort((left, right) => right.at - left.at);
-			return { active, doneEntries, missed };
-		}
-
-		/** Cross-day counts behind the "overdue / upcoming" chips. */
-		function summarize(todos, today) {
-			let overdue = 0;
-			let future = 0;
-			let overdueDate = null;
-			let futureDate = null;
 			for (const todo of todos) {
-				if (todo.done) continue;
-				if (todo.date < today) {
-					overdue += 1;
-					if (overdueDate === null || todo.date < overdueDate) overdueDate = todo.date;
-				} else if (todo.date > today) {
-					future += 1;
-					if (futureDate === null || todo.date < futureDate) futureDate = todo.date;
+				if (todo.skipped === true || todo.date !== day) continue;
+				if (todo.done) {
+					doneEntries.push({ kind: 'todo', at: todo.doneAt ?? 0, todo });
+				} else if (day < today) {
+					missed.push({ kind: 'todo', at: instantOf(todo.date, todo.time) ?? 0, todo });
+				} else {
+					active.push(todo);
 				}
 			}
-			return { overdue, future, overdueDate, futureDate };
+			active.sort(compareOpen);
+			for (const entry of history) {
+				if (entry.date !== day) continue;
+				doneEntries.push({ kind: 'history', at: entry.status === 'done' ? entry.at : 0, history: entry, missedEntry: entry.status !== 'done' });
+			}
+			const missedHistory = doneEntries.filter((entry) => entry.missedEntry === true).map((entry) => ({ kind: 'history', at: entry.at, history: entry.history }));
+			const completed = doneEntries.filter((entry) => entry.missedEntry !== true);
+			completed.sort((left, right) => right.at - left.at);
+			missed.sort((left, right) => right.at - left.at);
+			const allMissed = missed.concat(missedHistory).sort((left, right) => right.at - left.at);
+			return { active, doneEntries: completed, missed: allMissed };
+		}
+
+		/** Cross-day count behind the "overdue" chip. */
+		function summarize(todos, today) {
+			let overdue = 0;
+			let overdueDate = null;
+			for (const todo of todos) {
+				if (todo.done || todo.skipped) continue;
+				// Missed repeating occurrences are per-day records, not overdue debt.
+				if (todo.date >= today || todo.seriesId !== null) continue;
+				overdue += 1;
+				if (overdueDate === null || todo.date < overdueDate) overdueDate = todo.date;
+			}
+			return { overdue, overdueDate };
+		}
+
+		/** Future occurrences are read-only; anything dated today or earlier can be checked. */
+		function canComplete(todo, today) {
+			return todo.date <= today;
 		}
 
 		function createObservable(initial) {
@@ -486,31 +571,40 @@ window.__ModuleLoader__.load({
 			}, [observable]);
 			return snapshot;
 		}
-
-		function loadStoredModel() {
-			const stored = loadJson(MODEL_KEY);
-			if (stored !== null) return normalizeModel(stored);
-			const legacy = loadJson(LEGACY_MODEL_KEY);
-			if (legacy !== null) return normalizeModel({ todos: Array.isArray(legacy) ? legacy : [], history: [] });
-			return { todos: [], history: [] };
-		}
 		// #endregion
 
 		// #region stores
 		function createTodoStore() {
 			const initial = loadStoredModel();
-			const observable = createObservable({ todos: initial.todos, history: initial.history, now: Date.now() });
+			const observable = createObservable({ series: initial.series, todos: initial.todos, history: initial.history, now: Date.now() });
 
-			function commit(model) {
-				saveJson(MODEL_KEY, { todos: model.todos, history: model.history });
-				observable.set({ todos: model.todos, history: model.history, now: Date.now() });
+			function snapshotModel() {
+				const snapshot = observable.getSnapshot();
+				return { series: snapshot.series, todos: snapshot.todos, history: snapshot.history };
 			}
 
-			function patchTodos(change) {
-				const snapshot = observable.getSnapshot();
-				const todos = change(snapshot.todos);
-				if (todos === null) return;
-				commit({ todos, history: snapshot.history });
+			function commit(model) {
+				saveJson(MODEL_KEY, { series: model.series, todos: model.todos, history: model.history });
+				observable.set({ series: model.series, todos: model.todos, history: model.history, now: Date.now() });
+			}
+
+			// Persist the normalised/migrated document once, so v3 is the live shape.
+			saveJson(MODEL_KEY, { series: initial.series, todos: initial.todos, history: initial.history });
+
+			function patch(change) {
+				const current = snapshotModel();
+				const next = change(current);
+				if (next === null) return;
+				commit(next);
+			}
+
+			function ensureThrough(dayKey) {
+				const today = todayKey();
+				const horizon = addDaysKey(today, OCCURRENCE_HORIZON_DAYS);
+				const endDate = dayKey !== undefined && dayKey > horizon ? dayKey : horizon;
+				const current = snapshotModel();
+				const next = ensureOccurrences(current, endDate);
+				if (next.changed) commit({ series: next.series, todos: next.todos, history: next.history });
 			}
 
 			const store = {
@@ -518,71 +612,126 @@ window.__ModuleLoader__.load({
 				subscribe: observable.subscribe,
 				refresh() {
 					const snapshot = observable.getSnapshot();
-					observable.set({ todos: snapshot.todos, history: snapshot.history, now: Date.now() });
+					observable.set({ series: snapshot.series, todos: snapshot.todos, history: snapshot.history, now: Date.now() });
 				},
+				ensureThrough,
 				add(input) {
 					const title = typeof input.title === 'string' ? input.title.trim() : '';
 					if (title === '') return null;
+					const now = Date.now();
+					const today = todayKey(now);
 					const repeat = REPEATS.includes(input.repeat) ? input.repeat : 'none';
 					const priority = PRIORITIES.includes(input.priority) ? input.priority : null;
-					let date = isDateKey(input.date) ? input.date : todayKey();
-					if (repeat !== 'none') date = alignToRepeat(date, repeat);
+					const time = normalizeTime(input.time);
+					let date = isDateKey(input.date) ? input.date : today;
+					if (repeat !== 'none') {
+						date = alignToRepeat(date, repeat);
+						let guard = 0;
+						while (date < today && guard < 5000) {
+							date = advanceDate(date, repeat);
+							guard += 1;
+						}
+						const series = {
+							id: makeId(),
+							title: title.slice(0, MAX_TITLE),
+							time,
+							repeat,
+							priority,
+							startDate: date,
+							archived: false,
+							createdAt: now,
+						};
+						const first = makeOccurrence(series, date);
+						const base = snapshotModel();
+						const next = ensureOccurrences(
+							{ series: [...base.series, series], todos: [...base.todos, first], history: base.history },
+							addDaysKey(today, OCCURRENCE_HORIZON_DAYS),
+						);
+						commit({ series: next.series, todos: next.todos, history: next.history });
+						return { date, time };
+					}
 					const todo = {
 						id: makeId(),
+						seriesId: null,
 						title: title.slice(0, MAX_TITLE),
 						date,
-						time: normalizeTime(input.time),
-						repeat,
+						time,
+						repeat: 'none',
 						priority,
 						done: false,
 						doneAt: null,
-						nextDate: null,
+						skipped: false,
 						notifiedKey: null,
-						createdAt: Date.now(),
+						createdAt: now,
 					};
-					const snapshot = observable.getSnapshot();
-					commit({ todos: [...snapshot.todos, todo], history: snapshot.history });
-					return todo;
+					const base = snapshotModel();
+					commit({ series: base.series, todos: [...base.todos, todo], history: base.history });
+					return { date, time };
 				},
 				toggle(id) {
-					const now = Date.now();
-					const today = todayKey(now);
-					patchTodos((todos) =>
-						todos.map((todo) => {
-							if (todo.id !== id) return todo;
-							if (todo.done) return { ...todo, done: false, doneAt: null, nextDate: null, notifiedKey: null };
-							if (todo.repeat === 'none') return { ...todo, done: true, doneAt: now, nextDate: null };
-							return { ...todo, done: true, doneAt: now, nextDate: nextOccurrenceFrom(todo.date, todo.repeat, today) };
-						}),
-					);
+					const today = todayKey();
+					patch((model) => {
+						const target = model.todos.find((todo) => todo.id === id);
+						if (target === undefined || target.date > today) return null;
+						return {
+							series: model.series,
+							todos: model.todos.map((todo) =>
+								todo.id === id
+									? { ...todo, done: todo.done !== true, doneAt: todo.done === true ? null : Date.now(), notifiedKey: todo.done === true ? null : todo.notifiedKey }
+									: todo,
+							),
+							history: model.history,
+						};
+					});
 				},
-				remove(id) {
-					patchTodos((todos) => todos.filter((todo) => todo.id !== id));
+				/** One-off rows are deleted; an occurrence is skipped or its rule is archived. */
+				remove(id, mode) {
+					const today = todayKey();
+					patch((model) => {
+						const target = model.todos.find((todo) => todo.id === id);
+						if (target === undefined) return null;
+						if (target.seriesId === null) {
+							return { series: model.series, todos: model.todos.filter((todo) => todo.id !== id), history: model.history };
+						}
+						if (mode === 'series') {
+							return {
+								series: model.series.map((series) => (series.id === target.seriesId ? { ...series, archived: true } : series)),
+								todos: model.todos.filter(
+									(todo) => !(todo.seriesId === target.seriesId && todo.done !== true && todo.date >= today),
+								),
+								history: model.history,
+							};
+						}
+						return {
+							series: model.series,
+							todos: model.todos.map((todo) => (todo.id === id ? { ...todo, skipped: true } : todo)),
+							history: model.history,
+						};
+					});
 				},
 				removeHistory(id) {
-					const snapshot = observable.getSnapshot();
-					commit({ todos: snapshot.todos, history: snapshot.history.filter((entry) => entry.id !== id) });
+					patch((model) => ({ series: model.series, todos: model.todos, history: model.history.filter((entry) => entry.id !== id) }));
 				},
 				markNotified(entries) {
 					if (entries.length === 0) return;
 					const keys = new Map(entries.map((entry) => [entry.id, entry.key]));
-					patchTodos((todos) => todos.map((todo) => (keys.has(todo.id) ? { ...todo, notifiedKey: keys.get(todo.id) } : todo)));
+					patch((model) => ({
+						series: model.series,
+						todos: model.todos.map((todo) => (keys.has(todo.id) ? { ...todo, notifiedKey: keys.get(todo.id) } : todo)),
+						history: model.history,
+					}));
 				},
 				clearDone() {
-					const snapshot = observable.getSnapshot();
-					commit({
-						todos: snapshot.todos.filter((todo) => !todo.done || todo.repeat !== 'none'),
+					patch((model) => ({
+						series: model.series,
+						todos: model.todos.filter((todo) => todo.done !== true),
 						history: [],
-					});
+					}));
 				},
 				tick() {
+					ensureThrough();
 					const snapshot = observable.getSnapshot();
-					const next = settle({ todos: snapshot.todos, history: snapshot.history }, Date.now());
-					if (next.changed) {
-						commit({ todos: next.todos, history: next.history });
-					} else {
-						observable.set({ todos: next.todos, history: next.history, now: Date.now() });
-					}
+					observable.set({ series: snapshot.series, todos: snapshot.todos, history: snapshot.history, now: Date.now() });
 				},
 			};
 			return store;
@@ -1013,14 +1162,16 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		function CheckCircle({ done, label, onClick }) {
+		function CheckCircle({ done, disabled, label, onClick }) {
 			return h(
 				'button',
 				{
 					type: 'button',
 					className: `dsh-todo-check${done ? ' is-done' : ''}`,
 					'aria-label': label,
+					'aria-disabled': disabled === true,
 					title: label,
+					disabled: disabled === true,
 					onClick,
 					onMouseDown: (event) => event.preventDefault(),
 					style: {
@@ -1035,7 +1186,8 @@ window.__ModuleLoader__.load({
 						border: done ? '1.5px solid transparent' : '1.5px solid var(--dsw-alias-border-l2)',
 						background: done ? COLOR.accent : 'transparent',
 						color: done ? COLOR.foreground : 'transparent',
-						cursor: 'pointer',
+						cursor: disabled === true ? 'default' : 'pointer',
+						opacity: disabled === true ? 0.45 : 1,
 						flex: 'none',
 					},
 				},
@@ -1165,36 +1317,41 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		function TodoRow({ todo, t, now, today, onToggle, onRemove }) {
+		function TodoRow({ todo, t, now, today, locked, missed, onToggle, onRemove }) {
 			const instant = instantOf(todo.date, todo.time);
-			const overdue = !todo.done && instant !== null && instant < now;
-			let text;
-			if (todo.done) {
-				text = todo.repeat !== 'none' && todo.nextDate !== null
-					? t('row.next', { when: formatWhen(t, todo.nextDate, todo.time, today) })
-					: t('history.done');
-			} else {
-				text = formatWhen(t, todo.date, todo.time, today);
-				if (todo.repeat !== 'none') text = `${text} · ${repeatLabel(t, todo.repeat)}`;
-			}
+			const overdue = !todo.done && missed !== true && locked !== true && instant !== null && instant < now;
+			const when = formatWhen(t, todo.date, todo.time, today);
+			const parts = [];
+			if (todo.done) parts.push(t('history.done'));
+			else if (missed === true) parts.push(t('history.missed'));
+			if (when !== '') parts.push(when);
+			if (todo.repeat !== 'none') parts.push(repeatLabel(t, todo.repeat));
 			const meta = h(
 				'span',
 				{ style: { display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 } },
 				todo.repeat !== 'none' ? h(IcoRepeat, { key: 'repeat', size: 11 }) : null,
-				h('span', null, text),
+				h('span', null, parts.join(' · ')),
 			);
+			const checkLabel = locked === true
+				? t('row.futureLocked')
+				: todo.done
+					? t('row.markOpen')
+					: t('row.markDone');
 			return h(RowFrame, {
 				leading: h(CheckCircle, {
 					done: todo.done,
-					label: todo.done ? t('row.markOpen') : t('row.markDone'),
-					onClick: () => onToggle(todo.id),
+					disabled: locked === true,
+					label: checkLabel,
+					onClick: () => {
+						if (locked !== true) onToggle(todo.id);
+					},
 				}),
 				title: todo.title,
 				meta,
-				metaColor: overdue ? COLOR.danger : undefined,
+				metaColor: overdue ? COLOR.danger : missed === true ? COLOR.warn : undefined,
 				struck: todo.done,
-				muted: todo.done,
-				accent: todo.done || todo.priority === null ? undefined : PRIORITY_COLOR[todo.priority],
+				muted: todo.done || missed === true || locked === true,
+				accent: todo.done || missed === true || todo.priority === null ? undefined : PRIORITY_COLOR[todo.priority],
 				badge: h(PriorityBadge, { t, priority: todo.priority }),
 				onRemove: () => onRemove(todo.id),
 				removeLabel: t('row.delete'),
@@ -1740,6 +1897,7 @@ window.__ModuleLoader__.load({
 			const [selectedDay, setSelectedDay] = useState(() => todayKey());
 			const [showDone, setShowDone] = useState(true);
 			const [notice, setNotice] = useState(null);
+			const [pendingDelete, setPendingDelete] = useState(null);
 			const viewRef = useRef(view);
 			const dragRef = useRef(null);
 			const noticeTimer = useRef(null);
@@ -1757,6 +1915,12 @@ window.__ModuleLoader__.load({
 			useEffect(() => {
 				dayRef.current = selectedDay;
 			}, [selectedDay]);
+
+			// Materialise occurrences far enough for the visible day.
+			useEffect(() => {
+				store.ensureThrough(selectedDay);
+				setPendingDelete(null);
+			}, [store, selectedDay]);
 
 			// When midnight passes, a view that followed "today" follows it again.
 			const todayRef = useRef(today);
@@ -1893,7 +2057,7 @@ window.__ModuleLoader__.load({
 				if (drag.kind === 'pill') expandFrom();
 			}, [expandFrom, persistView]);
 
-			const dayData = useMemo(() => dayView(todos, history, selectedDay), [todos, history, selectedDay]);
+			const dayData = useMemo(() => dayView(todos, history, selectedDay, today), [todos, history, selectedDay, today]);
 			const summary = useMemo(() => summarize(todos, today), [todos, today]);
 			const openCount = dayData.active.length;
 			const doneCount = dayData.doneEntries.length;
@@ -1926,7 +2090,26 @@ window.__ModuleLoader__.load({
 				[actions, expandFrom, flash, store, warnPermission],
 			);
 			const onToggle = useCallback((id) => store.toggle(id), [store]);
-			const onRemove = useCallback((id) => store.remove(id), [store]);
+			const requestDelete = useCallback(
+				(id) => {
+					const todo = store.getSnapshot().todos.find((item) => item.id === id);
+					if (todo === undefined) return;
+					if (todo.seriesId === null) {
+						store.remove(id);
+						return;
+					}
+					setPendingDelete({ id, seriesId: todo.seriesId, title: todo.title });
+				},
+				[store],
+			);
+			const resolveDelete = useCallback(
+				(mode) => {
+					if (pendingDelete === null) return;
+					store.remove(pendingDelete.id, mode);
+					setPendingDelete(null);
+				},
+				[pendingDelete, store],
+			);
 			const onRemoveHistory = useCallback((id) => store.removeHistory(id), [store]);
 			const onToggleNotify = useCallback(() => {
 				const next = !settingsStore.getSnapshot().notify;
@@ -2120,14 +2303,6 @@ window.__ModuleLoader__.load({
 										onClick: () => setSelectedDay(summary.overdueDate),
 									})
 								: null,
-							summary.future > 0 && summary.futureDate !== null
-								? h(SummaryChip, {
-										label: t('summary.future', { n: summary.future }),
-										color: COLOR.accent,
-										background: tint(COLOR.accent, 16),
-										onClick: () => setSelectedDay(summary.futureDate),
-									})
-								: null,
 						),
 					),
 					h(
@@ -2143,6 +2318,44 @@ window.__ModuleLoader__.load({
 					),
 				),
 				h(AddBar, { t, onAdd }),
+				pendingDelete !== null
+					? h(
+							'div',
+							{
+								style: {
+									display: 'flex',
+									flexDirection: 'column',
+									gap: 6,
+									margin: '0 12px 6px',
+									padding: '7px 9px',
+									borderRadius: 9,
+									border: `0.5px solid ${COLOR.border}`,
+									background: COLOR.layer2,
+									flex: 'none',
+								},
+							},
+							h('div', { style: { fontSize: 11, color: COLOR.label2, lineHeight: '15px' } }, t('delete.hint', { title: pendingDelete.title })),
+							h(
+								'div',
+								{ style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 } },
+								h('button', {
+									type: 'button',
+									onClick: () => setPendingDelete(null),
+									style: { height: 26, padding: '0 9px', border: `0.5px solid ${COLOR.border2}`, borderRadius: 7, background: 'transparent', color: COLOR.label2, fontFamily: FONT, fontSize: 11, cursor: 'pointer' },
+								}, t('delete.cancel')),
+								h('button', {
+									type: 'button',
+									onClick: () => resolveDelete('skip'),
+									style: { height: 26, padding: '0 9px', border: `0.5px solid ${COLOR.border2}`, borderRadius: 7, background: 'transparent', color: COLOR.label, fontFamily: FONT, fontSize: 11, cursor: 'pointer' },
+								}, t('delete.skip')),
+								h('button', {
+									type: 'button',
+									onClick: () => resolveDelete('series'),
+									style: { height: 26, padding: '0 9px', border: 'none', borderRadius: 7, background: COLOR.danger, color: COLOR.foreground, fontFamily: FONT, fontSize: 11, cursor: 'pointer' },
+								}, t('delete.series')),
+							),
+						)
+					: null,
 				notice !== null
 					? h(
 							'div',
@@ -2167,7 +2380,7 @@ window.__ModuleLoader__.load({
 					'div',
 					{ className: 'dsh-todo-scroll', style: { overflowY: 'auto', overflowX: 'hidden', padding: '0 6px 6px', flex: '1 1 auto', minHeight: 0 } },
 					openCount === 0 && doneCount === 0 && missedCount === 0 ? h(EmptyState, { t, dayKey: selectedDay, today }) : null,
-					dayData.active.map((todo) => h(TodoRow, { key: todo.id, todo, t, now, today, onToggle, onRemove })),
+					dayData.active.map((todo) => h(TodoRow, { key: todo.id, todo, t, now, today, locked: !canComplete(todo, today), onToggle, onRemove: requestDelete })),
 					doneCount > 0
 						? h(
 								'div',
@@ -2226,7 +2439,7 @@ window.__ModuleLoader__.load({
 								showDone
 									? dayData.doneEntries.map((entry) =>
 											entry.kind === 'todo'
-												? h(TodoRow, { key: entry.todo.id, todo: entry.todo, t, now, today, onToggle, onRemove })
+												? h(TodoRow, { key: entry.todo.id, todo: entry.todo, t, now, today, onToggle, onRemove: requestDelete })
 												: h(HistoryRow, { key: entry.history.id, entry: entry.history, t, today, onRemove: onRemoveHistory }),
 										)
 									: null,
@@ -2241,7 +2454,11 @@ window.__ModuleLoader__.load({
 									{ style: { padding: '2px 2px 2px 8px', fontSize: 11, fontWeight: 600, color: COLOR.label2 } },
 									`${t('done.missedTitle')} ${missedCount}`,
 								),
-								dayData.missed.map((entry) => h(HistoryRow, { key: entry.id, entry, t, today, onRemove: onRemoveHistory })),
+								dayData.missed.map((entry) =>
+									entry.kind === 'todo'
+										? h(TodoRow, { key: entry.todo.id, todo: entry.todo, t, now, today, missed: true, onToggle, onRemove: requestDelete })
+										: h(HistoryRow, { key: entry.history.id, entry: entry.history, t, today, onRemove: onRemoveHistory }),
+								),
 							)
 						: null,
 				),
@@ -2251,7 +2468,7 @@ window.__ModuleLoader__.load({
 		function openTodayCount(todos, today) {
 			let count = 0;
 			for (const todo of todos) {
-				if (!todo.done && todo.date === today) count += 1;
+				if (!todo.done && !todo.skipped && todo.date === today) count += 1;
 			}
 			return count;
 		}
@@ -2259,7 +2476,7 @@ window.__ModuleLoader__.load({
 		function overdueTodayCount(todos, today) {
 			let count = 0;
 			for (const todo of todos) {
-				if (!todo.done && todo.date <= today && instantOf(todo.date, todo.time) !== null && instantOf(todo.date, todo.time) < Date.now()) count += 1;
+				if (!todo.done && !todo.skipped && todo.date === today && instantOf(todo.date, todo.time) !== null && instantOf(todo.date, todo.time) < Date.now()) count += 1;
 			}
 			return count;
 		}
@@ -2278,7 +2495,6 @@ window.__ModuleLoader__.load({
 			'day.today': '回到今天',
 			'summary.open': '{n} 项待完成',
 			'summary.overdue': '逾期 {n}',
-			'summary.future': '未来 {n}',
 			'add.placeholder': '添加待办事项…',
 			'add.action': '添加',
 			'add.date': '日期',
@@ -2303,10 +2519,14 @@ window.__ModuleLoader__.load({
 			'when.dayAfterTomorrow': '后天',
 			'history.done': '已完成',
 			'history.missed': '未完成',
-			'row.next': '下次：{when}',
 			'row.markDone': '标记为完成',
 			'row.markOpen': '标记为未完成',
+			'row.futureLocked': '未来日期不能提前完成',
 			'row.delete': '删除',
+			'delete.hint': '「{title}」是重复事项：只跳过这一次，还是删除整个重复？',
+			'delete.cancel': '取消',
+			'delete.skip': '仅跳过本次',
+			'delete.series': '删除整个重复',
 			'done.title': '已完成',
 			'done.missedTitle': '未完成',
 			'done.clear': '清除',
@@ -2337,7 +2557,6 @@ window.__ModuleLoader__.load({
 			'day.today': 'Back to today',
 			'summary.open': '{n} open',
 			'summary.overdue': '{n} overdue',
-			'summary.future': '{n} upcoming',
 			'add.placeholder': 'Add a to-do…',
 			'add.action': 'Add',
 			'add.date': 'Due date',
@@ -2362,10 +2581,14 @@ window.__ModuleLoader__.load({
 			'when.dayAfterTomorrow': 'In two days',
 			'history.done': 'Completed',
 			'history.missed': 'Missed',
-			'row.next': 'Next: {when}',
 			'row.markDone': 'Mark as done',
 			'row.markOpen': 'Mark as not done',
+			'row.futureLocked': 'Future dates cannot be completed in advance',
 			'row.delete': 'Delete',
+			'delete.hint': '“{title}” repeats: skip just this time, or delete the whole repeat?',
+			'delete.cancel': 'Cancel',
+			'delete.skip': 'Skip this time',
+			'delete.series': 'Delete the repeat',
 			'done.title': 'Completed',
 			'done.missedTitle': 'Missed',
 			'done.clear': 'Clear',
@@ -2485,7 +2708,7 @@ window.__ModuleLoader__.load({
 
 				function flushReminders() {
 					const snapshot = store.getSnapshot();
-					const due = collectDue(snapshot.todos, Date.now());
+					const due = collectDue(snapshot.todos, todayKey(), Date.now());
 					if (due.length === 0) return;
 					const settings = settingsStore.getSnapshot();
 					const fresh = due.filter((entry) => !entry.stale);
