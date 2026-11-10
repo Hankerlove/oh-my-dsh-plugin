@@ -2,10 +2,6 @@
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）Web UI 加一段自己的开机片头，并把图片或视频铺成整屏壁纸。两者共用同一份媒体库，参数在设置里实时可调。
 
-![启动 → 开屏片头 → 主界面壁纸](https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/boot-skin-demo.gif)
-
-<sub>动图 17s：等待过程已剪掉，开屏片头与壁纸均为原速完整播放</sub>
-
 | 项 | 值 |
 | --- | --- |
 | npm 包名 | [`@ultraslow/dsh-boot-skin`](https://www.npmjs.com/package/@ultraslow/dsh-boot-skin) |
