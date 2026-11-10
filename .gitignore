@@ -31,3 +31,6 @@ coverage/
 
 # Local DSH sandbox leftovers
 .dsh/
+
+# Internal ecosystem research: kept locally, never published
+docs/research/
