@@ -21,7 +21,7 @@ Oh My DSH Plugin 收集个人开发、好用的 DSH 插件。每个插件是一�
 | 插件 | 能做什么 | npm 包名 |
 | --- | --- | --- |
 | [待办清单](./packages/dsh-todo-list/README.md) | 悬浮在 Web UI 右上角的待办面板：可拖动、可收起，按天查看；重复事项每天一条独立实例，支持优先级、工作日历与到点提醒 | [`@ultraslow/dsh-todo-list`](https://www.npmjs.com/package/@ultraslow/dsh-todo-list) |
-| [开屏与壁纸](./packages/dsh-boot-skin/README.md) | 启动时全屏播你自己的视频，并把图片/视频铺成界面壁纸；不透明度、渐入渐隐、模糊、暗化、界面通透度都能在设置里实时调 | [`@ultraslow/dsh-boot-skin`](https://www.npmjs.com/package/@ultraslow/dsh-boot-skin) |
+| [开屏与壁纸](./packages/dsh-boot-skin/README.md) | <img src="https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/boot-skin-demo.gif" width="320" alt="开屏与壁纸演示：点击启动 → 开屏片头 → 主界面壁纸"><br>启动时全屏播你自己的视频，并把图片/视频铺成界面壁纸；不透明度、渐入渐隐、模糊、暗化、界面通透度都能在设置里实时调 | [`@ultraslow/dsh-boot-skin`](https://www.npmjs.com/package/@ultraslow/dsh-boot-skin) |
 
 ## 安装方式
 
