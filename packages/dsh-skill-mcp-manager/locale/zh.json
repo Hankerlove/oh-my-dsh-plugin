@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Skill与MCP",
+    "description": "按工作区管理Skill与MCP：按DSH真实优先级展示当前工作区会加载的Skill（含来源与目录），勾选即可让模型不可见以节省context（仍可用/名字手动调用）；MCP分为工作区与全局两级，工作区只影响当前目录，全局写入profile的cordis.patch.yml并对所有工作区生效。"
+  }
+}

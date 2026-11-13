@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Skills & MCP",
+    "description": "Workspace-scoped Skill / MCP manager: shows every skill with its real discovery rank, source and directory, hides skills from the model to save context (/name still works), and manages MCP servers at two levels — this workspace, or global entries written to the profile cordis.patch.yml."
+  }
+}

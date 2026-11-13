@@ -1,0 +1,8 @@
+# Bundle layer for the workspace-scoped Skill / MCP manager.
+#
+# One host row carries the browser routes, the catalog filter and the tool guard.
+# The browser half is declared through package.json's dsh.client and is loaded by
+# dsh-client-modules; it needs no row of its own.
+- insert:
+    - id: skill-mcp-manager
+      name: '@ultraslow/dsh-skill-mcp-manager'
