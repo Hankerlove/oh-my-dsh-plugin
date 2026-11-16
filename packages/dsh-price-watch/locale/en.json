@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Price watch",
+    "description": "Watch flight prices: pick a route and a date, poll Ctrip's public lowest-price calendar on a schedule, keep the price history, draw it in a sidebar panel, and push Feishu cards when the price drops below your target or sets a new high or low."
+  }
+}
