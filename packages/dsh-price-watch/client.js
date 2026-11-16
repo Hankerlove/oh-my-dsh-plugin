@@ -358,10 +358,18 @@ window.__ModuleLoader__.load({
 			'status.warn': '采集异常',
 			'status.never': '尚未采集',
 			'status.last': '上次 {time}',
-			'status.auth.unknown': '待登录',
+			'status.auth.unknown': '未登录',
 			'status.auth.valid': '已登录',
 			'status.auth.expired': '登录已过期',
 			'status.auth.checking': '校验中',
+			'status.auth.validAccount': '已登录 {account}',
+			'status.auth.unavailable': '精确采集不可用',
+			'status.auth.loggingIn': '请在弹出的窗口里登录…',
+			'status.auth.blocked': '风控暂停至 {time}',
+			'login.failed': '登录未完成，请重试',
+			'login.notDetected': '未检测到登录，可重试',
+			'login.logoutFailed': '退出登录失败，请重试',
+			'login.pending': '登录中…',
 			'card.oneway': '单程',
 			'card.round': '往返',
 			'card.waiting': '等待首次采集',
@@ -432,6 +440,17 @@ window.__ModuleLoader__.load({
 			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
 			'settings.cadence.title': '采集频率',
 			'settings.cadence.help': '越频繁越容易触发风控，默认 60 分钟。',
+			'settings.l2.title': '精确采集',
+			'settings.l2.enable': '启用精确采集（需登录携程）',
+			'settings.l2.perDay': '每天最多精确采集次数',
+			'settings.l2.times': '{n} 次',
+			'settings.l2.help': '精确采集会用真实浏览器读取票价产品与含机建燃油总价；每天次数越多，被携程风控的概率越高。',
+			'settings.l2.auth': '携程登录',
+			'settings.l2.lastVerified': '上次校验 {time}',
+			'settings.l2.neverVerified': '尚未校验登录态',
+			'settings.login': '登录携程',
+			'settings.logout': '退出登录',
+			'settings.logoutConfirm': '退出登录会删除浏览器里的携程登录信息，确认退出？',
 			'settings.notify.title': '通知降噪',
 			'settings.notify.quiet': '静默时段',
 			'settings.notify.cooldown': '冷却（分钟）',
@@ -536,6 +555,14 @@ window.__ModuleLoader__.load({
 			'status.auth.valid': 'Signed in',
 			'status.auth.expired': 'Sign-in expired',
 			'status.auth.checking': 'Checking sign-in',
+			'status.auth.validAccount': 'Signed in {account}',
+			'status.auth.unavailable': 'Precise collection unavailable',
+			'status.auth.loggingIn': 'Finish signing in in the opened window…',
+			'status.auth.blocked': 'Rate-limited until {time}',
+			'login.failed': 'Sign-in did not complete, try again',
+			'login.notDetected': 'No sign-in detected, try again',
+			'login.logoutFailed': 'Sign-out failed, try again',
+			'login.pending': 'Signing in…',
 			'card.oneway': 'One way',
 			'card.round': 'Round trip',
 			'card.waiting': 'Waiting for the first crawl',
@@ -606,6 +633,17 @@ window.__ModuleLoader__.load({
 			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
 			'settings.cadence.title': 'Collection cadence',
 			'settings.cadence.help': 'Frequent polling risks rate limiting. 60 minutes by default.',
+			'settings.l2.title': 'Precise collection',
+			'settings.l2.enable': 'Enable precise collection (Ctrip sign-in required)',
+			'settings.l2.perDay': 'Precise collections per day',
+			'settings.l2.times': '{n}×',
+			'settings.l2.help': 'Precise collection drives a real browser to read fare products and the tax-included total. More runs per day raises the chance of Ctrip rate limiting.',
+			'settings.l2.auth': 'Ctrip sign-in',
+			'settings.l2.lastVerified': 'Last checked {time}',
+			'settings.l2.neverVerified': 'Sign-in has not been checked yet',
+			'settings.login': 'Sign in to Ctrip',
+			'settings.logout': 'Sign out',
+			'settings.logoutConfirm': 'Signing out deletes the Ctrip session stored in the browser profile. Continue?',
 			'settings.notify.title': 'Notification quieting',
 			'settings.notify.quiet': 'Quiet hours',
 			'settings.notify.cooldown': 'Cooldown (minutes)',
@@ -751,6 +789,14 @@ window.__ModuleLoader__.load({
 .pw-chip[data-tone="warn"] { color: var(--dsw-alias-state-warn-primary); }
 .pw-chip[data-tone="flat"] { color: var(--dsw-alias-label-secondary); }
 .pw-chip[data-tone="brand"] { color: var(--dsw-alias-brand-primary); }
+.pw-authchip { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; border: 1px solid transparent; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: 11px; font-weight: 500; line-height: 1; white-space: nowrap; }
+.pw-authchip[data-tone="ok"] { color: var(--dsw-alias-state-success-primary); }
+.pw-authchip[data-tone="warn"] { color: var(--dsw-alias-state-warn-primary); }
+.pw-authchip[data-tone="idle"] { color: var(--dsw-alias-label-secondary); }
+.pw-authchip[data-clickable="true"] { cursor: pointer; border-color: var(--dsw-alias-border-l1); }
+.pw-authchip[data-clickable="true"]:hover { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); }
+.pw-authchip[data-clickable="true"]:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+.pw-authchip[data-busy="true"] { color: var(--dsw-alias-label-secondary); }
 .pw-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-state-idle-primary); flex: none; }
 .pw-dot[data-tone="ok"] { background: var(--dsw-alias-state-success-primary); }
 .pw-dot[data-tone="warn"] { background: var(--dsw-alias-state-warn-primary); }
@@ -1285,27 +1331,53 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		function statusHealth(status) {
 			if (!status || typeof status !== 'object') return { tone: 'idle', labelKey: 'status.never' };
 			const collectors = Array.isArray(status.collectors) ? status.collectors : [];
-			if (collectors.some((collector) => collector && collector.ok === false)) return { tone: 'error', labelKey: 'status.warn' };
+			// The L2 collector reports `ok: false` whenever it is disabled, blocked or
+			// unavailable, which is a normal state; only L1 decides the health dot.
+			if (collectors.some((collector) => collector && collector.ok === false && collector.id !== 'l2')) return { tone: 'error', labelKey: 'status.warn' };
 			if (!status.lastCollectAt) return { tone: 'idle', labelKey: 'status.never' };
 			return { tone: 'ok', labelKey: 'status.ok' };
 		}
 
-		function authTone(status) {
-			if (!status || typeof status !== 'object' || !status.auth || typeof status.auth !== 'object') return 'idle';
-			const value = status.auth.status;
-			if (value === 'valid') return 'ok';
-			if (value === 'expired') return 'error';
-			if (value === 'checking') return 'warn';
-			return 'idle';
+		/** Login chip content for the current auth snapshot (`status.auth`). */
+		function authInfo(auth) {
+			const source = auth && typeof auth === 'object' ? auth : {};
+			if (source.available === false) return { tone: 'idle', label: t('status.auth.unavailable'), clickable: false };
+			if (source.status === 'valid') {
+				const account = typeof source.accountHint === 'string' ? source.accountHint.trim() : '';
+				return { tone: 'ok', label: account === '' ? t('status.auth.valid') : t('status.auth.validAccount', { account }), clickable: false };
+			}
+			if (source.status === 'expired') return { tone: 'warn', label: t('status.auth.expired'), clickable: true };
+			return { tone: 'idle', label: t('status.auth.unknown'), clickable: true };
 		}
 
-		function authLabel(status) {
-			if (!status || typeof status !== 'object' || !status.auth || typeof status.auth !== 'object') return t('status.auth.unknown');
-			const value = status.auth.status;
-			if (value === 'valid') return t('status.auth.valid');
-			if (value === 'expired') return t('status.auth.expired');
-			if (value === 'checking') return t('status.auth.checking');
-			return t('status.auth.unknown');
+		/** `风控暂停至 13:20` while the L2 backoff is still running, else null. */
+		function blockedNotice(auth) {
+			const source = auth && typeof auth === 'object' ? auth : {};
+			const until = typeof source.blockedUntil === 'string' ? Date.parse(source.blockedUntil) : NaN;
+			if (!Number.isFinite(until) || until <= Date.now()) return null;
+			const time = formatLastCollect(source.blockedUntil);
+			return time === null ? null : t('status.auth.blocked', { time });
+		}
+
+		/**
+		 * The sign-in chip. Valid/unavailable render as a plain badge; expired and
+		 * unknown render as a button that starts the visible Chrome sign-in, and while
+		 * that long request runs the chip explains itself and stops accepting clicks.
+		 */
+		function AuthChip(props) {
+			if (props.pending === true) {
+				return h('span', { className: 'pw-authchip', 'data-tone': 'idle', 'data-busy': 'true', role: 'status' }, h(Dot, { tone: 'idle' }), h('span', null, t('status.auth.loggingIn')));
+			}
+			const info = authInfo(props.auth);
+			const content = [h(Dot, { key: 'dot', tone: info.tone }), h('span', { key: 'label' }, info.label)];
+			if (info.clickable !== true || typeof props.onLogin !== 'function') {
+				return h('span', { className: 'pw-authchip', 'data-tone': info.tone }, content);
+			}
+			return h(
+				'button',
+				{ type: 'button', className: 'pw-authchip', 'data-tone': info.tone, 'data-clickable': 'true', title: t('settings.login'), onClick: props.onLogin },
+				content
+			);
 		}
 
 		function MonitorCard(props) {
@@ -1380,6 +1452,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const monitors = Array.isArray(props.monitors) ? props.monitors : null;
 			const status = props.status;
 			const health = statusHealth(status);
+			const blockedAuth = blockedNotice(status && status.auth);
 			const filtered = monitors === null ? null : monitors.filter((monitor) => props.filter !== 'flight' || monitor.type === 'flight');
 			const filters = [
 				{ id: 'all', label: t('filter.all') },
@@ -1422,7 +1495,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					h(Dot, { tone: health.tone }),
 					h('span', null, t(health.labelKey)),
 					status && status.lastCollectAt ? h('span', null, t('status.last', { time: formatLastCollect(status.lastCollectAt) })) : null,
-					status ? h(Chip, { tone: authTone(status) === 'ok' ? 'brand' : authTone(status) === 'error' ? 'up' : 'flat' }, authLabel(status)) : null
+					status ? h(AuthChip, { auth: status.auth, pending: props.loginPending === true, onLogin: props.onLogin }) : null,
+					blockedAuth === null ? null : h(Chip, { tone: 'warn' }, blockedAuth)
 				),
 				h(
 					'div',
@@ -1657,8 +1731,12 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const cadence = source.cadence && typeof source.cadence === 'object' ? source.cadence : {};
 			const notify = source.notify && typeof source.notify === 'object' ? source.notify : {};
 			const quiet = Array.isArray(notify.quietHours) && notify.quietHours.length === 2 ? notify.quietHours : null;
+			const l2 = source.l2 && typeof source.l2 === 'object' ? source.l2 : {};
+			const perDay = numberOrNull(l2.perDay);
 			return {
 				cadenceMinutes: numberOrNull(cadence.l1Minutes) === null ? DEFAULT_CADENCE : cadence.l1Minutes,
+				l2Enabled: l2.enabled === true,
+				l2PerDay: perDay === null ? 1 : Math.min(3, Math.max(1, Math.round(perDay))),
 				feishuWebhook: typeof notify.feishuWebhook === 'string' ? notify.feishuWebhook : '',
 				quietStart: String(quiet === null ? 22 : numberOrNull(quiet[0]) === null ? 22 : quiet[0]),
 				quietEnd: String(quiet === null ? 8 : numberOrNull(quiet[1]) === null ? 8 : quiet[1]),
@@ -1717,6 +1795,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				const cooldown = Number(draft.cooldownMinutes);
 				const body = {
 					cadence: { l1Minutes: Number(draft.cadenceMinutes) || DEFAULT_CADENCE },
+					l2: { enabled: draft.l2Enabled === true, perDay: Math.min(3, Math.max(1, Math.round(Number(draft.l2PerDay) || 1))) },
 					notify: {
 						feishuWebhook: draft.feishuWebhook.trim(),
 						quietHours: [Number.isFinite(quietStart) ? Math.min(23, Math.max(0, Math.round(quietStart))) : 22, Number.isFinite(quietEnd) ? Math.min(23, Math.max(0, Math.round(quietEnd))) : 8],
@@ -1779,6 +1858,20 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				}
 			};
 
+			const auth = props.status && typeof props.status === 'object' && props.status.auth && typeof props.status.auth === 'object' ? props.status.auth : null;
+			const blocked = blockedNotice(auth);
+			const signedIn = auth !== null && (auth.status === 'valid' || auth.status === 'expired');
+			const loginPending = props.loginPending === true;
+			const signIn = async () => {
+				if (loginPending) return;
+				await props.onLogin();
+			};
+			const signOut = async () => {
+				const confirmed = typeof window.confirm === 'function' ? window.confirm(t('settings.logoutConfirm')) : true;
+				if (!confirmed) return;
+				await props.onLogout();
+			};
+
 			return h(
 				'div',
 				{ className: 'pw-scroll' },
@@ -1815,6 +1908,50 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 									CADENCE_CHOICES.map((minutes) => h('option', { key: minutes, value: String(minutes) }, t('cadence.minutes', { n: minutes })))
 								)
 							)
+						)
+					),
+					h(
+						Section,
+						{ title: t('settings.l2.title'), help: t('settings.l2.help') },
+						h(
+							'div',
+							{ className: 'pw-rule-row' },
+							h('span', null, t('settings.l2.enable')),
+							h(Switch, { checked: draft.l2Enabled === true, label: t('settings.l2.enable'), onChange: (next) => update({ l2Enabled: next }) })
+						),
+						h(
+							'div',
+							{ className: 'pw-form-row' },
+							h(
+								Field,
+								{ label: t('settings.l2.perDay') },
+								h(
+									'select',
+									{ className: 'pw-input', value: String(draft.l2PerDay), onChange: (event) => update({ l2PerDay: Number(event.target.value) }) },
+									[1, 2, 3].map((count) => h('option', { key: count, value: String(count) }, t('settings.l2.times', { n: count })))
+								)
+							)
+						),
+						h('div', { className: 'pw-divider' }),
+						h(
+							'div',
+							{ className: 'pw-row', style: { gap: 8, flexWrap: 'wrap' } },
+							h('span', { className: 'pw-label' }, t('settings.l2.auth')),
+							h(AuthChip, { auth, pending: loginPending, onLogin: signIn }),
+							blocked === null ? null : h(Chip, { tone: 'warn' }, blocked)
+						),
+						h(
+							'span',
+							{ className: 'pw-hint' },
+							auth !== null && typeof auth.lastVerifiedAt === 'string' && auth.lastVerifiedAt !== ''
+								? t('settings.l2.lastVerified', { time: relativeTime(auth.lastVerifiedAt) })
+								: t('settings.l2.neverVerified')
+						),
+						h(
+							'div',
+							{ className: 'pw-row', style: { gap: 8, flexWrap: 'wrap' } },
+							h(Button, { onClick: signIn, disabled: loginPending || (auth !== null && auth.available === false) }, loginPending ? t('login.pending') : t('settings.login')),
+							h(Button, { variant: 'danger', onClick: signOut, disabled: loginPending || !signedIn }, t('settings.logout'))
 						)
 					),
 					h(
@@ -2138,10 +2275,13 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [dataLoading, setDataLoading] = useState(false);
 			const [tick, setTick] = useState(0);
 			const [auxReloadKey, setAuxReloadKey] = useState(0);
+			// `/login/start` stays open while the user signs in (up to 8 minutes).
+			const [loginPending, setLoginPending] = useState(false);
 
 			const coreSeq = useRef(0);
 			const pricesSeq = useRef(0);
 			const auxSeq = useRef(0);
+			const loginRef = useRef(false);
 
 			// #region data loading
 			const loadCore = useCallback(async (options) => {
@@ -2338,6 +2478,48 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				const data = await apiFetch('/passengers');
 				setPassengers(data && Array.isArray(data.passengers) ? data.passengers : []);
 			}, []);
+
+			/**
+			 * Opens the visible Chrome window on the Host and waits for the sign-in
+			 * (a long request, up to 8 minutes). The rest of the panel stays interactive:
+			 * the chip explains the wait and ignores further clicks, and only this
+			 * promise is outstanding. On completion the status and monitors are re-read.
+			 */
+			const startLogin = useCallback(async () => {
+				if (loginRef.current) return;
+				loginRef.current = true;
+				setLoginPending(true);
+				let failure = null;
+				try {
+					const data = await apiFetch('/login/start', { method: 'POST' });
+					if (!data || data.ok !== true) {
+						failure = data && typeof data.error === 'string' && data.error.trim() !== '' ? data.error : t('login.notDetected');
+					}
+				} catch (reason) {
+					failure = reason && reason.message ? reason.message : t('login.failed');
+				} finally {
+					loginRef.current = false;
+					setLoginPending(false);
+					// The refresh below clears the page error when it succeeds, so a login
+					// failure is raised afterwards to keep it on the status strip.
+					await loadCore();
+					if (failure !== null) setError(failure);
+				}
+			}, [loadCore]);
+
+			const logout = useCallback(async () => {
+				let failure = null;
+				try {
+					const data = await apiFetch('/login/logout', { method: 'POST' });
+					if (data && data.ok === false) {
+						failure = typeof data.error === 'string' && data.error !== '' ? data.error : t('login.logoutFailed');
+					}
+				} catch (reason) {
+					failure = reason && reason.message ? reason.message : t('login.logoutFailed');
+				}
+				await loadCore();
+				if (failure !== null) setError(failure);
+			}, [loadCore]);
 			// #endregion
 
 			// A monitor can disappear between polls; fall back to the list instead of
@@ -2371,6 +2553,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				content = h(SettingsView, {
 					settings,
 					passengers,
+					status,
 					loading: dataLoading,
 					error: settingsError,
 					onReload: reloadAux,
@@ -2378,6 +2561,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					onSaveSettings: saveSettings,
 					onAddPassenger: addPassenger,
 					onDeletePassenger: deletePassenger,
+					loginPending,
+					onLogin: startLogin,
+					onLogout: logout,
 				});
 			} else if (view.kind === 'new') {
 				content = h(NewView, {
@@ -2395,6 +2581,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					error,
 					refreshing,
 					busyKey,
+					loginPending,
+					onLogin: startLogin,
 					onFilterChange: setFilter,
 					onOpen: openDetail,
 					onToggle: toggleEnabled,

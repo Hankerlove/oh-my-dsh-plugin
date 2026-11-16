@@ -31,6 +31,8 @@ export const MAX_PASSENGERS = 12;
 const DEFAULT_CONFIG = () => ({
   passengers: [],
   cadence: { l1Minutes: 30 },
+  // L2 (browser) collection: off until the user logs in and opts in.
+  l2: { enabled: false, perDay: 1 },
   notify: {
     feishuWebhook: '',
     quietHours: [22, 8],
@@ -43,6 +45,10 @@ const DEFAULT_CONFIG = () => ({
 const DEFAULT_STATE = () => ({
   lastCollectAt: null,
   lastCollectBy: {},
+  auth: { status: 'unknown', lastVerifiedAt: null, accountHint: '' },
+  l2Runs: { date: '', count: 0 },
+  l2BlockedUntil: null,
+  l2LastError: null,
   cooldowns: {},
   dayFired: {},
   sides: {},
@@ -90,7 +96,12 @@ export function createStore(rootDir) {
     ready = (async () => {
       await mkdir(pricesDir, { recursive: true });
       const config = await readJson(configPath, DEFAULT_CONFIG());
-      cache.config = { ...DEFAULT_CONFIG(), ...config, notify: { ...DEFAULT_CONFIG().notify, ...(config.notify || {}) } };
+      cache.config = {
+        ...DEFAULT_CONFIG(),
+        ...config,
+        l2: { ...DEFAULT_CONFIG().l2, ...(config.l2 || {}) },
+        notify: { ...DEFAULT_CONFIG().notify, ...(config.notify || {}) },
+      };
       if (!Array.isArray(cache.config.passengers)) cache.config.passengers = [];
       const monitorsDoc = await readJson(monitorsPath, { monitors: [] });
       cache.monitors = Array.isArray(monitorsDoc?.monitors) ? monitorsDoc.monitors : [];
@@ -110,11 +121,18 @@ export function createStore(rootDir) {
   }
 
   async function saveConfig(patch) {
+    // Only keys the caller actually supplied may win: a partial settings POST
+    // must not blank out unrelated fields with `undefined`.
+    const defined = {};
+    for (const [key, value] of Object.entries(patch || {})) {
+      if (value !== undefined) defined[key] = value;
+    }
     const next = {
       ...cache.config,
-      ...patch,
-      cadence: { ...cache.config.cadence, ...(patch.cadence || {}) },
-      notify: { ...cache.config.notify, ...(patch.notify || {}) },
+      ...defined,
+      cadence: { ...cache.config.cadence, ...(defined.cadence || {}) },
+      l2: { ...cache.config.l2, ...(defined.l2 || {}) },
+      notify: { ...cache.config.notify, ...(defined.notify || {}) },
     };
     cache.config = next;
     await writeJsonAtomic(configPath, next);

@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Flight price watch for the DeepSeek Harness Web UI: pick a route and a date, let the plugin poll Ctrip's public lowest-price calendar, keep a price history, draw it in a sidebar panel, and push Feishu cards when the price hits a target or makes a new high or low.",
   "license": "MIT",
+  "dependencies": {
+    "playwright-core": "^1.65.0"
+  },
   "type": "module",
   "main": "index.js",
   "exports": {

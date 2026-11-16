@@ -5,10 +5,12 @@
  * `$DSH_HOME/price-watch/prices/`, plus `config.json` / `monitors.json` /
  * `state.json`. Nothing is written into the project directory.
  *
- * Sources: M1 ships the L1 collector only — Ctrip's public lowest-price calendar
- * (one request yields 380 days, no cookie, no signature). The browser collector
- * that reads per-fare prices and tax breakdowns lands in M2 behind the same
- * `collectMonitor` interface.
+ * Two collectors, tried in this order:
+ *   L1  `ctrip-calendar` — public lowest-price calendar, no login, one request
+ *       covers 380 days. Always available; carries the trend.
+ *   L2  `ctrip-browser`  — headed Chrome with a persistent profile. Reads the
+ *       real fare products (age/student rules) and the tax breakdown on the
+ *       booking page. Opt-in, budgeted per day, and skipped while blocked.
  *
  * Routes: `/price-watch/` serves a standalone read-only page, `/price-watch/api/*`
  * serves the JSON the panel and that page both use.
@@ -25,6 +27,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { collectMonitor, probeL1 } from './host/collect/index.js';
+import { BlockedError, AuthError, createBrowserCollector } from './host/collect/browser.js';
 import { buildAlertCard, buildDigestCard, sendFeishu } from './host/notify.js';
 import { evaluate } from './host/rules.js';
 import { createRouter } from './host/routes.js';
@@ -42,6 +45,8 @@ const TICK_MS = 60000;
 const BOOT_DELAY_MS = 8000;
 /** Consecutive failures before an `anomaly` alert is raised. */
 const FAILURE_THRESHOLD = 3;
+/** How long L2 stays disabled after Ctrip answers with a bot check. */
+const BLOCK_BACKOFF_MS = 2 * 60 * 60 * 1000;
 
 export function apply(ctx) {
   const logger = createLogger(ctx);
@@ -54,6 +59,8 @@ export function apply(ctx) {
     logger.error('price-watch 无法初始化存储，插件已降级', error);
     return;
   }
+
+  const browser = createBrowserCollector({ rootDir: store.rootDir, logger, store });
 
   let running = false;
   let disposed = false;
@@ -87,32 +94,135 @@ export function apply(ctx) {
     return delivery;
   }
 
+  function anomalyAlert(monitor, message, ref) {
+    return {
+      id: `a_${Math.random().toString(16).slice(2, 10)}`,
+      monitorId: monitor.id,
+      monitorTitle: monitor.title,
+      rule: 'anomaly',
+      level: 'critical',
+      firedAt: isoNow(),
+      total: 0,
+      ref: ref ?? null,
+      params: monitor.params,
+      error: message,
+    };
+  }
+
+  /** Is there L2 budget left today, and are we not backing off? */
+  function l2Budget(state, config) {
+    const perDay = Math.max(0, Number(config?.l2?.perDay ?? 1));
+    const today = isoDate();
+    const runs = state.l2Runs || { date: '', count: 0 };
+    const used = runs.date === today ? Number(runs.count) || 0 : 0;
+    const blockedUntil = Date.parse(state.l2BlockedUntil || '');
+    const blocked = Number.isFinite(blockedUntil) && blockedUntil > Date.now();
+    return { allowed: !blocked && used < perDay, used, perDay, blocked };
+  }
+
+  async function bumpL2Run() {
+    const today = isoDate();
+    const state = store.getState();
+    const runs = state.l2Runs || { date: '', count: 0 };
+    const count = runs.date === today ? Number(runs.count) || 0 : 0;
+    await store.saveState({ l2Runs: { date: today, count: count + 1 } });
+  }
+
+  /**
+   * Evaluate rules per passenger series. L1 points carry no passenger id and act
+   * as one shared series; L2 points are per passenger so each passenger gets its
+   * own thresholds.
+   */
+  async function evaluateAndNotify(monitor, points) {
+    const config = store.getConfig();
+    let state = store.getState();
+    const grouped = new Map();
+    for (const point of points) {
+      const pid = point?.key?.passengerId || '';
+      if (!grouped.has(pid)) grouped.set(pid, []);
+      grouped.get(pid).push(point);
+    }
+    for (const [pid, fresh] of grouped) {
+      const history = await store.readPoints(monitor.id, { limit: 2000 });
+      const series = history
+        .filter((point) => (point?.key?.passengerId || '') === pid)
+        .map((point) => ({ ...point, price: point.price || {} }));
+      if (series.length === 0) continue;
+      const passenger = pid ? store.findPassenger(pid) : null;
+      const scoped = {
+        ...monitor,
+        title: passenger ? `${monitor.title} · ${passenger.nickname}` : monitor.title,
+      };
+      const outcome = evaluate(scoped, series, { state, config });
+      state = { ...state, ...outcome.state };
+      for (const alert of outcome.alerts) {
+        logger.info(`触发提醒 ${alert.rule} ${scoped.title} ${alert.total}`);
+        await deliver(alert);
+      }
+    }
+    await store.saveState(state);
+    return fresh2count(points);
+  }
+
+  function fresh2count(points) {
+    return Array.isArray(points) ? points.length : 0;
+  }
+
   async function collectOne(monitor) {
     const startedAt = isoNow();
-    try {
-      const points = await collectMonitor(monitor, { signal: undefined });
-      await store.appendPoints(monitor.id, points);
+    const config = store.getConfig();
+    let points = null;
+    let source = 'l1';
+    let lastError = null;
 
-      const history = await store.readPoints(monitor.id, { limit: 2000 });
-      const config = store.getConfig();
+    try {
+      const state = store.getState();
+      const budget = l2Budget(state, config);
+      if (config?.l2?.enabled && budget.allowed) {
+        try {
+          points = await browser.collect(monitor);
+          source = 'l2';
+          await bumpL2Run();
+        } catch (error) {
+          lastError = String(error?.message || error);
+          if (error instanceof BlockedError || error?.code === 'BLOCKED') {
+            await store.saveState({
+              l2BlockedUntil: new Date(Date.now() + BLOCK_BACKOFF_MS).toISOString(),
+              l2LastError: lastError,
+            });
+            logger.warn(`携程风控拦截，L2 暂停 ${BLOCK_BACKOFF_MS / 3600000} 小时`);
+            await deliver(anomalyAlert(monitor, '携程返回风控/验证页面，精确采集已暂停，期间使用日历估算价'));
+          } else if (error instanceof AuthError || error?.code === 'AUTH_REQUIRED') {
+            await store.saveState({
+              auth: { ...(state.auth || {}), status: 'expired', lastVerifiedAt: isoNow() },
+              l2LastError: lastError,
+            });
+            await deliver(anomalyAlert(monitor, '携程登录态已失效，精确采集暂停，请在面板里重新登录'));
+          } else {
+            logger.warn(`L2 采集失败，回退 L1: ${lastError}`);
+            await store.saveState({ l2LastError: lastError });
+          }
+        }
+      }
+
+      if (!points || points.length === 0) {
+        points = await collectMonitor(monitor, { signal: undefined });
+        source = 'l1';
+      }
+
+      await store.appendPoints(monitor.id, points);
       const current = store.getState();
-      const outcome = evaluate(monitor, history, { state: current, config });
       const failures = { ...(current.failures || {}) };
       failures[monitor.id] = 0;
-
       await store.saveState({
-        ...outcome.state,
         lastCollectAt: startedAt,
         lastCollectBy: { ...(current.lastCollectBy || {}), [monitor.id]: startedAt },
         failures,
         lastError: { ...(current.lastError || {}), [monitor.id]: null },
       });
 
-      for (const alert of outcome.alerts) {
-        logger.info(`触发提醒 ${alert.rule} ${monitor.title} ${alert.total}`);
-        await deliver(alert);
-      }
-      return { ok: true, points: points.length, alerts: outcome.alerts.length };
+      const alertCount = await evaluateAndNotify(monitor, points);
+      return { ok: true, source, points: points.length, alerts: alertCount };
     } catch (error) {
       const message = String(error?.message || error);
       const current = store.getState();
@@ -132,18 +242,7 @@ export function apply(ctx) {
         if (dayFired[key] !== today) {
           dayFired[key] = today;
           await store.saveState({ dayFired });
-          await deliver({
-            id: `a_${Math.random().toString(16).slice(2, 10)}`,
-            monitorId: monitor.id,
-            monitorTitle: monitor.title,
-            rule: 'anomaly',
-            level: 'critical',
-            firedAt: isoNow(),
-            total: 0,
-            ref: count,
-            params: monitor.params,
-            error: message,
-          });
+          await deliver(anomalyAlert(monitor, message, count));
         }
       }
       return { ok: false, error: message };
@@ -211,7 +310,6 @@ export function apply(ctx) {
         }
         await collectOne(monitor);
         collected += 1;
-        // Space requests out: the calendar endpoint is cheap but should not burst.
         await sleep(1200 + Math.floor(Math.random() * 1800));
       }
 
@@ -231,7 +329,6 @@ export function apply(ctx) {
       const monitor = store.findMonitor(id);
       if (!monitor) return { ok: false, error: '监控不存在' };
       if (options.immediate) {
-        // Fire and forget so the HTTP response stays quick.
         void (async () => {
           await sleep(50);
           await collectOne(monitor);
@@ -241,6 +338,29 @@ export function apply(ctx) {
       return collectOne(monitor);
     },
     refreshAll: async () => tick({ force: true }),
+    loginStart: async () => {
+      await store.init();
+      return browser.startLogin({});
+    },
+    loginStatus: async () => {
+      await store.init();
+      const state = store.getState();
+      const available = await browser.isAvailable();
+      return {
+        available,
+        ...(state.auth || { status: 'unknown' }),
+        blockedUntil: state.l2BlockedUntil,
+        lastError: state.l2LastError,
+      };
+    },
+    loginProbe: async () => {
+      await store.init();
+      return browser.authStatus();
+    },
+    logout: async () => {
+      await store.init();
+      return browser.logout();
+    },
     status: async () => {
       await store.init();
       const config = store.getConfig();
@@ -251,15 +371,28 @@ export function apply(ctx) {
       } catch {
         probe = { id: 'l1', ok: false, error: '探测失败' };
       }
+      const available = await browser.isAvailable();
+      const budget = l2Budget(state, config);
       const failures = Object.values(state.failures || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
       return {
         version: '0.1.0',
-        auth: { status: 'unknown', lastVerifiedAt: null },
+        auth: { ...(state.auth || { status: 'unknown' }), available, blockedUntil: state.l2BlockedUntil },
         lastCollectAt: state.lastCollectAt,
         monitorCount: store.listMonitors().length,
         passengerCount: store.listPassengers().length,
         failures,
-        collectors: [probe],
+        collectors: [
+          probe,
+          {
+            id: 'l2',
+            ok: available && !budget.blocked,
+            enabled: Boolean(config?.l2?.enabled),
+            used: budget.used,
+            perDay: budget.perDay,
+            blocked: budget.blocked,
+            error: state.l2LastError || null,
+          },
+        ],
         notify: { feishu: Boolean(config?.notify?.feishuWebhook) },
         panelUrl: panelUrl(),
       };
@@ -292,11 +425,12 @@ export function apply(ctx) {
         disposed = true;
         clearInterval(timer);
         clearTimeout(boot);
+        void browser.dispose();
       };
     }, 'price-watch scheduler');
   } catch (error) {
     logger.warn('price-watch 定时器注册失败，只能手动刷新', error);
   }
 
-  logger.info('price-watch 已加载（L1 采集器 + 侧栏面板）');
+  logger.info('price-watch 已加载（L1 日历 + L2 浏览器采集）');
 }

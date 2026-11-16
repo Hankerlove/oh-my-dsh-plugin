@@ -192,23 +192,36 @@ export function createRouter({ store, logger, actions }) {
       return sendJson(res, 405, { ok: false, error: '方法不支持' });
     }
 
+    // /api/login/* — first-time authorization for the browser collector
+    if (segments[0] === 'login') {
+      if (method === 'POST' && segments[1] === 'start') return sendJson(res, 200, { ok: true, data: await actions.loginStart() });
+      if (method === 'POST' && segments[1] === 'probe') return sendJson(res, 200, { ok: true, data: await actions.loginProbe() });
+      if (method === 'POST' && segments[1] === 'logout') return sendJson(res, 200, { ok: true, data: await actions.logout() });
+      if (method === 'GET' && segments[1] === 'status') return sendJson(res, 200, { ok: true, data: await actions.loginStatus() });
+      return sendJson(res, 405, { ok: false, error: '方法不支持' });
+    }
+
     // /api/settings
     if (segments[0] === 'settings') {
       if (method === 'GET') {
         const config = store.getConfig();
         return sendJson(res, 200, {
           ok: true,
-          data: { cadence: config.cadence, notify: config.notify, panelBaseUrl: config.panelBaseUrl },
+          data: { cadence: config.cadence, l2: config.l2, notify: config.notify, panelBaseUrl: config.panelBaseUrl },
         });
       }
       if (method === 'POST') {
         const body = await readBody(req);
         const next = await store.saveConfig({
           cadence: body.cadence,
+          l2: body.l2,
           notify: body.notify,
           panelBaseUrl: typeof body.panelBaseUrl === 'string' ? body.panelBaseUrl : undefined,
         });
-        return sendJson(res, 200, { ok: true, data: { cadence: next.cadence, notify: next.notify, panelBaseUrl: next.panelBaseUrl } });
+        return sendJson(res, 200, {
+          ok: true,
+          data: { cadence: next.cadence, l2: next.l2, notify: next.notify, panelBaseUrl: next.panelBaseUrl },
+        });
       }
       return sendJson(res, 405, { ok: false, error: '方法不支持' });
     }
