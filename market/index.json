@@ -1,0 +1,149 @@
+{
+  "format": 1,
+  "title": {
+    "en": "Oh My DSH Plugin",
+    "zh": "Oh My DSH Plugin"
+  },
+  "description": {
+    "en": "Plugins for the DeepSeek Harness Web UI by Hankerlove.",
+    "zh": "Hankerlove 开发的 DeepSeek Harness Web UI 插件。"
+  },
+  "plugins": [
+    {
+      "name": "@ultraslow/dsh-todo-list",
+      "title": {
+        "en": "Todo list",
+        "zh": "待办清单"
+      },
+      "description": {
+        "en": "Draggable todo panel in the Web UI: per-day instances, priorities, weekday calendar and reminders.",
+        "zh": "悬浮在 Web UI 的待办面板：按天实例、优先级、工作日历与到点提醒。"
+      },
+      "icon": "https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/main/packages/dsh-todo-list/icon.svg",
+      "author": "Hankerlove",
+      "homepage": "https://github.com/Hankerlove/oh-my-dsh-plugin/tree/main/packages/dsh-todo-list",
+      "repository": {
+        "url": "https://github.com/Hankerlove/oh-my-dsh-plugin",
+        "directory": "packages/dsh-todo-list"
+      },
+      "metadata": {
+        "keywords": [
+          "todo",
+          "task",
+          "reminder"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.2.0",
+          "publishTimestamp": 1794293203,
+          "source": {
+            "type": "npm"
+          }
+        },
+        {
+          "version": "0.1.2",
+          "publishTimestamp": 1794217142,
+          "source": {
+            "type": "npm"
+          }
+        },
+        {
+          "version": "0.1.1",
+          "publishTimestamp": 1794207102,
+          "source": {
+            "type": "npm"
+          }
+        },
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1794205245,
+          "source": {
+            "type": "npm"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@ultraslow/dsh-skill-mcp-manager",
+      "title": {
+        "en": "Skills & MCP",
+        "zh": "Skill 与 MCP"
+      },
+      "description": {
+        "en": "Per-workspace Skill visibility and MCP servers, with global MCP entries written to the profile patch layer.",
+        "zh": "按工作区管理 Skill 可见性与 MCP 服务器，支持写入 profile patch 的全局 MCP。"
+      },
+      "icon": "https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/main/packages/dsh-skill-mcp-manager/icon.svg",
+      "author": "Hankerlove",
+      "homepage": "https://github.com/Hankerlove/oh-my-dsh-plugin/tree/main/packages/dsh-skill-mcp-manager",
+      "repository": {
+        "url": "https://github.com/Hankerlove/oh-my-dsh-plugin",
+        "directory": "packages/dsh-skill-mcp-manager"
+      },
+      "metadata": {
+        "keywords": [
+          "skill",
+          "mcp",
+          "context"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.1.1",
+          "publishTimestamp": 1794799756,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.3.0"
+          }
+        },
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1794568166,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@ultraslow/dsh-boot-skin",
+      "title": {
+        "en": "Boot video & wallpaper",
+        "zh": "开屏与壁纸"
+      },
+      "description": {
+        "en": "Play your own intro video on startup and use an image or video as the app wallpaper.",
+        "zh": "启动时播放自己的片头视频，并把图片/视频铺成界面壁纸。"
+      },
+      "icon": "https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/main/packages/dsh-boot-skin/icon.svg",
+      "author": "Hankerlove",
+      "homepage": "https://github.com/Hankerlove/oh-my-dsh-plugin/tree/main/packages/dsh-boot-skin",
+      "repository": {
+        "url": "https://github.com/Hankerlove/oh-my-dsh-plugin",
+        "directory": "packages/dsh-boot-skin"
+      },
+      "metadata": {
+        "keywords": [
+          "boot",
+          "video",
+          "wallpaper"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1794300672,
+          "source": {
+            "type": "npm"
+          }
+        }
+      ]
+    }
+  ]
+}

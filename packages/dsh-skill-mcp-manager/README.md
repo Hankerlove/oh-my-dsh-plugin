@@ -9,16 +9,6 @@
 | 适用 | DSH `>=0.2.2-rc.1 <0.3.0`（Web UI；已在 DSH Desktop 验证） |
 | 协议 | [MIT](../../LICENSE) |
 
-![Skill 页](docs/screenshot-skills.png)
-
-![Skill 页（深色）](docs/screenshot-skills-dark.png)
-
-![拖动连续切换](docs/screenshot-skills-drag.png)
-
-![MCP 页](docs/screenshot-mcp.png)
-
-> 截图使用示例数据（虚拟工作区与服务器），不含任何真实 Skill / MCP 配置。
-
 ## 能做什么
 
 | 能力 | 说明 |
@@ -35,6 +25,14 @@
 ## 安装方式
 
 `<profile>` 换成你的 profile 名（例如 `desktop`、`web`）。
+
+### 从插件市场安装
+
+本仓库维护了一份 DSH 插件索引，添加索引源后即可在「发现」页安装：
+
+1. **插件 → 实验性插件**，打开 **自定义插件索引**；
+2. **插件 → 发现 → 添加索引源**，粘贴 `https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/main/market/index.json`；
+3. 在列表里选择 **Skill 与 MCP** 安装。
 
 ### 从 npm 安装
 

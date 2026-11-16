@@ -21,12 +21,25 @@ Oh My DSH Plugin 收集个人开发、好用的 DSH 插件。每个插件是一�
 | 插件 | 能做什么 | npm 包名 |
 | --- | --- | --- |
 | [待办清单](./packages/dsh-todo-list/README.md) | 悬浮在 Web UI 右上角的待办面板：可拖动、可收起，按天查看；重复事项每天一条独立实例，支持优先级、工作日历与到点提醒 | [`@ultraslow/dsh-todo-list`](https://www.npmjs.com/package/@ultraslow/dsh-todo-list) |
-| [Skills & MCP](./packages/dsh-skill-mcp-manager/README.md) | <img src="https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/packages/dsh-skill-mcp-manager/docs/screenshot-skills.png" width="320" alt="按工作区管理 Skill 与 MCP"><br>按 DSH 真实优先级展示工作区会加载的 Skill，勾选即对模型隐藏以节省 context（`/名字` 仍可用）；MCP 分工作区与全局两级，全局写入 profile 的 `cordis.patch.yml`、对所有工作区生效 | [`@ultraslow/dsh-skill-mcp-manager`](https://www.npmjs.com/package/@ultraslow/dsh-skill-mcp-manager) |
+| [Skills & MCP](./packages/dsh-skill-mcp-manager/README.md) | <img src="https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/skill-mcp-manager.png" width="320" alt="按工作区管理 Skill 与 MCP"><br>按 DSH 真实优先级展示工作区会加载的 Skill，勾选即对模型隐藏以节省 context（`/名字` 仍可用）；MCP 分工作区与全局两级，全局写入 profile 的 `cordis.patch.yml`、对所有工作区生效 | [`@ultraslow/dsh-skill-mcp-manager`](https://www.npmjs.com/package/@ultraslow/dsh-skill-mcp-manager) |
 | [开屏与壁纸](./packages/dsh-boot-skin/README.md) | <img src="https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/boot-skin-demo.gif" width="320" alt="开屏与壁纸演示：点击启动 → 开屏片头 → 主界面壁纸"><br>启动时全屏播你自己的视频，并把图片/视频铺成界面壁纸；不透明度、渐入渐隐、模糊、暗化、界面通透度都能在设置里实时调 | [`@ultraslow/dsh-boot-skin`](https://www.npmjs.com/package/@ultraslow/dsh-boot-skin) |
 
 ## 安装方式
 
 `<profile>` 换成你的 profile 名，例如 `desktop`、`web`。
+
+### 从插件市场安装
+
+本仓库维护了一份插件索引，可以直接在 DSH 的「发现」页浏览安装：
+
+1. **插件 → 实验性插件**，打开 **自定义插件索引**；
+2. **插件 → 发现 → 添加索引源**，粘贴下面这个 URL：
+
+   ```text
+   https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/main/market/index.json
+   ```
+
+3. 在列表里选择要装的插件，确认来源后安装。
 
 ### 从 npm 安装
 
