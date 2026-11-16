@@ -136,12 +136,6 @@ window.__ModuleLoader__.load({
 			return `¥${Math.round(value).toLocaleString()}`;
 		}
 
-		function formatClock(value) {
-			const date = toDate(value);
-			if (date === null || !Number.isFinite(date.getTime())) return '—';
-			return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
-		}
-
 		/** `12/24`, or `—` when the Host sent nothing usable. */
 		function shortDate(value) {
 			const date = toDate(value);
@@ -187,11 +181,6 @@ window.__ModuleLoader__.load({
 			return label === key ? raw : label;
 		}
 
-		function inputDateValue(value) {
-			const date = toDate(value);
-			if (date === null || !Number.isFinite(date.getTime())) return '';
-			return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
-		}
 		// #endregion
 
 		// #region monitor helpers
@@ -1089,7 +1078,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const series = normalizePricePoints(points);
 			if (series.length === 0) return null;
 			const padLeft = 52;
-			const padRight = 82;
+			// Room on the right for the reference-line captions, including English ones.
+			const padRight = 96;
 			const padTop = 14;
 			const padBottom = 26;
 			const plotLeft = padLeft;
