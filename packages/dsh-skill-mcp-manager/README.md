@@ -5,7 +5,6 @@
 | 项 | 值 |
 | --- | --- |
 | npm 包名 | [`@ultraslow/dsh-skill-mcp-manager`](https://www.npmjs.com/package/@ultraslow/dsh-skill-mcp-manager) |
-| 版本 | `0.1.0` |
 | 适用 | DSH `>=0.2.2-rc.1 <0.3.0`（Web UI；已在 DSH Desktop 验证） |
 | 协议 | [MIT](../../LICENSE) |
 

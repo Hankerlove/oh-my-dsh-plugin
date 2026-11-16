@@ -1,6 +1,6 @@
 {
   "name": "@ultraslow/dsh-skill-mcp-manager",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Workspace-scoped Skill / MCP manager for the DeepSeek Harness Web UI: every skill shown with its real discovery rank, source and directory, per-skill or bulk visibility toggles that save context, per-workspace MCP servers, and global MCP servers written to the profile cordis.patch.yml.",
   "license": "MIT",
   "type": "module",
