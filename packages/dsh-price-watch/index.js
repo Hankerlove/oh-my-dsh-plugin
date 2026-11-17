@@ -7,20 +7,26 @@
  * plus `config.json` / `monitors.json` / `state.json`. Nothing is written into
  * the project directory.
  *
- * V2 model: "is there a date?" decides everything.
+ * Frequency model v2 — "is there a date?" still decides everything, but the two
+ * modes no longer share a budget, a window or a fallback:
+ *
  *   calendar  the user has not picked a date. L1 only: the public calendar,
  *             380 days of lowest price, one request (two for a round trip).
- *             Never writes prices, never alerts.
- *   watch     the user picked a date. L1 is the reference trend of that date;
- *             L2 (browser) adds the real fare products and the passenger-level
- *             paid price when the gating in contract §6 allows it.
+ *             Snapshot only — never writes a price series, never alerts.
+ *   watch     the user picked a date. L2 only: the logged-in browser reads the
+ *             real fare products and the passenger's payable price. L1 is never
+ *             called from this path; when L2 fails the chart keeps a hole rather
+ *             than being back-filled with a different kind of price.
  *
- * Scheduling: a single 60s heartbeat scans monitors whose `nextDue` has passed.
- * Each successful collection pushes `nextDue` forward with ±15% jitter. Between
- * 01:00 and 06:00 local time calendar monitors wait for 06:00, watch monitors
- * stretch their L1 interval ×4, and L2 never runs. The Host `schedule` service
- * is deliberately not used: it delivers prompts into Sessions and would burn
- * tokens for a job that only needs HTTP.
+ * Scheduling: a single 60s heartbeat collects every monitor whose `nextDue` has
+ * passed. `nextDue = now + base * (0.85 + rand*0.30)`, where `base` is the
+ * monitor's cadence in minutes (or its mode's global default). There is no quiet
+ * window, no daily quota, no minimum interval, no adaptive slowdown and no
+ * exponential backoff. The one protective rule left is the risk-control page
+ * (`BlockedError`): it pushes that single monitor's `nextDue` one extra full
+ * period forward, i.e. it skips one round. The Host `schedule` service is
+ * deliberately not used: it delivers prompts into Sessions and would burn tokens
+ * for a job that only needs HTTP.
  *
  * Failure policy: this is a decorative plugin. Every registration and handler
  * degrades instead of throwing, so a broken collector or an unreachable HOME can
@@ -29,13 +35,13 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { L1BudgetError, collectCalendar, collectMonitor, probeL1 } from './host/collect/index.js';
+import { collectCalendar, probeL1 } from './host/collect/index.js';
 import { AuthError, BlockedError, createBrowserCollector } from './host/collect/browser.js';
 import { buildAlertCard, buildDigestCard, sendFeishu } from './host/notify.js';
 import { evaluate } from './host/rules.js';
 import { createRouter } from './host/routes.js';
-import { createStore } from './host/store.js';
-import { createLogger, isNightQuiet, isoDate, isoNow, quietWakeIso, sleep } from './host/util.js';
+import { clampCadence, createStore } from './host/store.js';
+import { createLogger, isoDate, isoNow, sleep } from './host/util.js';
 
 export const name = 'price-watch';
 
@@ -46,17 +52,14 @@ export const inject = ['webServer'];
 const TICK_MS = 60000;
 /** Give the Host a moment to settle before the first catch-up collection. */
 const BOOT_DELAY_MS = 8000;
-/** Contract §4: never two L1 requests closer than this. */
+/**
+ * Politeness only: keep at least this gap between two Ctrip requests so a
+ * catch-up tick with several monitors does not fire them simultaneously.
+ * This is NOT a budget — it never refuses a request.
+ */
 const L1_SPACING_MS = 1500;
-/** Contract §4: consecutive L1 failures before the day is paused. */
-const L1_FAILURE_THRESHOLD = 5;
 /** Watch monitors raise one anomaly alert after this many failed runs. */
 const PER_MONITOR_ANOMALY_THRESHOLD = 3;
-/** Contract §5 backoff ladder, indexed by level. */
-const L2_BACKOFF_HOURS = [0, 2, 4, 8, 24];
-const L2_BACKOFF_MAX_LEVEL = 4;
-/** A successful L2 run may only reset the level after a full quiet day. */
-const L2_RESET_AFTER_MS = 24 * 3600e3;
 /** Health probe cache: the panel polls /status every 30s, do not hammer L1. */
 const PROBE_TTL_MS = 30 * 60000;
 
@@ -76,7 +79,7 @@ export function apply(ctx) {
 
   let running = false;
   let disposed = false;
-  /** Timestamp of the last L1 HTTP call; enforces the global 1500ms gap. */
+  /** Timestamp of the last Ctrip request; enforces the global 1500ms gap. */
   let l1LastAt = 0;
   /** Cached L1 health probe so a status poll never costs a request. */
   let probeCache = { at: 0, value: null };
@@ -125,182 +128,66 @@ export function apply(ctx) {
     };
   }
 
-  // #region budgets and cursors
-  /** How many runs happened today for a `{date,count}` budget record. */
-  function runsToday(runs, today) {
-    return runs && runs.date === today ? Math.max(0, Number(runs.count) || 0) : 0;
+  // #region cadence and cursors
+  /** The cadence that decides this monitor's rhythm, in minutes (spec §3). */
+  function cadenceMinutesOf(monitor) {
+    const key = monitor?.mode === 'calendar' ? 'calendarMinutes' : 'watchMinutes';
+    const config = store.getConfig();
+    // 不传 cadence 就用该模式的全局默认；两侧都按同一套档位夹取。
+    const configured = clampCadence(config?.cadence?.[key]);
+    return clampCadence(monitor?.cadence?.minutes ?? configured, configured);
   }
 
-  /** Defensive read of the L2 backoff record. */
-  function backoffOf(state) {
-    const backoff = state?.l2Backoff;
-    if (!backoff || typeof backoff !== 'object') return { level: 0, until: null, trippedDate: null };
-    return {
-      level: Math.max(0, Math.min(L2_BACKOFF_MAX_LEVEL, Number(backoff.level) || 0)),
-      until: typeof backoff.until === 'string' ? backoff.until : null,
-      trippedDate: typeof backoff.trippedDate === 'string' ? backoff.trippedDate : null,
-    };
+  /** `now + base * (0.85 + rand*0.30)`, spec §3. */
+  function computeNextDue(monitor) {
+    const base = cadenceMinutesOf(monitor) * 60000;
+    return new Date(Date.now() + base * (0.85 + Math.random() * 0.30)).toISOString();
   }
 
   /**
-   * Global L1 gate, run before every `fetchCalendar` call (contract §4):
-   * respects the pause, keeps 1500ms between requests and counts the daily
-   * budget. Returns `false` when this request must be skipped.
+   * The one and only safety valve (spec §3): a risk-control page makes this
+   * monitor skip a round. Normal scheduling already waits one period, so
+   * "skip a round" means one extra full period: `now + 2 × base`, without
+   * jitter so the value stays readable while debugging. The user's cadence
+   * itself is never modified, and other monitors are unaffected.
    */
-  async function beforeL1() {
-    const today = isoDate();
-    const state = store.getState();
-    const blockedUntil = Date.parse(state.l1BlockedUntil || '');
-    if (Number.isFinite(blockedUntil) && Date.now() < blockedUntil) return false;
-
-    const wait = L1_SPACING_MS - (Date.now() - l1LastAt);
-    if (wait > 0) await sleep(wait);
-    l1LastAt = Date.now();
-
-    const perDay = Math.max(0, Number(store.getConfig()?.l1?.perDay) || 0);
-    const used = runsToday(store.getState().l1Runs, today);
-    if (used >= perDay) {
-      logger.info(`L1 今日请求已达预算（${used}/${perDay}），本次跳过`);
-      return false;
-    }
-    await store.saveState({ l1Runs: { date: today, count: used + 1 } });
-    return true;
-  }
-
-  /** Count L1 failures across monitors; five in a row pause L1 until 00:05. */
-  async function recordL1(ok) {
-    const state = store.getState();
-    if (ok) {
-      if (Number(state.l1FailCount || 0) !== 0) await store.saveState({ l1FailCount: 0 });
-      return;
-    }
-    const count = Number(state.l1FailCount || 0) + 1;
-    if (count >= L1_FAILURE_THRESHOLD) {
-      const until = new Date();
-      until.setDate(until.getDate() + 1);
-      until.setHours(0, 5, 0, 0);
-      await store.saveState({ l1BlockedUntil: until.toISOString(), l1FailCount: 0 });
-      logger.warn(`L1 连续失败 ${count} 次，暂停到 ${until.toISOString()}`);
-      return;
-    }
-    await store.saveState({ l1FailCount: count });
-  }
-
-  /** `now + base * (0.85 + rand*0.30)`, contract §3. */
-  function computeNextDue(monitor, { quiet = false } = {}) {
-    const config = store.getConfig();
-    let base;
-    if (monitor.mode === 'calendar') {
-      const hours = Math.max(1, Number(monitor.cadence?.hours) || Number(config?.cadence?.calendarHours) || 6);
-      base = hours * 3600e3;
-    } else {
-      const minutes = Math.max(1, Number(monitor.cadence?.minutes) || Number(config?.cadence?.watchMinutes) || 60);
-      // 夜间静默期间 watch 的 L1 间隔 ×4：不做全停，但也不按原节奏跑。
-      base = minutes * 60000 * (quiet ? 4 : 1);
-    }
-    return new Date(Date.now() + base * (0.85 + Math.random() * 0.30)).toISOString();
+  function blockedNextDue(monitor) {
+    return new Date(Date.now() + cadenceMinutesOf(monitor) * 60000 * 2).toISOString();
   }
 
   async function setNextDue(monitorId, iso) {
     const state = store.getState();
     await store.saveState({ nextDue: { ...(state.nextDue || {}), [monitorId]: iso } });
   }
-
-  /** L2 run counter: a request that never reached the page still costs budget. */
-  async function bumpL2Run() {
-    const today = isoDate();
-    const used = runsToday(store.getState().l2Runs, today);
-    await store.saveState({ l2Runs: { date: today, count: used + 1 } });
-  }
   // #endregion
 
-  // #region L2 gating and backoff
+  // #region L2 preconditions
   /**
-   * Contract §6: all seven conditions must hold. A manual refresh passes
-   * `manual: true`, which only skips condition 5 (the per-monitor interval).
+   * The complete set of preconditions for a watch run (spec §4.2): a valid login
+   * plus a usable browser module. Nothing else — no daily count, no minimum
+   * interval, no night check, no backoff.
    */
-  async function l2Gating(monitor, { manual = false } = {}) {
-    if (monitor.mode !== 'watch') return { allowed: false, reason: 'calendar' };
-    const config = store.getConfig();
-    const state = store.getState();
-    const today = isoDate();
-    const backoff = backoffOf(state);
-
-    if (!config?.l2?.enabled) return { allowed: false, reason: 'l2-disabled' };
-    if (state.auth?.status !== 'valid') return { allowed: false, reason: 'auth' };
-    const until = Date.parse(backoff.until || '');
-    if (Number.isFinite(until) && Date.now() < until) return { allowed: false, reason: 'backoff' };
-    if (state.l2DisabledForDay === today) return { allowed: false, reason: 'day-disabled' };
-    const perDay = Math.max(0, Number(config?.l2?.perDay) || 0);
-    if (runsToday(state.l2Runs, today) >= perDay) return { allowed: false, reason: 'budget' };
-    if (!manual) {
-      const minGap = Math.max(0, Number(config?.l2?.minIntervalMinutes) || 0) * 60000;
-      const lastAt = Date.parse(state.l2LastRunBy?.[monitor.id] || '');
-      if (Number.isFinite(lastAt) && Date.now() - lastAt < minGap) return { allowed: false, reason: 'interval' };
+  async function l2Ready() {
+    if (store.getState().auth?.status !== 'valid') {
+      return { ok: false, reason: 'auth', message: '携程登录态无效，请先在面板里重新登录' };
     }
-    if (isNightQuiet()) return { allowed: false, reason: 'night' };
-    const available = await browser.isAvailable();
-    if (!available) return { allowed: false, reason: 'browser' };
-    return { allowed: true, reason: 'ok' };
-  }
-
-  /** Contract §5: exponential backoff, day lock, one critical alert per day. */
-  async function onL2Blocked(monitor, message) {
-    const today = isoDate();
-    const prev = backoffOf(store.getState());
-    const level = Math.min(L2_BACKOFF_MAX_LEVEL, prev.level + 1);
-    const hours = L2_BACKOFF_HOURS[level] || 24;
-    const until = new Date(Date.now() + hours * 3600e3).toISOString();
-    const patch = { l2Backoff: { level, until, trippedDate: today }, l2LastError: message };
-    // 同一个自然日第二次触发 → 当天不再跑 L2。
-    if (prev.trippedDate === today) patch.l2DisabledForDay = today;
-    await store.saveState(patch);
-    logger.warn(`携程风控拦截，L2 退避 ${hours} 小时（level ${level}/${L2_BACKOFF_MAX_LEVEL}）`);
-
-    const dayFired = { ...(store.getState().dayFired || {}) };
-    if (dayFired['l2:blocked'] !== today) {
-      dayFired['l2:blocked'] = today;
-      await store.saveState({ dayFired });
-      await deliver(anomalyAlert(monitor, '携程返回风控/验证页面，精确采集已暂停，期间使用日历参考价'));
+    if (!(await browser.isAvailable())) {
+      return { ok: false, reason: 'browser', message: browser.loadError?.() || '浏览器采集模块不可用（playwright-core 未安装）' };
     }
-  }
-
-  /** Contract §5: an expired login pauses L2 and alerts once per day. */
-  async function onL2AuthExpired(monitor, message) {
-    const today = isoDate();
-    const state = store.getState();
-    await store.saveState({
-      auth: { ...(state.auth || {}), status: 'expired', lastVerifiedAt: isoNow() },
-      l2LastError: message,
-    });
-    const dayFired = { ...(store.getState().dayFired || {}) };
-    if (dayFired['l2:auth'] !== today) {
-      dayFired['l2:auth'] = today;
-      await store.saveState({ dayFired });
-      await deliver(anomalyAlert(monitor, '携程登录态已失效，精确采集暂停，请在面板里重新登录'));
-    }
-  }
-
-  /** After a success: clear the ladder once a full quiet day has passed. */
-  function resetBackoffIfQuiet(state) {
-    const backoff = backoffOf(state);
-    if (backoff.level === 0) return { level: 0, until: null, trippedDate: null };
-    const until = Date.parse(backoff.until || '');
-    if (backoff.trippedDate !== isoDate() && Number.isFinite(until) && Date.now() - until >= L2_RESET_AFTER_MS) {
-      return { level: 0, until: null, trippedDate: null };
-    }
-    return state.l2Backoff;
+    return { ok: true };
   }
   // #endregion
 
   // #region rules
   /**
-   * Evaluate rules per passenger series. L1 points carry no passenger id and act
-   * as one shared series; L2 points are per passenger so each passenger gets its
-   * own thresholds. Calendar monitors never reach this function.
+   * Evaluate rules per passenger series. Every point here is an L2 point and
+   * carries its passenger, so each passenger gets its own thresholds. Calendar
+   * monitors never reach this function and old L1 reference points are not fed
+   * in: they are a different kind of number.
    */
   async function evaluateAndNotify(monitor, points) {
     if (monitor.mode !== 'watch') return 0;
+    if (!Array.isArray(points) || points.length === 0) return 0;
     const config = store.getConfig();
     let state = store.getState();
     let alerts = 0;
@@ -311,6 +198,7 @@ export function apply(ctx) {
       grouped.get(pid).push(point);
     }
     for (const [pid] of grouped) {
+      // 只看本次新点的乘客：没有新点的人不该被重新评估。
       const history = await store.readPoints(monitor.id, { limit: 2000 });
       const series = history
         .filter((point) => (point?.key?.passengerId || '') === pid)
@@ -333,7 +221,7 @@ export function apply(ctx) {
     return alerts;
   }
 
-  /** Record one failed watch-monitor run; watch-only, calendar stays silent. */
+  /** Record one failed watch-monitor run; calendar stays silent by design. */
   async function noteWatchFailure(monitor, message) {
     const state = store.getState();
     const failures = { ...(state.failures || {}) };
@@ -355,18 +243,23 @@ export function apply(ctx) {
   // #endregion
 
   // #region collection
-  /** Calendar mode (contract §7.1): snapshot only, no prices, no alerts. */
+  /**
+   * Politeness gate shared by every L1 request (and the health probe): wait out
+   * the minimum gap, then record the moment. Never refuses — v2 has no quota.
+   */
+  async function paceL1() {
+    const wait = L1_SPACING_MS - (Date.now() - l1LastAt);
+    if (wait > 0) await sleep(wait);
+    l1LastAt = Date.now();
+  }
+
+  /** 行情模式（spec §4.1）：只写日历快照，不写价格序列、不告警。 */
   async function collectCalendarOne(monitor) {
     const startedAt = isoNow();
-    if (isNightQuiet()) {
-      await setNextDue(monitor.id, quietWakeIso());
-      return { ok: true, skipped: 'night', source: 'calendar', points: 0, alerts: 0 };
-    }
     try {
-      const snapshot = await collectCalendar(monitor, { beforeL1 });
-      await recordL1(true);
-      await store.writeCalendarSnapshot(monitor.id, snapshot);
+      const snapshot = await collectCalendar(monitor, { pace: paceL1 });
       const state = store.getState();
+      await store.writeCalendarSnapshot(monitor.id, snapshot);
       await store.saveState({
         calendarFetchedAt: { ...(state.calendarFetchedAt || {}), [monitor.id]: snapshot.fetchedAt },
         lastCollectAt: startedAt,
@@ -377,12 +270,9 @@ export function apply(ctx) {
       await setNextDue(monitor.id, computeNextDue(monitor));
       return { ok: true, source: 'calendar', points: 0, alerts: 0 };
     } catch (error) {
-      if (error instanceof L1BudgetError) {
-        await setNextDue(monitor.id, computeNextDue(monitor));
-        return { ok: true, skipped: 'l1-budget', source: 'calendar', points: 0, alerts: 0 };
-      }
       const message = String(error?.message || error);
-      await recordL1(false);
+      // 行情模式不发告警（spec §4.1）：失败只是没刷新快照，面板上还有上一次的数据。
+      logger.warn(`日历采集失败 ${monitor.title}: ${message}`);
       const state = store.getState();
       const failures = { ...(state.failures || {}) };
       failures[monitor.id] = Number(failures[monitor.id] || 0) + 1;
@@ -390,111 +280,77 @@ export function apply(ctx) {
         failures,
         lastError: { ...(state.lastError || {}), [monitor.id]: { at: isoNow(), message, count: failures[monitor.id] } },
       });
-      // 日历模式不发告警（契约 §1/§10），只记日志。
-      logger.warn(`日历采集失败 ${monitor.title}: ${message}`);
       await setNextDue(monitor.id, computeNextDue(monitor));
       return { ok: false, error: message, source: 'calendar', points: 0, alerts: 0 };
     }
   }
 
   /**
-   * Watch mode (contract §7.2): L1 always, then L2 only when §6 allows it.
-   * `allowL2: false` is the plain "refresh" path (§9: a normal refresh only
-   * re-reads L1; only `{ l2: true }` may ask the browser).
+   * 监控模式（spec §4.2）：只走 L2，绝不调 L1。
+   *
+   * 前置条件只有两个；任一不满足就只记错误、不写点。风控页 / 登录失效 / 其它
+   * 异常同样只记错误、不写点，图表因此留空洞 —— 这是故意的：L1 参考价与乘客
+   * 实付价不是同一种数，混写会画出假曲线。
    */
-  async function collectWatchOne(monitor, { manualL2 = false, allowL2 = true } = {}) {
+  async function collectWatchOne(monitor) {
     const startedAt = isoNow();
-    const quiet = isNightQuiet();
-    let l1Points = [];
-    let l2Points = [];
-    let l2Ran = false;
-    let l1Error = null;
-    let budgetSkipped = false;
+    const ready = await l2Ready();
+    if (!ready.ok) {
+      await noteWatchFailure(monitor, ready.message);
+      await setNextDue(monitor.id, computeNextDue(monitor));
+      return { ok: false, error: ready.message, skipped: ready.reason, source: 'l2', points: 0, alerts: 0 };
+    }
 
-    // 第 1 步：L1 参考价（必做）。失败不阻塞后面的 L2。
     try {
-      l1Points = await collectMonitor(monitor, { beforeL1 });
-      await recordL1(true);
-      await store.appendPoints(monitor.id, l1Points);
+      const result = await browser.collect(monitor);
+      const at = isoNow();
+      const points = Array.isArray(result?.points) ? result.points : [];
+      await store.appendPoints(monitor.id, points);
+      await store.writeFlightsSnapshot(monitor.id, {
+        fetchedAt: at,
+        flights: Array.isArray(result?.flights) ? result.flights : [],
+        tax: result?.tax || null,
+      });
+      const state = store.getState();
+      await store.saveState({
+        l2LastRunBy: { ...(state.l2LastRunBy || {}), [monitor.id]: at },
+        l2LastOk: { ...(state.l2LastOk || {}), [monitor.id]: true },
+        l2LastError: null,
+        lastCollectAt: startedAt,
+        lastCollectBy: { ...(state.lastCollectBy || {}), [monitor.id]: startedAt },
+        failures: { ...(state.failures || {}), [monitor.id]: 0 },
+        lastError: { ...(state.lastError || {}), [monitor.id]: null },
+      });
+      await setNextDue(monitor.id, computeNextDue(monitor));
+      const alerts = await evaluateAndNotify(monitor, points);
+      return { ok: true, source: 'l2', points: points.length, alerts };
     } catch (error) {
-      if (error instanceof L1BudgetError) {
-        budgetSkipped = true;
-      } else {
-        l1Error = String(error?.message || error);
-        await recordL1(false);
-        await noteWatchFailure(monitor, l1Error);
-        logger.warn(`L1 参考价失败 ${monitor.title}: ${l1Error}`);
+      const message = String(error?.message || error);
+      const state = store.getState();
+      const patch = {
+        l2LastOk: { ...(state.l2LastOk || {}), [monitor.id]: false },
+        l2LastError: message,
+      };
+      // 登录失效要如实落到 auth 上（面板靠它提示重新登录），
+      // 但这不是退避：下一次仍按用户选的节奏去试。
+      if (error instanceof AuthError || error?.code === 'AUTH_REQUIRED') {
+        patch.auth = { ...(state.auth || {}), status: 'expired', lastVerifiedAt: isoNow() };
       }
+      await store.saveState(patch);
+      await noteWatchFailure(monitor, message);
+      const blocked = error instanceof BlockedError || error?.code === 'BLOCKED';
+      if (blocked) logger.warn(`携程返回风控页，${monitor.title} 跳过一次采集`);
+      // 唯一安全阀：风控页额外推后一个完整周期（跳过一轮）；其它失败按正常节奏。
+      await setNextDue(monitor.id, blocked ? blockedNextDue(monitor) : computeNextDue(monitor));
+      return { ok: false, error: message, source: 'l2', points: 0, alerts: 0 };
     }
-
-    // 第 2 步：L2（§6 全部条件满足才跑；手动 refresh 只跳过条件 5）。
-    const gating = allowL2 ? await l2Gating(monitor, { manual: manualL2 }) : { allowed: false, reason: 'l1-only' };
-    if (gating.allowed) {
-      await bumpL2Run();
-      try {
-        const result = await browser.collect(monitor);
-        const at = isoNow();
-        l2Points = Array.isArray(result?.points) ? result.points : [];
-        await store.appendPoints(monitor.id, l2Points);
-        await store.writeFlightsSnapshot(monitor.id, {
-          fetchedAt: at,
-          flights: Array.isArray(result?.flights) ? result.flights : [],
-          tax: result?.tax || null,
-        });
-        l2Ran = true;
-        const state = store.getState();
-        await store.saveState({
-          l2LastRunBy: { ...(state.l2LastRunBy || {}), [monitor.id]: at },
-          l2LastOk: { ...(state.l2LastOk || {}), [monitor.id]: true },
-          l2LastError: null,
-          l2Backoff: resetBackoffIfQuiet(state),
-        });
-      } catch (error) {
-        const message = String(error?.message || error);
-        const still = store.getState();
-        await store.saveState({ l2LastOk: { ...(still.l2LastOk || {}), [monitor.id]: false } });
-        if (error instanceof BlockedError || error?.code === 'BLOCKED') {
-          await onL2Blocked(monitor, message);
-        } else if (error instanceof AuthError || error?.code === 'AUTH_REQUIRED') {
-          await onL2AuthExpired(monitor, message);
-        } else {
-          // L2 失败不阻塞 L1：点已经落库，这里只记错误。
-          logger.warn(`L2 采集失败，继续使用 L1 参考价: ${message}`);
-          await store.saveState({ l2LastError: message });
-        }
-      }
-    }
-
-    const fresh = [...l1Points, ...l2Points];
-    await setNextDue(monitor.id, computeNextDue(monitor, { quiet }));
-    if (fresh.length === 0) {
-      if (budgetSkipped) return { ok: true, skipped: 'l1-budget', source: 'l1', points: 0, alerts: 0 };
-      return { ok: false, error: l1Error || '本次没有采到价格', source: 'l1', points: 0, alerts: 0 };
-    }
-
-    const state = store.getState();
-    const failures = { ...(state.failures || {}) };
-    failures[monitor.id] = 0;
-    await store.saveState({
-      lastCollectAt: startedAt,
-      lastCollectBy: { ...(state.lastCollectBy || {}), [monitor.id]: startedAt },
-      failures,
-      lastError: { ...(state.lastError || {}), [monitor.id]: null },
-    });
-
-    // 第 3 步：只有 watch 模式才有规则可评估。
-    const alerts = await evaluateAndNotify(monitor, fresh);
-    return { ok: true, source: l2Ran ? 'l2' : 'l1', points: fresh.length, alerts };
   }
 
   /** Dispatch by mode; a failure never escapes into the scheduler. */
-  async function collectOne(monitor, options = {}) {
+  async function collectOne(monitor) {
     try {
       if (monitor.mode === 'calendar') return await collectCalendarOne(monitor);
-      return await collectWatchOne(monitor, {
-        manualL2: Boolean(options.manualL2),
-        allowL2: options.allowL2 !== false,
-      });
+      return await collectWatchOne(monitor);
     } catch (error) {
       logger.warn(`采集流程异常 ${monitor?.title || monitor?.id}: ${String(error?.message || error)}`);
       return { ok: false, error: String(error?.message || error) };
@@ -559,7 +415,7 @@ export function apply(ctx) {
         }
         await collectOne(monitor);
         collected += 1;
-        // 同一 tick 内多个 monitor 之间也要错开，不要连发（契约 §3）。
+        // 同一 tick 内多个 monitor 之间也要错开，不要连发。
         await sleep(1500 + Math.floor(Math.random() * 2500));
       }
       await maybeDigest();
@@ -572,30 +428,27 @@ export function apply(ctx) {
     }
   }
 
-  /** L1 health for `/status`; cached for 30 min and outside the daily budget. */
+  /** L1 health for `/status`; cached for 30 min so the panel never costs a request. */
   async function probeL1Cached() {
     const now = Date.now();
     if (probeCache.value && now - probeCache.at < PROBE_TTL_MS) return probeCache.value;
-    const state = store.getState();
-    const blockedUntil = Date.parse(state.l1BlockedUntil || '');
-    if (Number.isFinite(blockedUntil) && now < blockedUntil) {
-      probeCache = { at: now, value: { id: 'l1', ok: false, error: 'L1 连续失败，暂停中', checkedAt: isoNow() } };
-      return probeCache.value;
-    }
-    // The probe is cheap but it is still a request: keep the global spacing.
-    const wait = L1_SPACING_MS - (Date.now() - l1LastAt);
-    if (wait > 0) await sleep(wait);
-    l1LastAt = Date.now();
+    await paceL1();
     const value = await probeL1();
     probeCache = { at: Date.now(), value };
     return value;
   }
 
   const actions = {
+    /**
+     * Manual "collect now" (spec §5). No `{ l2: true }` distinction any more:
+     * a calendar monitor runs L1, a watch monitor runs L2. The old parameter is
+     * accepted and ignored so an old client keeps working.
+     */
     refreshMonitor: async (id, options = {}) => {
       await store.init();
       const monitor = store.findMonitor(id);
       if (!monitor) return { ok: false, error: '监控不存在' };
+      // 新建监控时后台补一次采集，HTTP 响应不等待它。
       if (options.immediate) {
         void (async () => {
           await sleep(50);
@@ -603,8 +456,7 @@ export function apply(ctx) {
         })().catch(() => {});
         return { ok: true, queued: true };
       }
-      // §9: a plain refresh only re-reads L1. L2 needs an explicit `{ l2: true }`.
-      return collectOne(monitor, { manualL2: Boolean(options.l2), allowL2: Boolean(options.l2) });
+      return collectOne(monitor);
     },
     refreshAll: async () => tick({ force: true }),
     loginStart: async () => {
@@ -615,14 +467,10 @@ export function apply(ctx) {
       await store.init();
       const state = store.getState();
       const available = await browser.isAvailable();
-      const backoff = backoffOf(state);
       return {
         available,
         ...(state.auth || { status: 'unknown' }),
-        blockedUntil: backoff.until,
-        disabledForDay: state.l2DisabledForDay === isoDate(),
-        level: backoff.level,
-        lastError: state.l2LastError,
+        lastError: state.l2LastError || null,
       };
     },
     loginProbe: async () => {
@@ -637,54 +485,32 @@ export function apply(ctx) {
       await store.init();
       const config = store.getConfig();
       const state = store.getState();
-      const today = isoDate();
       const probe = await probeL1Cached();
       const available = await browser.isAvailable();
-      const backoff = backoffOf(state);
-      const blockedUntil = backoff.until;
-      const blocked = Number.isFinite(Date.parse(blockedUntil || '')) && Date.parse(blockedUntil) > Date.now();
       const monitors = store.listMonitors();
       const failures = Object.values(state.failures || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
       return {
-        version: '0.2.0',
-        auth: { ...(state.auth || { status: 'unknown' }), available, blockedUntil },
+        version: '0.3.0',
+        auth: { ...(state.auth || { status: 'unknown' }), available },
         lastCollectAt: state.lastCollectAt,
         monitorCount: monitors.length,
         passengerCount: store.listPassengers().length,
         failures,
+        // 只留「最近一次探针结果」：预算、每日次数、最短间隔都随旧模型删掉了。
         l1: {
           ok: Boolean(probe.ok),
-          calendarMonitors: monitors.filter((monitor) => monitor.mode === 'calendar').length,
-          watchMonitors: monitors.filter((monitor) => monitor.mode === 'watch').length,
-        },
-        budgets: {
-          l1: { used: runsToday(state.l1Runs, today), perDay: Math.max(0, Number(config?.l1?.perDay) || 0) },
-          l2: { used: runsToday(state.l2Runs, today), perDay: Math.max(0, Number(config?.l2?.perDay) || 0) },
+          days: Number.isFinite(Number(probe.days)) ? Number(probe.days) : null,
+          ms: Number.isFinite(Number(probe.ms)) ? Number(probe.ms) : null,
+          checkedAt: probe.checkedAt || null,
+          ...(probe.ok ? {} : { error: probe.error || 'L1 不可用' }),
         },
         l2: {
-          enabled: Boolean(config?.l2?.enabled),
           available,
-          blockedUntil,
-          disabledForDay: state.l2DisabledForDay === today,
-          level: backoff.level,
           lastError: state.l2LastError || null,
-          // Why precise collection is unavailable, when it is an import problem.
-          loadError: available ? null : browser.loadError?.() || null,
-          minIntervalMinutes: Math.max(0, Number(config?.l2?.minIntervalMinutes) || 0),
+          // 浏览器模块缺失时带上诊断原因，正常时不打扰客户端。
+          ...(available ? {} : { loadError: browser.loadError?.() || null }),
         },
-        collectors: [
-          probe,
-          {
-            id: 'l2',
-            // 契约 §9：ok 只反映 available && !blocked，不因 enabled=false 变红。
-            ok: available && !blocked,
-            enabled: Boolean(config?.l2?.enabled),
-            used: runsToday(state.l2Runs, today),
-            perDay: Math.max(0, Number(config?.l2?.perDay) || 0),
-            blocked,
-            error: state.l2LastError || null,
-          },
-        ],
+        cadence: config.cadence,
         notify: { feishu: Boolean(config?.notify?.feishuWebhook) },
         panelUrl: panelUrl(),
       };
@@ -724,5 +550,5 @@ export function apply(ctx) {
     logger.warn('price-watch 定时器注册失败，只能手动刷新', error);
   }
 
-  logger.info('price-watch 已加载（V2：日历模式 + 定点监控 + 浏览器精确采集）');
+  logger.info('price-watch 已加载（频率模型 v2：行情=L1 / 监控=L2，统一频率档位）');
 }

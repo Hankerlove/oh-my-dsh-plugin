@@ -1,39 +1,23 @@
 /**
- * L1 collection routines and the collector registry.
+ * L1 collection: the public price calendar, and nothing else.
  *
- * The V2 model has two L1 jobs, one per monitor mode:
+ * Frequency model v2 splits collection by mode, not by budget:
  *
- *   calendar  fetch the whole 380-day lowest-price calendar (one request
- *             one-way, two for a round trip) and hand back a snapshot;
- *   watch     read the two rates the monitor is actually about (`departDate`,
- *             plus `returnDate` for a round trip) and hand back price points.
+ *   calendar  (no date yet) → this file. One request for the whole 380-day
+ *             lowest-price calendar, two for a round trip, snapshot only.
+ *   watch     (date fixed)  → `browser.js` only (L2, the logged-in page).
+ *             A watch monitor never calls the L1 endpoint: the calendar price
+ *             is a different kind of number (lowest fare of the day, not the
+ *             passenger's payable price), so mixing it into the series would
+ *             draw a fake trend. That is why `collectMonitor` — the old L1
+ *             reference collector — is gone rather than merely unused.
  *
- * Every `fetchCalendar` call passes the scheduler's `beforeL1` guard first: it
- * enforces the global minimum request gap and the daily budget. When the guard
- * refuses, `L1BudgetError` is thrown so the scheduler can skip quietly instead
- * of counting it as a failure.
+ * `pace` is a politeness callback supplied by the scheduler: it awaits the
+ * minimum gap between two Ctrip requests. It is not a budget: it never refuses
+ * a request, because v2 has no quotas and no quiet window.
  */
 import { addDays, isoDate, isoNow } from '../util.js';
 import { fetchCalendar } from './calendar.js';
-
-/** Registered collectors; `l2` lives in `browser.js`. */
-export const COLLECTORS = ['l1', 'l2'];
-
-/** Raised when the daily L1 budget (or its global pause) refuses a request. */
-export class L1BudgetError extends Error {
-  constructor(message = '今日 L1 请求预算已用完') {
-    super(message);
-    this.name = 'L1BudgetError';
-    this.code = 'L1_BUDGET';
-  }
-}
-
-/** Run the scheduler guard; `false` means "do not call the endpoint". */
-async function guard(beforeL1) {
-  if (typeof beforeL1 !== 'function') return;
-  const allowed = await beforeL1();
-  if (allowed === false) throw new L1BudgetError();
-}
 
 /** The calendar always starts tomorrow: today's prices are already stale. */
 export function calendarStartDate(now = new Date()) {
@@ -53,72 +37,33 @@ function toRows(calendar) {
   return rows;
 }
 
+/** Let the caller space two requests; a no-op when no pacer was supplied. */
+async function paceWith(pace) {
+  if (typeof pace === 'function') await pace();
+}
+
 /**
  * Fetch the whole calendar for a calendar-mode monitor.
  *
+ * @param {object} monitor
+ * @param {{ signal?: AbortSignal, pace?: () => Promise<void> }} [options]
  * @returns {Promise<{fetchedAt:string, out:Array<{date:string,total:number,bare:number}>, back:Array|null}>}
  */
-export async function collectCalendar(monitor, { signal, beforeL1 } = {}) {
+export async function collectCalendar(monitor, { signal, pace } = {}) {
   const params = monitor?.params || {};
   const startDate = calendarStartDate();
 
-  await guard(beforeL1);
+  await paceWith(pace);
   const forward = await fetchCalendar({ dep: params.dep, arr: params.arr, startDate, signal });
 
   let back = null;
   if (params.trip === 'round') {
-    await guard(beforeL1);
+    await paceWith(pace);
     const backward = await fetchCalendar({ dep: params.arr, arr: params.dep, startDate, signal });
     back = toRows(backward);
   }
 
   return { fetchedAt: isoNow(), out: toRows(forward), back };
-}
-
-/**
- * Collect the L1 reference price of a watch monitor.
- *
- * - one-way: the calendar row for `params.departDate`
- * - round trip: forward + backward single fares summed, flagged as an estimate
- *   (the real through-fare needs the browser collector, see contract §7.2)
- *
- * @returns {Promise<Array<{at:string,src:string,key:{departDate:string,returnDate?:string},price:{bare:number,total:number}}>>}
- */
-export async function collectMonitor(monitor, { signal, beforeL1 } = {}) {
-  const params = monitor?.params || {};
-  const at = isoNow();
-
-  if (params.trip === 'round') {
-    await guard(beforeL1);
-    const forward = await fetchCalendar({ dep: params.dep, arr: params.arr, startDate: params.departDate, signal });
-    await guard(beforeL1);
-    const backward = await fetchCalendar({ dep: params.arr, arr: params.dep, startDate: params.returnDate, signal });
-    const out = forward.get(params.departDate);
-    const back = backward.get(params.returnDate);
-    if (!out) throw new Error(`去程 ${params.departDate} 暂无价格`);
-    if (!back) throw new Error(`返程 ${params.returnDate} 暂无价格`);
-    return [
-      {
-        at,
-        src: 'l1-est',
-        key: { departDate: params.departDate, returnDate: params.returnDate },
-        price: { bare: out.bare + back.bare, total: out.total + back.total },
-      },
-    ];
-  }
-
-  await guard(beforeL1);
-  const calendar = await fetchCalendar({ dep: params.dep, arr: params.arr, startDate: params.departDate, signal });
-  const point = calendar.get(params.departDate);
-  if (!point) throw new Error(`出发日 ${params.departDate} 暂无价格`);
-  return [
-    {
-      at,
-      src: 'l1',
-      key: { departDate: params.departDate },
-      price: { bare: point.bare, total: point.total },
-    },
-  ];
 }
 
 /**

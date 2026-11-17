@@ -35,13 +35,6 @@ export function addDays(dateString, days) {
   return base.toISOString().slice(0, 10);
 }
 
-/** Whole days between two YYYY-MM-DD strings (b - a). */
-export function daysBetween(a, b) {
-  const pa = Date.parse(`${a}T00:00:00Z`);
-  const pb = Date.parse(`${b}T00:00:00Z`);
-  return Math.round((pb - pa) / 86400000);
-}
-
 /** A valid YYYY-MM-DD string? */
 export function isDateString(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`));
@@ -88,22 +81,12 @@ export function monitorMode(params) {
   return isDateString(params?.departDate) ? 'watch' : 'calendar';
 }
 
-/** Local 01:00–06:00 quiet window. */
-export function isNightQuiet(now = new Date()) {
-  const hour = now.getHours();
-  return hour >= 1 && hour < 6;
-}
-
 /**
- * The moment a calendar monitor may run again after the quiet window: 06:00
- * local time plus a small stagger so several monitors do not fire together.
+ * There is deliberately no night-quiet helper here any more: frequency model v2
+ * has no collection window, so both modes run 24 hours a day at the cadence the
+ * user picked (spec §3). Do not reintroduce one as a "polite" default — it would
+ * silently stretch a 30-minute cadence to a 7-hour gap overnight.
  */
-export function quietWakeIso(now = new Date()) {
-  const wake = new Date(now.getTime());
-  wake.setHours(6, Math.floor(Math.random() * 10), 0, 0);
-  if (wake.getTime() <= now.getTime()) wake.setDate(wake.getDate() + 1);
-  return wake.toISOString();
-}
 
 /** `12月03日` — the compact date the title uses. */
 function monthDay(dateString) {

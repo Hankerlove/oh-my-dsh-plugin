@@ -4,10 +4,10 @@
  * Everything lives under `$DSH_HOME/price-watch/`, never in the project
  * directory:
  *
- *   config.json      passengers, cadence, daily budgets, notification settings
+ *   config.json      passengers, the two global cadences, notification settings
  *   monitors.json    the watched routes, each either `calendar` or `watch`
- *   state.json       scheduler cursors, budgets, L2 backoff, day-fire marks
- *   prices/*.jsonl   one append-only series per watch monitor
+ *   state.json       scheduler cursors, last-run marks, alert bookkeeping
+ *   prices/*.jsonl   one append-only series per watch monitor (L2 points only)
  *   calendar/*.json  latest full calendar snapshot per calendar monitor
  *   flights/*.json   latest browser flight list per watch monitor
  *   alerts.jsonl     recent deliveries
@@ -17,12 +17,29 @@
  * `<name>.bak` and replaced by defaults: a corrupted file must degrade the
  * panel, never block the plugin.
  *
- * The two on-disk schemas from M1/M2 are migrated in `init()` and written back
- * once (idempotent): `cadence.l1Minutes` is folded into `cadence.watchMinutes`,
- * the missing `l1` / `l2.minIntervalMinutes` fields are filled in, the dead
- * `notify.quietHours` is dropped (nothing ever read it; the quiet window is
- * hard-coded in the scheduler), and the old `state.l2BlockedUntil` is inherited
- * as `state.l2Backoff` so a running cooldown is not lost on upgrade.
+ * Frequency model v2 (the only scheduling input, see spec §1/§2):
+ *
+ *   config.cadence   { calendarMinutes, watchMinutes }   global defaults, 6h each
+ *   monitor.cadence  { minutes }                         per-monitor override
+ *
+ * Both are clamped up to CADENCE_MINUTES. There is no L1 budget, no L2 daily
+ * count, no minimum L2 interval, no quiet window and no backoff anywhere in this
+ * file — those concepts are gone, not merely defaulted off.
+ *
+ * Migration is idempotent: `init()` reads, folds every historical shape into the
+ * current one and writes back only when the serialised document really changed,
+ * so a second `init()` on migrated files performs no write at all.
+ *
+ *   config   `cadence.calendarHours` → `calendarMinutes` (×60); the legacy
+ *            `cadence.watchMinutes` / `cadence.l1Minutes` → `watchMinutes`
+ *            (clamped); the dead `l1` / `l2` / `notify.quietHours` blocks are
+ *            dropped because nothing reads them any more.
+ *   monitor  `cadence.hours` → `minutes` (×60); `cadence.minutes` kept; all
+ *            clamped to the shared tier list.
+ *   state    `l1Runs` / `l2Runs` / `l2Backoff` / `l2DisabledForDay` /
+ *            `l1BlockedUntil` / `l1FailCount` / `l2BlockedUntil` are dropped
+ *            (they describe a model that no longer exists); every field the
+ *            scheduler and the rules still need is kept as-is.
  */
 import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -47,44 +64,46 @@ const MAX_ALERTS = 5000;
 export const MAX_MONITORS = 20;
 export const MAX_PASSENGERS = 12;
 
-/** Cadence buckets offered by the V2 model. 15 minutes no longer exists. */
-const CALENDAR_HOURS = [3, 6, 12, 24];
-const WATCH_MINUTES = [30, 60, 120, 240];
+/**
+ * The one and only cadence ladder, in minutes, shared by both modes:
+ * 30 分钟 / 1 小时 / 3 小时 / 6 小时 / 12 小时 / 24 小时.
+ * A value between two tiers is clamped *up* (120 → 180, 240 → 360) so a user
+ * request is never silently made more frequent than asked for.
+ */
+export const CADENCE_MINUTES = [30, 60, 180, 360, 720, 1440];
+
+/** Global defaults picked by the user: calendar 6h, watch 6h. */
+const DEFAULT_CADENCE = { calendarMinutes: 360, watchMinutes: 360 };
+
 /** Default rules for a dated monitor; a calendar monitor always has none. */
 const DEFAULT_WATCH_RULES = () => [{ kind: 'new_low' }, { kind: 'new_high' }];
 
 // #region normalisation helpers
 const DEFAULT_CONFIG = () => ({
   passengers: [],
-  cadence: { calendarHours: 6, watchMinutes: 60 },
-  l1: { perDay: 200 },
-  // L2 (browser) collection: off until the user logs in and opts in.
-  l2: { enabled: false, perDay: 3, minIntervalMinutes: 720 },
+  cadence: { ...DEFAULT_CADENCE },
   notify: {
     feishuWebhook: '',
+    // Still patchable through the API, but no longer surfaced in the UI.
     cooldownMinutes: 360,
     digestAt: '09:00',
   },
   panelBaseUrl: '',
 });
 
+/**
+ * State that survives v2. Written in a fixed key order so that the document
+ * round-trips byte-identically through `normaliseState()`.
+ */
 const DEFAULT_STATE = () => ({
   lastCollectAt: null,
   lastCollectBy: {},
   auth: { status: 'unknown', lastVerifiedAt: null, accountHint: '' },
-  // V2 scheduler cursors and budgets.
   nextDue: {},
-  l1Runs: { date: '', count: 0 },
-  l1BlockedUntil: null,
-  l1FailCount: 0,
-  l2Runs: { date: '', count: 0 },
-  l2Backoff: { level: 0, until: null, trippedDate: null },
-  l2DisabledForDay: null,
+  calendarFetchedAt: {},
   l2LastRunBy: {},
   l2LastOk: {},
-  calendarFetchedAt: {},
   l2LastError: null,
-  // M1/M2 fields kept as-is.
   cooldowns: {},
   dayFired: {},
   sides: {},
@@ -93,83 +112,94 @@ const DEFAULT_STATE = () => ({
   failures: {},
 });
 
-/** Round a number up to the nearest allowed bucket (15 → 30, 90 → 120, …). */
-function clampUp(value, choices, fallback) {
+/** A finite number or `null`; `null` lets the caller fall back to a default. */
+function finiteOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return choices.find((choice) => choice >= n) ?? choices[choices.length - 1];
+  return Number.isFinite(n) ? n : null;
 }
 
-/** A non-negative integer, or the fallback. */
-function positiveInt(value, fallback) {
-  const n = Math.floor(Number(value));
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
+/**
+ * Clamp a cadence in minutes up to the nearest ladder tier:
+ * 30 → 30, 60 → 60, 120 → 180, 240 → 360, 0 → 30, 999999 → 1440.
+ *
+ * Why "up" and not "nearest": the cadence is a politeness constraint on
+ * Ctrip's endpoints, so rounding down would collect more often than the user
+ * asked for. Values that cannot be parsed at all (undefined / null / '') mean
+ * "not supplied" and fall back to the mode's global default — which is also
+ * what an old monitor without a cadence needs.
+ */
+export function clampCadence(value, fallback = DEFAULT_CADENCE.calendarMinutes) {
+  const n = finiteOrNull(value);
+  if (n === null) return clampCadence(fallback);
+  return CADENCE_MINUTES.find((choice) => choice >= n) ?? CADENCE_MINUTES[CADENCE_MINUTES.length - 1];
 }
 
 /**
  * Fold every accepted config shape into the current schema.
- * `cadence.l1Minutes` is V2's removed field: its value is carried over to
- * `watchMinutes` (rounded up) and then dropped. `notify.quietHours` is dead
- * weight (the settings page never exposed it, no collector read it), so it is
- * stripped here and the cleaned document is written back by `init()`.
+ *
+ * Only the fields in spec §2 survive. Historic keys are read once and then
+ * dropped: a migrated config must not keep carrying the l1/l2 budget blocks,
+ * because leaving them around invites a future reader to honour them again.
  */
 function normaliseConfig(raw) {
-  const base = DEFAULT_CONFIG();
   const input = raw && typeof raw === 'object' ? raw : {};
+  const base = DEFAULT_CONFIG();
   const inputCadence = input.cadence && typeof input.cadence === 'object' ? input.cadence : {};
-  const legacyMinutes = inputCadence.watchMinutes === undefined ? inputCadence.l1Minutes : inputCadence.watchMinutes;
+
+  // Migration: pre-v2 stored the calendar cadence in hours, and the watch
+  // cadence either as `watchMinutes` or (M2) as `l1Minutes`. New fields win.
+  const legacyCalendarHours = finiteOrNull(inputCadence.calendarHours);
+  const calendarRaw = inputCadence.calendarMinutes !== undefined
+    ? inputCadence.calendarMinutes
+    : legacyCalendarHours !== null
+      ? legacyCalendarHours * 60
+      : undefined;
+  const watchRaw = inputCadence.watchMinutes !== undefined
+    ? inputCadence.watchMinutes
+    : inputCadence.l1Minutes;
   const cadence = {
-    calendarHours: CALENDAR_HOURS.includes(Number(inputCadence.calendarHours))
-      ? Number(inputCadence.calendarHours)
-      : base.cadence.calendarHours,
-    watchMinutes: clampUp(legacyMinutes, WATCH_MINUTES, base.cadence.watchMinutes),
+    calendarMinutes: clampCadence(calendarRaw, base.cadence.calendarMinutes),
+    watchMinutes: clampCadence(watchRaw, base.cadence.watchMinutes),
   };
 
-  const inputL1 = input.l1 && typeof input.l1 === 'object' ? input.l1 : {};
-  const l1 = { perDay: positiveInt(inputL1.perDay, base.l1.perDay) };
+  const passengers = Array.isArray(input.passengers)
+    ? input.passengers.filter((item) => item && typeof item === 'object' && item.id)
+    : [];
 
-  const inputL2 = input.l2 && typeof input.l2 === 'object' ? input.l2 : {};
-  const l2 = {
-    enabled: inputL2.enabled === undefined ? base.l2.enabled : Boolean(inputL2.enabled),
-    perDay: positiveInt(inputL2.perDay, base.l2.perDay),
-    // The minimum gap between two L2 runs is free-form (720 = twice a day);
-    // only negative/garbage input falls back to the default.
-    minIntervalMinutes: positiveInt(inputL2.minIntervalMinutes, base.l2.minIntervalMinutes),
+  const inputNotify = input.notify && typeof input.notify === 'object' ? input.notify : {};
+  const notify = {
+    feishuWebhook: typeof inputNotify.feishuWebhook === 'string' ? inputNotify.feishuWebhook : base.notify.feishuWebhook,
+    cooldownMinutes: Math.max(0, finiteOrNull(inputNotify.cooldownMinutes) ?? base.notify.cooldownMinutes),
+    digestAt: /^\d{1,2}:\d{2}$/.test(String(inputNotify.digestAt || '')) ? String(inputNotify.digestAt) : base.notify.digestAt,
   };
-
-  const passengers = Array.isArray(input.passengers) ? input.passengers.filter((item) => item && typeof item === 'object' && item.id) : [];
-
-  // Spread first, then delete, so a field this version does not know about is
-  // preserved; only the known-dead key is removed. The key order stays stable,
-  // which keeps the second `init()` byte-identical and therefore write-free.
-  const notify = { ...base.notify, ...(input.notify && typeof input.notify === 'object' ? input.notify : {}) };
-  delete notify.quietHours;
 
   return {
     passengers,
     cadence,
-    l1,
-    l2,
     notify,
     panelBaseUrl: typeof input.panelBaseUrl === 'string' ? input.panelBaseUrl : '',
   };
 }
 
-/** Cadence stored on a monitor only carries the watch interval, in minutes. */
 /**
- * Per-monitor cadence. Calendar monitors carry hours, watch monitors minutes;
- * both fall back to the global default so an old monitor keeps working.
+ * Per-monitor cadence, always `{ minutes }` regardless of mode.
+ *
+ * Migration: a calendar monitor used to carry `{ hours }`, a watch monitor
+ * `{ minutes }` and M2 `{ l1Minutes }`; all three collapse into minutes and
+ * every result is clamped to the shared ladder.
  */
 function normaliseCadence(input, config, mode = 'watch') {
   const raw = input && typeof input === 'object' ? input : {};
-  if (mode === 'calendar') {
-    const value = raw.hours !== undefined ? raw.hours : raw.calendarHours;
-    const fallback = Number(config?.cadence?.calendarHours) || DEFAULT_CONFIG().cadence.calendarHours;
-    return { hours: clampUp(value, CALENDAR_HOURS, fallback) };
-  }
-  const value = raw.minutes !== undefined ? raw.minutes : raw.l1Minutes;
-  const fallback = Number(config?.cadence?.watchMinutes) || DEFAULT_CONFIG().cadence.watchMinutes;
-  return { minutes: clampUp(value, WATCH_MINUTES, fallback) };
+  const key = mode === 'calendar' ? 'calendarMinutes' : 'watchMinutes';
+  const fallback = clampCadence(config?.cadence?.[key], DEFAULT_CADENCE[key]);
+  const legacyHours = finiteOrNull(raw.hours);
+  const value = raw.minutes !== undefined
+    ? raw.minutes
+    : legacyHours !== null
+      ? legacyHours * 60
+      : raw.l1Minutes;
+  return { minutes: clampCadence(value, fallback) };
 }
 
 /**
@@ -212,40 +242,44 @@ function normaliseStoredMonitor(monitor, config) {
   return next;
 }
 
-/** Keep a running L2 backoff and inherit the pre-V2 `l2BlockedUntil`. */
+/**
+ * Keep exactly the state fields frequency model v2 still reads.
+ *
+ * This is a whitelist on purpose: spreading the raw document would preserve
+ * `l1Runs`, `l2Backoff`, `l2DisabledForDay`, … forever, and a dead field that
+ * keeps being written looks authoritative to the next reader. Dropping unknown
+ * keys is safe here because every one of them belonged to the budget/backoff
+ * model that no longer exists.
+ *
+ * Key order is fixed by the object literal below, which is what makes a second
+ * `init()` byte-identical and therefore write-free.
+ */
 function normaliseState(raw) {
   const input = raw && typeof raw === 'object' ? raw : {};
   const base = DEFAULT_STATE();
-  const state = { ...base, ...input };
-  const pick = (value, fallback) => (value && typeof value === 'object' ? value : fallback);
-  state.nextDue = pick(input.nextDue, {});
-  state.l1Runs = pick(input.l1Runs, base.l1Runs);
-  state.l2Runs = pick(input.l2Runs, base.l2Runs);
-  state.l2Backoff = pick(input.l2Backoff, base.l2Backoff);
-  state.l2LastRunBy = pick(input.l2LastRunBy, {});
-  state.l2LastOk = pick(input.l2LastOk, {});
-  state.calendarFetchedAt = pick(input.calendarFetchedAt, {});
-  state.cooldowns = pick(input.cooldowns, {});
-  state.dayFired = pick(input.dayFired, {});
-  state.sides = pick(input.sides, {});
-  state.lastError = pick(input.lastError, {});
-  state.failures = pick(input.failures, {});
-  state.lastCollectBy = pick(input.lastCollectBy, {});
+  const obj = (value, fallback) => (value && typeof value === 'object' && !Array.isArray(value) ? value : fallback);
+  const isoOrNull = (value) => (typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null);
 
-  // The M2 field was a single ISO string; V2 needs the whole backoff record.
-  // Inheriting it is mandatory: dropping it would let the first tick hammer
-  // Ctrip while the previous cooldown is still running.
-  const legacy = typeof input.l2BlockedUntil === 'string' ? Date.parse(input.l2BlockedUntil) : NaN;
-  const currentUntil = typeof state.l2Backoff?.until === 'string' ? Date.parse(state.l2Backoff.until) : NaN;
-  if (Number.isFinite(legacy) && !(Number.isFinite(currentUntil) && currentUntil >= legacy)) {
-    state.l2Backoff = {
-      level: Math.max(1, Math.floor(Number(state.l2Backoff?.level) || 0)),
-      until: new Date(legacy).toISOString(),
-      trippedDate: isDateString(state.l2Backoff?.trippedDate) ? state.l2Backoff.trippedDate : isoDate(new Date(legacy)),
-    };
-  }
-  if ('l2BlockedUntil' in state) delete state.l2BlockedUntil;
-  return state;
+  return {
+    lastCollectAt: isoOrNull(input.lastCollectAt),
+    lastCollectBy: obj(input.lastCollectBy, {}),
+    // Spread rather than whitelist: `auth` is written straight from the browser
+    // collector (status / lastVerifiedAt / accountHint today) and a buttoned-up
+    // schema here would silently eat a future field. Key order stays stable
+    // because the base object always comes first.
+    auth: { ...base.auth, ...obj(input.auth, {}) },
+    nextDue: obj(input.nextDue, {}),
+    calendarFetchedAt: obj(input.calendarFetchedAt, {}),
+    l2LastRunBy: obj(input.l2LastRunBy, {}),
+    l2LastOk: obj(input.l2LastOk, {}),
+    l2LastError: typeof input.l2LastError === 'string' ? input.l2LastError : null,
+    cooldowns: obj(input.cooldowns, {}),
+    dayFired: obj(input.dayFired, {}),
+    sides: obj(input.sides, {}),
+    lastDigest: isoOrNull(input.lastDigest),
+    lastError: obj(input.lastError, {}),
+    failures: obj(input.failures, {}),
+  };
 }
 // #endregion
 
@@ -340,12 +374,12 @@ export function createStore(rootDir) {
     for (const [key, value] of Object.entries(patch || {})) {
       if (value !== undefined) defined[key] = value;
     }
+    // l1 / l2 are deliberately not merged: a stale client sending them must not
+    // resurrect the budget model. normaliseConfig drops the keys entirely.
     const merged = {
       ...cache.config,
       ...defined,
       cadence: { ...cache.config.cadence, ...(defined.cadence || {}) },
-      l1: { ...cache.config.l1, ...(defined.l1 || {}) },
-      l2: { ...cache.config.l2, ...(defined.l2 || {}) },
       notify: { ...cache.config.notify, ...(defined.notify || {}) },
     };
     cache.config = normaliseConfig(merged);
@@ -498,6 +532,7 @@ export function createStore(rootDir) {
       params,
       passengerIds,
       rules,
+      // 不传 cadence 就用该模式的全局默认（spec §1），存成统一的 minutes。
       cadence: normaliseCadence(input.cadence, cache.config, mode),
       createdAt: now,
       updatedAt: now,

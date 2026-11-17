@@ -121,7 +121,21 @@ export function createRouter({ store, logger, actions }) {
     return { lastAt, ok: state.l2LastOk?.[monitor.id] !== false };
   }
 
-  /** One list item, exactly the fields contract §9 promises. */
+  /**
+   * Why this monitor's last collection failed, as one plain string (or null).
+   *
+   * The client reads exactly this field in the list and detail views, so it must
+   * not leak the internal `{ at, message, count }` record: a success stores
+   * `null` for the monitor, and every failure path (L1 calendar, L2 browser,
+   * missing login) goes through the same `state.lastError[id]` slot.
+   */
+  function lastErrorOf(monitor) {
+    const entry = store.getState().lastError?.[monitor.id];
+    const message = typeof entry === 'string' ? entry : entry && typeof entry === 'object' ? entry.message : null;
+    return typeof message === 'string' && message ? message : null;
+  }
+
+  /** One list item, exactly the fields spec §5 promises. */
   async function monitorListItem(monitor) {
     const item = {
       id: monitor.id,
@@ -134,7 +148,12 @@ export function createRouter({ store, logger, actions }) {
       params: monitor.params,
       passengerIds: monitor.passengerIds || [],
       rules: monitor.rules || [],
+      // 频率模型 v2：只有一种节奏写法 `{ minutes }`，两种模式同构；
+      // 预算 / 退避 / 每日次数相关的字段一律不再出现在列表项里。
       cadence: monitor.cadence || {},
+      nextDue: store.getState().nextDue?.[monitor.id] || null,
+      // 客户端只读这一个字段：最近一次采集失败原因，成功后为 null。
+      lastError: lastErrorOf(monitor),
       updatedAt: monitor.updatedAt,
       latest: null,
       spark: [],
@@ -204,8 +223,10 @@ export function createRouter({ store, logger, actions }) {
       if (!monitor) return sendJson(res, 404, { ok: false, error: '监控不存在' });
 
       if (segments[2] === 'refresh' && method === 'POST') {
-        const body = await readBody(req);
-        const result = await actions.refreshMonitor(id, { l2: Boolean(body?.l2) });
+        // 旧客户端仍会带 `{ l2: true }`：读掉请求体但忽略它。现在行情=立即跑
+        // 一次 L1、监控=立即跑一次 L2，没有别的分支。
+        await readBody(req).catch(() => ({}));
+        const result = await actions.refreshMonitor(id);
         return sendJson(res, 200, { ok: true, data: result });
       }
 
@@ -370,24 +391,26 @@ export function createRouter({ store, logger, actions }) {
     if (segments[0] === 'settings') {
       if (method === 'GET') {
         const config = store.getConfig();
+        // 只回传频率模型 v2 还存在的配置；l1 / l2 整块已经删除。
+        // cooldownMinutes 仍然回传（客户端不展示），否则一个只提交
+        // webhook + digestAt 的设置页会把它清掉。
         return sendJson(res, 200, {
           ok: true,
-          data: { cadence: config.cadence, l1: config.l1, l2: config.l2, notify: config.notify, panelBaseUrl: config.panelBaseUrl },
+          data: { cadence: config.cadence, notify: config.notify, panelBaseUrl: config.panelBaseUrl },
         });
       }
       if (method === 'POST') {
         const body = await readBody(req);
         // A partial body must only touch the fields it actually carries.
+        // 老客户端可能仍发 l1 / l2：直接丢弃，不让它们复活被删掉的预算模型。
         const next = await store.saveConfig({
           cadence: body.cadence,
-          l1: body.l1,
-          l2: body.l2,
           notify: body.notify,
           panelBaseUrl: typeof body.panelBaseUrl === 'string' ? body.panelBaseUrl : undefined,
         });
         return sendJson(res, 200, {
           ok: true,
-          data: { cadence: next.cadence, l1: next.l1, l2: next.l2, notify: next.notify, panelBaseUrl: next.panelBaseUrl },
+          data: { cadence: next.cadence, notify: next.notify, panelBaseUrl: next.panelBaseUrl },
         });
       }
       return sendJson(res, 405, { ok: false, error: '方法不支持' });

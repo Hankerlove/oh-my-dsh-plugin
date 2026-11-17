@@ -9,21 +9,22 @@
  *  - `main` renders the whole page: a toolbar, a health strip, and four internal
  *    views (list / detail / settings / new) switched with component state.
  *
- * A monitor is either a `calendar` watch (no date: only the L1 lowest-price
- * calendar, drawn as a bar chart of the next ~380 days) or a `watch` (a fixed
- * date: L1 trend plus L2 `{points, flights, tax}` from the logged-in browser).
- * The panel branches on `monitor.mode` and never mixes the two price scales.
+ * A monitor is either a `calendar` watch (no date: the L1 lowest-price calendar,
+ * drawn as a bar chart of the next ~380 days) or a `watch` (a fixed date: only
+ * L2 `{points, flights, tax}` from the logged-in browser). Both modes share one
+ * rhythm ladder (`CADENCE_MINUTES`) and one wording for it; there is no budget,
+ * no quiet window and no L1 fallback for a watch.
  *
  * Data comes from this bundle's Host half over same-origin JSON:
- *   GET   /price-watch/api/status                       health, auth, budgets, L2 state
- *   GET   /price-watch/api/monitors                     mode/latest/spark/calendarSummary
+ *   GET   /price-watch/api/status                       health, auth, L2 availability
+ *   GET   /price-watch/api/monitors                     mode/latest/spark/calendarSummary/nextDue
  *   POST  /price-watch/api/monitors                     flat body; no date ⇒ calendar mode
- *   PATCH /price-watch/api/monitors/:id                 enabled / rules / passengers / params
+ *   PATCH /price-watch/api/monitors/:id                 enabled / rules / passengers / params / cadence
  *   DELETE /price-watch/api/monitors/:id
  *   GET   /price-watch/api/monitors/:id/calendar        the ~380-day snapshot (calendar mode)
  *   GET   /price-watch/api/monitors/:id/flights         last L2 snapshot + tax split
- *   GET   /price-watch/api/monitors/:id/prices?days=90   reference (L1) + per-passenger series (L2)
- *   POST  /price-watch/api/monitors/:id/refresh          body `{ l2: true }` asks for a real check
+ *   GET   /price-watch/api/monitors/:id/prices?days=90   per-passenger L2 series
+ *   POST  /price-watch/api/monitors/:id/refresh          collect once, right now
  *   GET/POST /price-watch/api/passengers, PATCH/DELETE /price-watch/api/passengers/:id
  *   GET/POST /price-watch/api/settings
  * Every response is `{ ok: true, data }` or `{ ok: false, error }`. The request
@@ -51,14 +52,13 @@ window.__ModuleLoader__.load({
 		const PANEL_ID = 'price-watch';
 		/** How often the list and status strip re-read the Host. */
 		const POLL_MS = 30000;
-		/** Calendar (行情) refresh rhythm, in hours. */
-		const CALENDAR_HOURS = [3, 6, 12, 24];
-		/** Watch (监控) refresh rhythm, in minutes. */
-		const WATCH_MINUTES = [30, 60, 120, 240];
-		/** Minimum gap between precise (L2) runs, in minutes: 6h / 12h / 24h. */
-		const L2_MIN_INTERVALS = [360, 720, 1440];
-		/** Precise (L2) runs allowed per day. */
-		const L2_PER_DAY = [1, 2, 3];
+		/**
+		 * The one rhythm ladder both modes share (spec A1 v2 §1): 30m / 1h / 3h /
+		 * 6h / 12h / 24h. Anything else is clamped upward to the next bucket.
+		 */
+		const CADENCE_MINUTES = [30, 60, 180, 360, 720, 1440];
+		/** Host default when a monitor carries no rhythm of its own. */
+		const CADENCE_DEFAULT = 360;
 		/** How much history the watch charts ask for. */
 		const PRICE_DAYS = 90;
 		const SPARK_WIDTH = 120;
@@ -375,15 +375,6 @@ window.__ModuleLoader__.load({
 			return delta > 0 ? { tone: 'up', text: `↑${rounded}%` } : { tone: 'down', text: `↓${rounded}%` };
 		}
 
-		function lowestTotal(series) {
-			let lowest = null;
-			for (const point of Array.isArray(series) ? series : []) {
-				if (!Number.isFinite(point.total)) continue;
-				if (lowest === null || point.total < lowest) lowest = point.total;
-			}
-			return lowest;
-		}
-
 		/** `12-03` for the calendar axis and the pin button. */
 		function monthDay(date) {
 			const parsed = toDate(date);
@@ -391,16 +382,67 @@ window.__ModuleLoader__.load({
 			return `${pad2(parsed.getMonth() + 1)}-${pad2(parsed.getDate())}`;
 		}
 
-		/** Watch monitors store their own rhythm in minutes. */
+		/** A monitor's own rhythm in minutes, or null when it inherits the default. */
 		function monitorCadence(monitor) {
 			const cadence = monitor && monitor.cadence && typeof monitor.cadence === 'object' ? monitor.cadence : {};
-			return numberOrNull(cadence.minutes);
+			return clampCadence(cadence.minutes);
 		}
 
-		/** Calendar monitors store their own rhythm in hours. */
-		function monitorCalendarHours(monitor) {
-			const cadence = monitor && monitor.cadence && typeof monitor.cadence === 'object' ? monitor.cadence : {};
-			return numberOrNull(cadence.hours);
+		/** Clamp any value up to the next legal bucket (120 → 180, 240 → 360). */
+		function clampCadence(value) {
+			const minutes = numberOrNull(value);
+			if (minutes === null || minutes <= 0) return null;
+			for (const bucket of CADENCE_MINUTES) {
+				if (minutes <= bucket) return bucket;
+			}
+			return CADENCE_MINUTES[CADENCE_MINUTES.length - 1];
+		}
+
+		/** Bucket for a page-level default, never null. */
+		function defaultCadence(value) {
+			const clamped = clampCadence(value);
+			return clamped === null ? CADENCE_DEFAULT : clamped;
+		}
+
+		/** `30 分钟` / `1 小时` — a duration, no "every" prefix. */
+		function cadenceDuration(minutes) {
+			const clamped = clampCadence(minutes);
+			if (clamped === null) return '—';
+			return clamped < 60 ? t('cadence.unit.minutes', { n: clamped }) : t('cadence.unit.hours', { n: clamped / 60 });
+		}
+
+		/** `每 6 小时` — the one wording both modes use. */
+		function cadenceEvery(minutes) {
+			const clamped = clampCadence(minutes);
+			if (clamped === null) return '—';
+			return t('cadence.every', { value: cadenceDuration(clamped) });
+		}
+
+		/**
+		 * Last collection failure for one monitor, tolerant of where the Host puts
+		 * it: the monitor row itself, `/status.failures[id]`, or the legacy `l2`
+		 * block on the row. Absent everywhere ⇒ null.
+		 */
+		function monitorFailure(monitor, status) {
+			const asMessage = (value) => {
+				if (typeof value === 'string' && value.trim() !== '') return value.trim();
+				if (value && typeof value === 'object' && typeof value.message === 'string' && value.message.trim() !== '') return value.message.trim();
+				return null;
+			};
+			if (monitor && typeof monitor === 'object') {
+				const direct = asMessage(monitor.lastError) || asMessage(monitor.error);
+				if (direct !== null) return direct;
+				if (monitor.l2 && typeof monitor.l2 === 'object') {
+					const nested = asMessage(monitor.l2.lastError);
+					if (nested !== null) return nested;
+				}
+			}
+			const failures = status && typeof status.failures === 'object' && !Array.isArray(status.failures) ? status.failures : null;
+			if (failures !== null && monitor && typeof monitor.id === 'string') {
+				const hit = asMessage(failures[monitor.id]);
+				if (hit !== null) return hit;
+			}
+			return null;
 		}
 
 		/** Match a typed query against IATA codes and localized city names. */
@@ -432,26 +474,17 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * L2 (precise collection) state, tolerant of both the V2 `status.l2` block and
-		 * the older flags that used to live on `status.auth`.
+		 * L2 (logged-in browser) availability. In the simplified model `status.l2` is
+		 * only `{ available, lastError }` — no daily budget, no minimum interval and
+		 * no backoff window — but old Hosts may still carry the flags on `auth`.
 		 */
 		function l2State(status) {
 			const source = status && typeof status === 'object' ? status : {};
 			const l2 = source.l2 && typeof source.l2 === 'object' ? source.l2 : {};
 			const auth = source.auth && typeof source.auth === 'object' ? source.auth : {};
-			const budgets = source.budgets && typeof source.budgets === 'object' ? source.budgets : {};
-			const budgetL2 = budgets.l2 && typeof budgets.l2 === 'object' ? budgets.l2 : {};
-			const blockedUntil = typeof l2.blockedUntil === 'string' ? l2.blockedUntil : typeof auth.blockedUntil === 'string' ? auth.blockedUntil : null;
 			return {
 				available: typeof l2.available === 'boolean' ? l2.available : auth.available !== false,
-				enabled: l2.enabled === true,
-				blockedUntil,
-				used: numberOrNull(l2.used) === null ? numberOrNull(budgetL2.used) : numberOrNull(l2.used),
-				perDay: numberOrNull(l2.perDay) === null ? numberOrNull(budgetL2.perDay) : numberOrNull(l2.perDay),
-				minIntervalMinutes: numberOrNull(l2.minIntervalMinutes),
-				disabledForDay: l2.disabledForDay === true,
-				level: numberOrNull(l2.level),
-				lastError: typeof l2.lastError === 'string' ? l2.lastError : null,
+				lastError: typeof l2.lastError === 'string' && l2.lastError.trim() !== '' ? l2.lastError.trim() : null,
 			};
 		}
 		// #endregion
@@ -521,9 +554,8 @@ window.__ModuleLoader__.load({
 			'status.auth.valid': '已登录',
 			'status.auth.expired': '登录已过期',
 			'status.auth.validAccount': '已登录 {account}',
-			'status.auth.unavailable': '精确采集不可用',
+			'status.auth.unavailable': '采集不可用',
 			'status.auth.loggingIn': '请在弹出的窗口里登录…',
-			'status.auth.blocked': '风控暂停至 {time}',
 			'login.failed': '登录未完成，请重试',
 			'login.notDetected': '未检测到登录，可重试',
 			'login.logoutFailed': '退出登录失败，请重试',
@@ -561,11 +593,14 @@ window.__ModuleLoader__.load({
 			'type.adult': '成人',
 			'type.student': '学生',
 			'type.child': '儿童',
-			'cadence.hours': '每 {n} 小时',
-			'cadence.minutes': '每 {n} 分钟',
+			'cadence.unit.minutes': '{n} 分钟',
+			'cadence.unit.hours': '{n} 小时',
+			'cadence.every': '每 {value}',
 			'cadence.title': '采集节奏',
-			'cadence.help.calendar': '行情监控按这个间隔刷新未来 380 天的价格日历。',
-			'cadence.help.watch': '监控按这个间隔采集该日期的价格走势。',
+			'cadence.next': '下次采集 {when}',
+			'cadence.nextUnknown': '下次采集时间待定',
+			'cadence.inherit': '跟随全局默认',
+			'cadence.lastError': '上次采集失败：{message}',
 			'cadence.interval': '间隔',
 			'cadence.edit': '调整节奏',
 			'cadence.save': '保存节奏',
@@ -573,14 +608,11 @@ window.__ModuleLoader__.load({
 			'detail.back': '返回',
 			'detail.pause': '暂停',
 			'detail.resume': '启用',
-			'detail.refresh': '立即刷新',
-			'detail.refreshL2': '查一次真实价',
+			'detail.refresh': '立即采集',
 			'detail.delete': '删除',
 			'detail.deleteConfirm': '删除这个监控？历史数据也会一并移除。',
 			'detail.passengersCount': '{n} 位乘客',
 			'detail.passengersNone': '未指定乘客',
-			'detail.cadence': '每 {n} 分钟采集',
-			'detail.cadenceCalendar': '每 {n} 小时刷新行情',
 			'calendar.title': '未来价格日历',
 			'calendar.caption': '未来 380 天每天最低含税价',
 			'calendar.out': '去程',
@@ -600,16 +632,14 @@ window.__ModuleLoader__.load({
 			'calendar.dayHint': '{date} · {price}',
 			'watch.realTitle': '乘客实付价',
 			'watch.realHint': '登录态真实航班 · 含机建燃油',
-			'watch.waitingPrecise': '待精确采集',
+			'watch.waitingPrecise': '等待采集',
 			'watch.fareLabel': '票价 {label}',
 			'watch.taxSource.order': '订单页含税',
 			'watch.taxSource.estimate': '估算含税',
-			'watch.reference': '参考行情',
-			'watch.referenceCaption': '日历估算 · 含税最低价',
 			'watch.seriesTitle': '{name} · {type}',
-			'watch.seriesEmpty': '还没有这个乘客的精确价数据',
+			'watch.seriesEmpty': '还没有这个乘客的实付价数据',
 			'watch.flights': '航班快照',
-			'watch.flightsEmpty': '还没有航班快照，点右上角「查一次真实价」试试',
+			'watch.flightsEmpty': '还没有航班快照，点右上角「立即采集」试试',
 			'watch.flightNo': '航班号',
 			'watch.airline': '航司',
 			'watch.time': '时刻',
@@ -631,12 +661,10 @@ window.__ModuleLoader__.load({
 			'watch.rules.save': '保存规则',
 			'watch.rules.cancel': '取消',
 			'watch.rules.failed': '规则保存失败，请重试',
-			'watch.emptyPrecise': '还没有精确价，登录携程后点「查一次真实价」。',
-			'watch.noPassengers': '这个监控没有指定乘客，精确采集会被跳过。',
+			'watch.emptyPrecise': '还没有实付价，登录携程后点「立即采集」。',
+			'watch.noPassengers': '这个监控没有指定乘客，采集会被跳过。',
 			'chart.title': '价格走势',
-			'chart.ref.min': '历史最低',
 			'chart.ref.target': '目标价',
-			'chart.ref.avg7': '7 日均价',
 			'chart.empty': '还没有数据点',
 			'settings.title': '设置',
 			'settings.back': '返回',
@@ -646,15 +674,9 @@ window.__ModuleLoader__.load({
 			'settings.login': '登录携程',
 			'settings.logout': '退出登录',
 			'settings.logoutConfirm': '退出登录会删除浏览器里的携程登录信息，确认退出？',
-			'settings.l2.auth': '用户登录',
-			'settings.l2.enable': '精确采集',
-			'settings.l2.lastVerified': '上次校验 {time}',
-			'settings.l2.neverVerified': '尚未校验登录态',
-			'settings.l2.perDay': '每日上限',
-			'settings.l2.times': '{n} 次',
-			'settings.l2.minInterval': '最短间隔',
-			'settings.l2.hours': '{n} 小时',
-			'settings.l2.budget': '今日已用 {used}/{perDay} 次',
+			'settings.auth.title': '用户登录',
+			'settings.auth.lastVerified': '上次校验 {time}',
+			'settings.auth.neverVerified': '尚未校验登录态',
 			'settings.feishu.title': '飞书通知',
 			'settings.feishu.label': 'Webhook 地址',
 			'settings.feishu.help': '在飞书群聊里添加自定义机器人，粘贴 webhook 地址。',
@@ -768,9 +790,8 @@ window.__ModuleLoader__.load({
 			'status.auth.valid': 'Signed in',
 			'status.auth.expired': 'Sign-in expired',
 			'status.auth.validAccount': 'Signed in {account}',
-			'status.auth.unavailable': 'Precise collection unavailable',
+			'status.auth.unavailable': 'Collection unavailable',
 			'status.auth.loggingIn': 'Finish signing in in the opened window…',
-			'status.auth.blocked': 'Rate-limited until {time}',
 			'login.failed': 'Sign-in did not complete, try again',
 			'login.notDetected': 'No sign-in detected, try again',
 			'login.logoutFailed': 'Sign-out failed, try again',
@@ -808,11 +829,14 @@ window.__ModuleLoader__.load({
 			'type.adult': 'Adult',
 			'type.student': 'Student',
 			'type.child': 'Child',
-			'cadence.hours': 'Every {n} h',
-			'cadence.minutes': 'Every {n} min',
+			'cadence.unit.minutes': '{n} min',
+			'cadence.unit.hours': '{n} h',
+			'cadence.every': 'Every {value}',
 			'cadence.title': 'Collection rhythm',
-			'cadence.help.calendar': 'How often the calendar monitor refreshes the next 380 days of lowest fares.',
-			'cadence.help.watch': 'How often the watch collects this date\'s price trend.',
+			'cadence.next': 'Next run {when}',
+			'cadence.nextUnknown': 'Next run not scheduled',
+			'cadence.inherit': 'Uses the global default',
+			'cadence.lastError': 'Last collection failed: {message}',
 			'cadence.interval': 'Interval',
 			'cadence.edit': 'Change rhythm',
 			'cadence.save': 'Save rhythm',
@@ -820,14 +844,11 @@ window.__ModuleLoader__.load({
 			'detail.back': 'Back',
 			'detail.pause': 'Pause',
 			'detail.resume': 'Resume',
-			'detail.refresh': 'Refresh now',
-			'detail.refreshL2': 'Fetch real prices',
+			'detail.refresh': 'Collect now',
 			'detail.delete': 'Delete',
 			'detail.deleteConfirm': 'Delete this watch? Its history is removed too.',
 			'detail.passengersCount': '{n} passengers',
 			'detail.passengersNone': 'No passengers',
-			'detail.cadence': 'Collects every {n} min',
-			'detail.cadenceCalendar': 'Calendar refresh every {n} h',
 			'calendar.title': 'Upcoming price calendar',
 			'calendar.caption': 'Lowest tax-included fare for each of the next 380 days',
 			'calendar.out': 'Outbound',
@@ -847,16 +868,14 @@ window.__ModuleLoader__.load({
 			'calendar.dayHint': '{date} · {price}',
 			'watch.realTitle': 'Passenger fares',
 			'watch.realHint': 'Signed-in real flights · taxes included',
-			'watch.waitingPrecise': 'Waiting for precise collection',
+			'watch.waitingPrecise': 'Waiting for a collection',
 			'watch.fareLabel': 'Fare {label}',
 			'watch.taxSource.order': 'Tax included (order page)',
 			'watch.taxSource.estimate': 'Tax estimated',
-			'watch.reference': 'Reference calendar',
-			'watch.referenceCaption': 'Calendar estimate · tax-included low',
 			'watch.seriesTitle': '{name} · {type}',
-			'watch.seriesEmpty': 'No precise fares for this passenger yet',
+			'watch.seriesEmpty': 'No real fares for this passenger yet',
 			'watch.flights': 'Flight snapshot',
-			'watch.flightsEmpty': 'No flight snapshot yet. Try "Fetch real prices" above.',
+			'watch.flightsEmpty': 'No flight snapshot yet. Try "Collect now" above.',
 			'watch.flightNo': 'Flight',
 			'watch.airline': 'Airline',
 			'watch.time': 'Time',
@@ -878,12 +897,10 @@ window.__ModuleLoader__.load({
 			'watch.rules.save': 'Save rules',
 			'watch.rules.cancel': 'Cancel',
 			'watch.rules.failed': 'Failed to save rules, try again',
-			'watch.emptyPrecise': 'No precise fares yet. Sign in to Ctrip and use "Fetch real prices".',
-			'watch.noPassengers': 'This watch has no passengers, so precise collection is skipped.',
+			'watch.emptyPrecise': 'No real fares yet. Sign in to Ctrip and use "Collect now".',
+			'watch.noPassengers': 'This watch has no passengers, so collection is skipped.',
 			'chart.title': 'Price history',
-			'chart.ref.min': 'Historical low',
 			'chart.ref.target': 'Target',
-			'chart.ref.avg7': '7-day avg',
 			'chart.empty': 'No data points yet',
 			'settings.title': 'Settings',
 			'settings.back': 'Back',
@@ -893,15 +910,9 @@ window.__ModuleLoader__.load({
 			'settings.login': 'Sign in to Ctrip',
 			'settings.logout': 'Sign out',
 			'settings.logoutConfirm': 'Signing out deletes the Ctrip session stored in the browser profile. Continue?',
-			'settings.l2.auth': 'Sign-in',
-			'settings.l2.enable': 'Precise collection',
-			'settings.l2.lastVerified': 'Last checked {time}',
-			'settings.l2.neverVerified': 'Sign-in has not been checked yet',
-			'settings.l2.perDay': 'Daily limit',
-			'settings.l2.times': '{n}×',
-			'settings.l2.minInterval': 'Minimum interval',
-			'settings.l2.hours': '{n} hours',
-			'settings.l2.budget': 'Used {used}/{perDay} today',
+			'settings.auth.title': 'Sign-in',
+			'settings.auth.lastVerified': 'Last checked {time}',
+			'settings.auth.neverVerified': 'Sign-in has not been checked yet',
 			'settings.feishu.title': 'Feishu notifications',
 			'settings.feishu.label': 'Webhook URL',
 			'settings.feishu.help': 'Add a custom bot to a Feishu group, then paste its webhook URL here.',
@@ -1020,7 +1031,6 @@ window.__ModuleLoader__.load({
 .pw-head-icons { display: flex; align-items: center; gap: 4px; margin-right: -8px; }
 .pw-head-sub { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin-bottom: 14px; }
 .pw-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
-.pw-status-warn { color: var(--dsw-alias-state-warn-primary); }
 .pw-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--dsw-alias-scrollbar-bg-l2) transparent; }
 .pw-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
 .pw-scroll::-webkit-scrollbar-thumb { background: var(--dsw-alias-scrollbar-bg-l2); border-radius: 999px; }
@@ -1656,17 +1666,16 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		}
 
 		/**
-		 * Chart layout for the detail view: 800 × 220 viewBox, series line, area
-		 * fill, three dashed reference lines and 4–5 y ticks. Pure — the hover
-		 * state only indexes into `points`.
+		 * Chart layout for a per-passenger series: 800 × 220 viewBox, series line,
+		 * area fill and 4–5 y ticks. Pure — the hover state only indexes into
+		 * `points`.
 		 */
-		function buildChart(points, stats, height) {
+		function buildChart(points, height) {
 			const series = normalizePricePoints(points);
 			if (series.length === 0) return null;
 			const chartHeight = Number.isFinite(height) ? height : CHART_HEIGHT;
 			const padLeft = 52;
-			// Room on the right for the reference-line captions, including English ones.
-			const padRight = 96;
+			const padRight = 14;
 			const padTop = 14;
 			const padBottom = 26;
 			const plotLeft = padLeft;
@@ -1680,17 +1689,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				maxTime += 3600000;
 			}
 			const values = series.map((point) => point.total);
-			const source = stats && typeof stats === 'object' ? stats : {};
-			const references = [];
-			const lowest = numberOrNull(source.min) === null ? lowestTotal(series) : numberOrNull(source.min);
-			if (lowest !== null) references.push({ key: 'min', value: lowest, color: 'var(--dsw-alias-state-success-primary)' });
-			const target = numberOrNull(source.target);
-			if (target !== null) references.push({ key: 'target', value: target, color: 'var(--dsw-alias-state-warn-primary)' });
-			const avg7 = numberOrNull(source.avg7);
-			if (avg7 !== null) references.push({ key: 'avg7', value: avg7, color: 'var(--dsw-alias-state-idle-primary)' });
-			const domain = values.concat(references.map((reference) => reference.value));
-			let minValue = Math.min(...domain);
-			let maxValue = Math.max(...domain);
+			let minValue = Math.min(...values);
+			let maxValue = Math.max(...values);
 			if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) return null;
 			const spread = maxValue - minValue;
 			const breathing = spread > 0 ? spread * 0.12 : Math.max(10, Math.abs(maxValue) * 0.05);
@@ -1721,7 +1721,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				coords,
 				line,
 				area,
-				references,
 				ticks,
 				xLabels,
 				plotLeft,
@@ -1735,7 +1734,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 
 		function PriceChart(props) {
 			const chartHeight = props.compact === true ? CHART_COMPACT_HEIGHT : CHART_HEIGHT;
-			const layout = useMemo(() => buildChart(props.points, props.stats, chartHeight), [props.points, props.stats, chartHeight]);
+			const layout = useMemo(() => buildChart(props.points, chartHeight), [props.points, chartHeight]);
 			const wrapRef = useRef(null);
 			const [hoverIndex, setHoverIndex] = useState(null);
 			const gradientId = useMemo(() => `pw-area-${Math.random().toString(36).slice(2, 8)}`, []);
@@ -1804,25 +1803,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				h('path', { key: 'area', d: layout.area, fill: `url(#${gradientId})`, stroke: 'none' }),
 				h('path', { key: 'line', d: layout.line, fill: 'none', stroke: 'var(--dsw-alias-state-business-primary)', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
 			];
-
-			for (const reference of layout.references) {
-				children.push(
-					h(
-						'g',
-						{ key: `ref-${reference.key}` },
-						h('line', {
-							x1: layout.plotLeft,
-							y1: layout.yOf(reference.value),
-							x2: layout.plotRight,
-							y2: layout.yOf(reference.value),
-							stroke: reference.color,
-							strokeWidth: 1,
-							strokeDasharray: '4 4',
-						}),
-						h('text', { x: layout.plotRight + 8, y: layout.yOf(reference.value), dy: '0.32em', fontSize: 11, fill: reference.color }, t(`chart.ref.${reference.key}`))
-					)
-				);
-			}
 
 			if (hover !== null) {
 				children.push(
@@ -2054,17 +2034,11 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		// #endregion
 
 		// #region list view
+		/** Health dot from the L1 probe plus the last successful collect. */
 		function statusHealth(status) {
 			if (!status || typeof status !== 'object') return { tone: 'idle', labelKey: 'status.never' };
 			const l1 = status.l1 && typeof status.l1 === 'object' ? status.l1 : null;
-			if (l1 !== null && typeof l1.ok === 'boolean') {
-				if (l1.ok !== true) return { tone: 'error', labelKey: 'status.warn' };
-				return status.lastCollectAt ? { tone: 'ok', labelKey: 'status.ok' } : { tone: 'idle', labelKey: 'status.never' };
-			}
-			// Older Hosts only sent `collectors`; the L2 row is red when it is merely
-			// disabled or unavailable, so it never decides the health dot.
-			const collectors = Array.isArray(status.collectors) ? status.collectors : [];
-			if (collectors.some((collector) => collector && collector.ok === false && collector.id !== 'l2')) return { tone: 'error', labelKey: 'status.warn' };
+			if (l1 !== null && l1.ok === false) return { tone: 'error', labelKey: 'status.warn' };
 			if (!status.lastCollectAt) return { tone: 'idle', labelKey: 'status.never' };
 			return { tone: 'ok', labelKey: 'status.ok' };
 		}
@@ -2081,15 +2055,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			}
 			if (auth.status === 'expired') return { tone: 'warn', label: t('status.auth.expired'), clickable: true };
 			return { tone: 'idle', label: t('status.auth.unknown'), clickable: true };
-		}
-
-		/** `风控暂停至 13:20` while the L2 backoff is still running, else null. */
-		function blockedNotice(status) {
-			const l2 = l2State(status);
-			const until = typeof l2.blockedUntil === 'string' ? Date.parse(l2.blockedUntil) : NaN;
-			if (!Number.isFinite(until) || until <= Date.now()) return null;
-			const time = formatLastCollect(l2.blockedUntil);
-			return time === null ? null : t('status.auth.blocked', { time });
 		}
 
 		/**
@@ -2127,7 +2092,11 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const delta = calendar ? null : trendPercent(spark);
 			const chip = trendChip(delta);
 			const disabled = monitor.enabled === false;
+			const defaults = props.cadenceDefaults && typeof props.cadenceDefaults === 'object' ? props.cadenceDefaults : null;
+			const ownCadence = monitorCadence(monitor);
+			const cadenceMinutes = ownCadence === null ? (defaults === null ? null : defaults[calendar ? 'calendar' : 'watch']) : ownCadence;
 			const segments = [monitorDates(monitor)];
+			if (cadenceMinutes !== null) segments.push(cadenceEvery(cadenceMinutes));
 			if (calendar) {
 				if (summary !== null && summary.min !== null) segments.push('' + t('card.lowestDay', { date: monthDay(summary.min.date) }) + ' ' + formatMoney(summary.min.total));
 				segments.push(latest === null ? t('card.waiting') : t('card.updated', { when: relativeTime(latest.at) }));
@@ -2218,8 +2187,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		function ListView(props) {
 			const monitors = Array.isArray(props.monitors) ? props.monitors : null;
 			const status = props.status;
+			const cadenceDefaults = props.cadenceDefaults && typeof props.cadenceDefaults === 'object' ? props.cadenceDefaults : null;
 			const health = statusHealth(status);
-			const blocked = blockedNotice(status);
 			// Two levels: `type` first (flight / hotel), then `mode` for flight only.
 			const type = props.filterType === 'hotel' ? 'hotel' : 'flight';
 			const mode = props.filterMode === 'calendar' || props.filterMode === 'watch' ? props.filterMode : 'all';
@@ -2278,6 +2247,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 							h(MonitorCard, {
 								key: monitor.id,
 								monitor,
+								cadenceDefaults,
 								busy: props.busyKey === `toggle:${monitor.id}`,
 								onOpen: props.onOpen,
 								onToggle: props.onToggle,
@@ -2292,7 +2262,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				h('span', { key: 'health' }, t(health.labelKey)),
 				status && status.lastCollectAt ? h('span', { key: 'last' }, t('status.last', { time: formatLastCollect(status.lastCollectAt) })) : null,
 				status ? h(AuthChip, { key: 'auth', status, pending: props.loginPending === true, onLogin: props.onLogin }) : null,
-				blocked === null ? null : h('span', { key: 'blocked', className: 'pw-status-warn' }, blocked),
 			];
 
 			return h(
@@ -2381,35 +2350,34 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		}
 
 		/**
-		 * Shared "collection rhythm" editor for both detail pages. A calendar monitor
-		 * stores `{hours}`, a watch stores `{minutes}`, and the buckets are exactly the
-		 * ones the new-monitor page offers — `PATCH /monitors/:id { cadence }` carries
-		 * nothing else, so editing the rhythm can never touch another field.
+		 * Shared rhythm editor for both detail pages. Both modes use the same bucket
+		 * ladder, and the section also shows when the Host will collect next plus —
+		 * for a watch — why the last collection failed. Saving PATCHes
+		 * `{ cadence: { minutes } }` only, so editing the rhythm touches nothing else.
 		 */
 		function CadenceEditor(props) {
-			const calendar = props.mode === 'calendar';
-			const choices = calendar ? CALENDAR_HOURS : WATCH_MINUTES;
-			const current = numberOrNull(props.value);
-			const fallback = calendar ? 6 : 60;
-			const selected = current !== null && choices.indexOf(current) >= 0 ? current : fallback;
+			const current = clampCadence(props.value);
+			const initial = current === null ? CADENCE_DEFAULT : current;
 			const [editing, setEditing] = useState(false);
-			const [draft, setDraft] = useState(selected);
+			const [draft, setDraft] = useState(initial);
 			const [saving, setSaving] = useState(false);
 			const [error, setError] = useState(null);
 			const busy = props.busy === true;
+			const nextRun = typeof props.nextDue === 'string' ? formatLastCollect(props.nextDue) : null;
+			const failure = typeof props.failure === 'string' && props.failure.trim() !== '' ? props.failure.trim() : null;
 
 			const beginEdit = () => {
-				setDraft(selected);
+				setDraft(initial);
 				setError(null);
 				setEditing(true);
 			};
 
 			const save = async () => {
-				const value = Number(draft);
+				const minutes = clampCadence(Number(draft));
 				setSaving(true);
 				setError(null);
 				try {
-					await props.onSave(calendar ? { hours: value } : { minutes: value });
+					await props.onSave({ minutes: minutes === null ? CADENCE_DEFAULT : minutes });
 					setEditing(false);
 				} catch (reason) {
 					setError(reason && reason.message ? reason.message : t('cadence.failed'));
@@ -2418,10 +2386,17 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				}
 			};
 
-			const summary = current === null ? null : t(calendar ? 'cadence.hours' : 'cadence.minutes', { n: current });
 			return h(
 				Section,
-				{ title: t('cadence.title'), help: calendar ? t('cadence.help.calendar') : t('cadence.help.watch') },
+				{ title: t('cadence.title') },
+				h(
+					'div',
+					{ className: 'pw-row', style: { gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+					current === null ? h('span', { className: 'pw-hint' }, t('cadence.inherit')) : h(Chip, { tone: 'flat' }, cadenceEvery(current)),
+					h('span', { className: 'pw-hint' }, nextRun === null ? t('cadence.nextUnknown') : t('cadence.next', { when: nextRun })),
+					h(Button, { size: 'sm', onClick: beginEdit, disabled: busy }, t('cadence.edit'))
+				),
+				failure === null ? null : h('span', { className: 'pw-hint', style: { color: 'var(--dsw-alias-state-error-primary)' }, role: 'status' }, t('cadence.lastError', { message: failure })),
 				editing
 					? h(
 							'div',
@@ -2432,7 +2407,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								h(
 									'select',
 									{ className: 'pw-input', value: String(draft), onChange: (event) => setDraft(Number(event.target.value)) },
-									choices.map((value) => h('option', { key: value, value: String(value) }, t(calendar ? 'cadence.hours' : 'cadence.minutes', { n: value })))
+									CADENCE_MINUTES.map((value) => h('option', { key: value, value: String(value) }, cadenceDuration(value)))
 								)
 							),
 							error === null ? null : h('div', { className: 'pw-hint', style: { color: 'var(--dsw-alias-state-error-primary)' }, role: 'alert' }, error),
@@ -2443,12 +2418,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								h(Button, { size: 'sm', variant: 'primary', onClick: () => void save(), disabled: saving }, saving ? t('common.saving') : t('cadence.save'))
 							)
 						)
-					: h(
-							'div',
-							{ className: 'pw-row', style: { gap: 8, alignItems: 'center' } },
-							summary === null ? h('span', { className: 'pw-hint' }, '—') : h(Chip, { tone: 'flat' }, summary),
-							h(Button, { size: 'sm', onClick: beginEdit, disabled: busy }, t('cadence.edit'))
-						)
+					: null
 			);
 		}
 
@@ -2483,18 +2453,10 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const enabled = monitor.enabled !== false;
 			const fetchedAt = calendar && typeof calendar.fetchedAt === 'string' ? calendar.fetchedAt : null;
 			const passengerCount = sourcePassengerIds.length;
-			// Edit the monitor's own rhythm, falling back to the global default so an
-			// old record without `cadence` still shows something truthful.
-			const ownCadenceHours = monitorCalendarHours(monitor);
-			const cadenceHours = ownCadenceHours === null ? props.calendarHours : ownCadenceHours;
 
 			const meta = [monitorDates(monitor)];
 			meta.push(h('span', { key: 'sep-0', className: 'pw-strip-sep' }, '·'));
 			meta.push(h('span', { key: 'passengers' }, passengerCount === 0 ? t('detail.passengersNone') : t('detail.passengersCount', { n: passengerCount })));
-			if (typeof cadenceHours === 'number' && Number.isFinite(cadenceHours)) {
-				meta.push(h('span', { key: 'sep-1', className: 'pw-strip-sep' }, '·'));
-				meta.push(h('span', { key: 'cadence' }, t('detail.cadenceCalendar', { n: cadenceHours })));
-			}
 			if (!enabled) meta.push(h(Chip, { key: 'paused', tone: 'flat' }, t('card.paused')));
 
 			let pinLabel = t('calendar.pinNeedReturn');
@@ -2543,7 +2505,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 							backStatsItems.length === 0 ? null : h(Stats, { items: backStatsItems })
 						)
 					: null,
-				h(CadenceEditor, { key: 'cadence', mode: 'calendar', value: ownCadenceHours, busy: props.busy, onSave: (cadence) => props.onSaveCadence(monitor.id, cadence) }),
+				h(CadenceEditor, { key: 'cadence', value: monitorCadence(monitor), nextDue: monitor.nextDue, busy: props.busy, onSave: (cadence) => props.onSaveCadence(monitor.id, cadence) }),
 				selectedOut === null
 					? null
 					: h(
@@ -2593,7 +2555,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			);
 		}
 
-		/** One row per passenger: latest precise fare, change and the fare product label. */
+		/** One row per passenger: latest real fare, change and the fare product label. */
 		function PassengerPriceCard(props) {
 			const passenger = props.passenger;
 			const points = useMemo(() => (props.series ? normalizePricePoints(props.series.points) : []), [props.series]);
@@ -2674,13 +2636,12 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const passengers = Array.isArray(props.passengers) ? props.passengers : [];
 			const prices = props.prices;
 			const flightsData = props.flights;
-			const reference = useMemo(() => normalizePricePoints(prices && prices.reference), [prices]);
+			// `prices.reference` is a historical L1 leftover: watch mode is L2 only,
+			// so the page renders `series` and nothing else.
 			const seriesList = Array.isArray(prices && prices.series) ? prices.series : [];
 			const flights = Array.isArray(flightsData && flightsData.flights) ? flightsData.flights : [];
 			const tax = flightsData && flightsData.tax && typeof flightsData.tax === 'object' ? flightsData.tax : null;
 			const flightsFetchedAt = flightsData && typeof flightsData.fetchedAt === 'string' ? flightsData.fetchedAt : null;
-			const stats = prices && prices.stats && typeof prices.stats === 'object' ? prices.stats : null;
-			const referenceStats = stats === null ? null : { min: numberOrNull(stats.min), max: numberOrNull(stats.max), avg7: numberOrNull(stats.avg7), target: numberOrNull(stats.target) };
 			const enabled = monitor.enabled !== false;
 			const rules = monitorRules(monitor);
 			const ruleChips = ruleSummary(rules);
@@ -2689,8 +2650,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [savingRules, setSavingRules] = useState(false);
 			const [ruleError, setRuleError] = useState(null);
 			const busy = props.busy === true;
-			const cadence = monitorCadence(monitor);
 			const passengerIds = Array.isArray(monitor.passengerIds) ? monitor.passengerIds : [];
+			const hasAnyPoint = seriesList.some((entry) => Array.isArray(entry && entry.points) && entry.points.length > 0);
 			const passengerById = (id) => passengers.find((passenger) => passenger.id === id) || null;
 			const fareByPassenger = new Map();
 			for (const flight of flights) {
@@ -2703,10 +2664,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const meta = [monitorDates(monitor)];
 			meta.push(h('span', { key: 'sep-0', className: 'pw-strip-sep' }, '·'));
 			meta.push(h('span', { key: 'passengers' }, passengerIds.length === 0 ? t('detail.passengersNone') : t('detail.passengersCount', { n: passengerIds.length })));
-			if (cadence !== null) {
-				meta.push(h('span', { key: 'sep-1', className: 'pw-strip-sep' }, '·'));
-				meta.push(h('span', { key: 'cadence' }, t('detail.cadence', { n: cadence })));
-			}
 			if (!enabled) meta.push(h(Chip, { key: 'paused', tone: 'flat' }, t('card.paused')));
 
 			const beginEditRules = () => {
@@ -2762,8 +2719,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					title: monitorTitle(monitor),
 					meta,
 					actions: [
-						h(Button, { key: 'l2', size: 'sm', variant: 'primary', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefreshL2(monitor.id), disabled: busy }, t('detail.refreshL2')),
-						h(Button, { key: 'refresh', size: 'sm', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: busy }, t('detail.refresh')),
+						h(Button, { key: 'refresh', size: 'sm', variant: 'primary', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: busy }, t('detail.refresh')),
 						h(
 							Button,
 							{ key: 'pause', size: 'sm', icon: enabled ? h(PauseIcon, { size: 13 }) : h(PlayIcon, { size: 13 }), onClick: () => props.onToggleEnabled(monitor), disabled: busy },
@@ -2791,13 +2747,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 										series,
 										fareLabel: fareByPassenger.get(id) || '',
 									});
-								})
+								}),
+								hasAnyPoint ? null : h('span', { className: 'pw-hint' }, t('watch.emptyPrecise'))
 							)
-				),
-				h(
-					Section,
-					{ key: 'reference', title: t('watch.reference'), help: t('watch.referenceCaption') },
-					prices === null && props.pricesError === null ? h(Skeleton, { height: 150, radius: 12 }) : h(PriceChart, { points: reference, stats: referenceStats, compact: true, emptyText: t('watch.emptyPrecise') })
 				),
 				seriesList.length === 0
 					? null
@@ -2829,7 +2781,14 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								h('span', null, t('watch.taxTotal', { price: formatMoney(tax.total) }))
 							)
 				),
-				h(CadenceEditor, { key: 'cadence', mode: 'watch', value: cadence, busy: props.busy, onSave: (next) => props.onSaveCadence(monitor.id, next) }),
+				h(CadenceEditor, {
+					key: 'cadence',
+					value: monitorCadence(monitor),
+					nextDue: monitor.nextDue,
+					failure: monitorFailure(monitor, props.status),
+					busy: props.busy,
+					onSave: (next) => props.onSaveCadence(monitor.id, next),
+				}),
 				ruleSection
 			);
 		}
@@ -2849,17 +2808,14 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			return source.cadence && typeof source.cadence === 'object' ? source.cadence : {};
 		}
 
-		/** Only the two groups the settings page still owns: sign-in/precise, Feishu. */
+		/**
+		 * The settings page only owns the Feishu block now: the L1/L2 budget and the
+		 * "precise collection" switch are gone from the model itself.
+		 */
 		function settingsDraftFrom(settings) {
 			const source = settings && typeof settings === 'object' ? settings : {};
-			const l2 = source.l2 && typeof source.l2 === 'object' ? source.l2 : {};
 			const notify = source.notify && typeof source.notify === 'object' ? source.notify : {};
-			const perDay = numberOrNull(l2.perDay);
-			const minInterval = numberOrNull(l2.minIntervalMinutes);
 			return {
-				l2Enabled: l2.enabled === true,
-				l2PerDay: perDay === null || L2_PER_DAY.indexOf(Math.round(perDay)) < 0 ? 3 : Math.round(perDay),
-				l2MinInterval: minInterval === null || L2_MIN_INTERVALS.indexOf(Math.round(minInterval)) < 0 ? 720 : Math.round(minInterval),
 				feishuWebhook: typeof notify.feishuWebhook === 'string' ? notify.feishuWebhook : '',
 				digestAt: typeof notify.digestAt === 'string' && /^\d{2}:\d{2}$/.test(notify.digestAt) ? notify.digestAt : '09:00',
 			};
@@ -2885,14 +2841,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const update = (patch) => setDraft((current) => ({ ...current, ...patch }));
 
 			const saveSettings = async () => {
-				// Only the fields this page still edits: a partial POST must not clear the
-				// cooldown, the L1 budget or the global cadence the Host keeps.
+				// Partial POST: only the Feishu fields this page still edits. The Host
+				// keeps the cooldown, the cadence and everything else untouched.
 				const body = {
-					l2: {
-						enabled: draft.l2Enabled === true,
-						perDay: L2_PER_DAY.indexOf(Number(draft.l2PerDay)) >= 0 ? Number(draft.l2PerDay) : 3,
-						minIntervalMinutes: L2_MIN_INTERVALS.indexOf(Number(draft.l2MinInterval)) >= 0 ? Number(draft.l2MinInterval) : 720,
-					},
 					notify: {
 						feishuWebhook: draft.feishuWebhook.trim(),
 						digestAt: /^\d{2}:\d{2}$/.test(draft.digestAt) ? draft.digestAt : '09:00',
@@ -2913,7 +2864,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const statusSnapshot = props.status && typeof props.status === 'object' ? props.status : null;
 			const auth = statusSnapshot && statusSnapshot.auth && typeof statusSnapshot.auth === 'object' ? statusSnapshot.auth : null;
 			const l2Live = l2State(statusSnapshot);
-			const blocked = blockedNotice(statusSnapshot);
 			const signedIn = auth !== null && (auth.status === 'valid' || auth.status === 'expired');
 			const loginPending = props.loginPending === true;
 			const signIn = async () => {
@@ -2941,18 +2891,17 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				settingsError === null ? null : h(ErrorBar, { key: 'save-error', message: settingsError, inline: true }),
 				h(
 					Section,
-					{ key: 'auth', title: t('settings.l2.auth') },
+					{ key: 'auth', title: t('settings.auth.title') },
 					h(
 						'div',
 						{ className: 'pw-row', style: { flexWrap: 'wrap', gap: 8 } },
 						h(AuthChip, { status: statusSnapshot, pending: loginPending, onLogin: signIn }),
-						blocked === null ? null : h(Chip, { tone: 'warn' }, blocked),
 						h(
 							'span',
 							{ className: 'pw-hint' },
 							auth !== null && typeof auth.lastVerifiedAt === 'string' && auth.lastVerifiedAt !== ''
-								? t('settings.l2.lastVerified', { time: relativeTime(auth.lastVerifiedAt) })
-								: t('settings.l2.neverVerified')
+								? t('settings.auth.lastVerified', { time: relativeTime(auth.lastVerifiedAt) })
+								: t('settings.auth.neverVerified')
 						)
 					),
 					h(
@@ -2960,37 +2909,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						{ className: 'pw-row', style: { gap: 8, flexWrap: 'wrap' } },
 						h(Button, { onClick: () => void signIn(), disabled: loginPending || l2Live.available === false }, loginPending ? t('login.pending') : t('settings.login')),
 						h(Button, { variant: 'danger', onClick: () => void signOut(), disabled: loginPending || !signedIn }, t('settings.logout'))
-					),
-					h('div', { className: 'pw-divider' }),
-					h(
-						'div',
-						{ className: 'pw-rule-row' },
-						h('span', null, t('settings.l2.enable')),
-						h(Switch, { checked: draft.l2Enabled === true, label: t('settings.l2.enable'), onChange: (next) => update({ l2Enabled: next }) })
-					),
-					h(
-						'div',
-						{ className: 'pw-form-row' },
-						h(
-							Field,
-							{ label: t('settings.l2.perDay') },
-							h(
-								'select',
-								{ className: 'pw-input', value: String(draft.l2PerDay), onChange: (event) => update({ l2PerDay: Number(event.target.value) }) },
-								L2_PER_DAY.map((count) => h('option', { key: count, value: String(count) }, t('settings.l2.times', { n: count })))
-							)
-						),
-						h(
-							Field,
-							{ label: t('settings.l2.minInterval') },
-							h(
-								'select',
-								{ className: 'pw-input', value: String(draft.l2MinInterval), onChange: (event) => update({ l2MinInterval: Number(event.target.value) }) },
-								L2_MIN_INTERVALS.map((minutes) => h('option', { key: minutes, value: String(minutes) }, t('settings.l2.hours', { n: minutes / 60 })))
-							)
-						)
-					),
-					l2Live.used === null || l2Live.perDay === null ? null : h('span', { className: 'pw-hint' }, t('settings.l2.budget', { used: l2Live.used, perDay: l2Live.perDay }))
+					)
 				),
 				h(
 					Section,
@@ -3192,8 +3111,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [selected, setSelected] = useState([]);
 			const [advancedOpen, setAdvancedOpen] = useState(false);
 			const [cadenceTouched, setCadenceTouched] = useState(false);
-			const [calendarHours, setCalendarHours] = useState(6);
-			const [watchMinutes, setWatchMinutes] = useState(60);
+			// Both modes draw from the same ladder; only the defaults differ.
+			const [calendarMinutes, setCalendarMinutes] = useState(CADENCE_DEFAULT);
+			const [watchMinutes, setWatchMinutes] = useState(CADENCE_DEFAULT);
 			const [managerOpen, setManagerOpen] = useState(false);
 			const [error, setError] = useState(null);
 			const [submitting, setSubmitting] = useState(false);
@@ -3209,13 +3129,12 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				setSelected((current) => (Array.isArray(current) ? current.filter((id) => passengers.some((passenger) => passenger.id === id)) : []));
 			}, [passengers]);
 
-			// The advanced cadence select starts on the global defaults from /settings.
+			// The advanced cadence select starts on the global defaults from /settings
+			// (`cadence.calendarMinutes` for calendar, `cadence.watchMinutes` for watch).
 			useEffect(() => {
 				const cadence = settingsCadence(props.settings);
-				const hours = numberOrNull(cadence.calendarHours);
-				const minutes = numberOrNull(cadence.watchMinutes);
-				setCalendarHours(CALENDAR_HOURS.indexOf(hours) >= 0 ? hours : 6);
-				setWatchMinutes(WATCH_MINUTES.indexOf(minutes) >= 0 ? minutes : 60);
+				setCalendarMinutes(defaultCadence(cadence.calendarMinutes));
+				setWatchMinutes(defaultCadence(cadence.watchMinutes));
 			}, [props.settings]);
 
 			const togglePassenger = (id) => {
@@ -3263,8 +3182,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					if (trip === 'round') body.returnDate = returnDate;
 				}
 				// Optional: only an explicit choice overrides the global default.
+				// Untouched ⇒ no `cadence` at all, so the Host applies its global default.
 				if (cadenceTouched) {
-					body.cadence = mode === 'calendar' ? { hours: Number(calendarHours) } : { minutes: Number(watchMinutes) };
+					body.cadence = { minutes: mode === 'calendar' ? calendarMinutes : watchMinutes };
 				}
 				setSubmitting(true);
 				setError(null);
@@ -3397,17 +3317,16 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 											'select',
 											{
 												className: 'pw-input',
-												value: String(mode === 'calendar' ? calendarHours : watchMinutes),
+												value: String(mode === 'calendar' ? calendarMinutes : watchMinutes),
 												onChange: (event) => {
-													const value = Number(event.target.value);
+													const value = clampCadence(Number(event.target.value));
+													if (value === null) return;
 													setCadenceTouched(true);
-													if (mode === 'calendar') setCalendarHours(value);
+													if (mode === 'calendar') setCalendarMinutes(value);
 													else setWatchMinutes(value);
 												},
 											},
-											mode === 'calendar'
-												? CALENDAR_HOURS.map((hours) => h('option', { key: hours, value: String(hours) }, t('cadence.hours', { n: hours })))
-												: WATCH_MINUTES.map((minutes) => h('option', { key: minutes, value: String(minutes) }, t('cadence.minutes', { n: minutes })))
+											CADENCE_MINUTES.map((value) => h('option', { key: value, value: String(value) }, cadenceDuration(value)))
 										)
 									)
 								)
@@ -3517,7 +3436,12 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const detailId = view.kind === 'detail' ? view.monitorId : null;
 			const detailMonitor = detailId === null || monitors === null ? null : monitors.find((monitor) => monitor.id === detailId) || null;
 			const detailMode = detailMonitor === null ? null : monitorMode(detailMonitor);
-			const calendarHours = numberOrNull(settingsCadence(settings).calendarHours);
+			// Global rhythm defaults, used by the list cards for monitors that inherit.
+			const globalCadence = settingsCadence(settings);
+			const cadenceDefaults = {
+				calendar: defaultCadence(globalCadence.calendarMinutes),
+				watch: defaultCadence(globalCadence.watchMinutes),
+			};
 
 			useEffect(() => {
 				setPrices(null);
@@ -3659,25 +3583,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					const key = `refresh:${id}`;
 					setBusyKey(key);
 					try {
-						await apiFetch(`/monitors/${encodeURIComponent(id)}/refresh`, { method: 'POST', body: { l2: false } });
-						await loadCore();
-						setTick((value) => value + 1);
-					} catch (reason) {
-						fail(reason);
-					} finally {
-						setBusyKey(null);
-					}
-				},
-				[loadCore, fail]
-			);
-
-			/** Manual L2 exception: `POST /refresh` with `{l2:true}`. */
-			const refreshRealPrice = useCallback(
-				async (id) => {
-					const key = `l2:${id}`;
-					setBusyKey(key);
-					try {
-						await apiFetch(`/monitors/${encodeURIComponent(id)}/refresh`, { method: 'POST', body: { l2: true } });
+						// One manual trigger for both modes; the old `{ l2 }` flag is gone.
+						await apiFetch(`/monitors/${encodeURIComponent(id)}/refresh`, { method: 'POST' });
 						await loadCore();
 						setTick((value) => value + 1);
 					} catch (reason) {
@@ -3862,17 +3769,16 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								passengers,
 								calendar,
 								calendarError,
-								calendarHours,
 								prices,
 								pricesError,
 								flights,
 								flightsError,
+								status,
 								banner,
 								busy: busyKey !== null,
 								onBack: goList,
 								onToggleEnabled: toggleEnabled,
 								onRefresh: refreshMonitor,
-								onRefreshL2: refreshRealPrice,
 								onDelete: deleteMonitor,
 								onSaveRules: saveRules,
 								onSaveCadence: saveCadence,
@@ -3910,6 +3816,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				content = h(ListView, {
 					monitors,
 					status,
+					cadenceDefaults,
 					filterType,
 					filterMode,
 					banner,
