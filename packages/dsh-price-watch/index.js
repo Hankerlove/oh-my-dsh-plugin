@@ -12,11 +12,20 @@
  *
  *   calendar  the user has not picked a date. L1 only: the public calendar,
  *             380 days of lowest price, one request (two for a round trip).
- *             Snapshot only — never writes a price series, never alerts.
+ *             Snapshot only — never writes a price series.
  *   watch     the user picked a date. L2 only: the logged-in browser reads the
- *             real fare products and the passenger's payable price. L1 is never
- *             called from this path; when L2 fails the chart keeps a hole rather
- *             than being back-filled with a different kind of price.
+ *             real fare products and every one of the ten cheapest flights gets
+ *             its payable price. L1 is never called from this path; when L2 fails
+ *             the chart keeps a hole rather than being back-filled with a
+ *             different kind of price.
+ *
+ * Delivery model A2 (spec §1): after **every** collection attempt one card is
+ * built — the mode's success card, or a failure card carrying the reason. The
+ * card is fingerprinted (sha1 over the data it shows: calendar rows / flight
+ * rows / the error text); an identical fingerprint to the last delivered card
+ * means "do not push, but do store the data". A push is attempted exactly once
+ * (no retry); the outcome lands in `state.delivery[id]` and `alerts.jsonl`.
+ * Alert rules, cooldowns and the daily digest were deleted with rules.js.
  *
  * Scheduling: a single 60s heartbeat collects every monitor whose `nextDue` has
  * passed. `nextDue = now + base * (0.85 + rand*0.30)`, where `base` is the
@@ -32,16 +41,16 @@
  * degrades instead of throwing, so a broken collector or an unreachable HOME can
  * never stop the Web UI from opening.
  */
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { collectCalendar, probeL1 } from './host/collect/index.js';
 import { AuthError, BlockedError, createBrowserCollector } from './host/collect/browser.js';
-import { buildAlertCard, buildDigestCard, sendFeishu } from './host/notify.js';
-import { evaluate } from './host/rules.js';
+import { buildCalendarCard, buildFailureCard, buildWatchCard, sendFeishu } from './host/notify.js';
 import { createRouter } from './host/routes.js';
 import { clampCadence, createStore } from './host/store.js';
-import { createLogger, isoDate, isoNow, sleep } from './host/util.js';
+import { createLogger, isoNow, minSeries, sleep } from './host/util.js';
 
 export const name = 'price-watch';
 
@@ -58,8 +67,6 @@ const BOOT_DELAY_MS = 8000;
  * This is NOT a budget — it never refuses a request.
  */
 const L1_SPACING_MS = 1500;
-/** Watch monitors raise one anomaly alert after this many failed runs. */
-const PER_MONITOR_ANOMALY_THRESHOLD = 3;
 /** Health probe cache: the panel polls /status every 30s, do not hammer L1. */
 const PROBE_TTL_MS = 30 * 60000;
 
@@ -96,37 +103,124 @@ export function apply(ctx) {
     return '';
   };
 
-  async function deliver(alert) {
-    const config = store.getConfig();
-    const webhook = config?.notify?.feishuWebhook || '';
-    const card = buildAlertCard(alert, { panelUrl: panelUrl() });
-    let delivery = { channel: 'feishu', ok: false, at: isoNow(), error: '未配置 webhook' };
-    if (webhook) {
-      const result = await sendFeishu(webhook, card, { logger });
-      delivery = { channel: 'feishu', ok: result.ok, at: isoNow(), error: result.ok ? undefined : result.error };
-    }
-    try {
-      await store.appendAlert({ ...alert, delivery });
-    } catch (error) {
-      logger.warn('写入提醒记录失败', error);
-    }
-    return delivery;
+  // #region delivery
+  /** sha1 of a stable JSON payload; this is the idempotency key of one card. */
+  function hashOf(value) {
+    return createHash('sha1').update(JSON.stringify(value)).digest('hex');
   }
 
-  function anomalyAlert(monitor, message, ref) {
-    return {
-      id: `a_${Math.random().toString(16).slice(2, 10)}`,
-      monitorId: monitor.id,
-      monitorTitle: monitor.title,
-      rule: 'anomaly',
-      level: 'critical',
-      firedAt: isoNow(),
-      total: 0,
-      ref: ref ?? null,
-      params: monitor.params,
-      error: message,
-    };
+  /**
+   * The idempotency key (spec §1.1). Only the fields the card actually shows are
+   * hashed, so an unrelated change (a new flight outside the TOP10, a different
+   * `fetchedAt`, a re-ordered array the card does not print) must not re-push:
+   *   行情  calendar.out / calendar.back 的 (date,total) 序列；
+   *   监控  flights 的 航班号 + 时刻 + 机场 + 含税价 序列；
+   *   失败  错误文本。
+   */
+  function deliveryKeyFor(report) {
+    if (report.kind === 'failure') return hashOf(['failure', String(report.error || '')]);
+    if (report.kind === 'watch') {
+      const flights = (Array.isArray(report.flights) ? report.flights : []).map((flight) => [
+        flight?.no || '',
+        flight?.depTime || '',
+        flight?.arrTime || '',
+        flight?.depAirport || '',
+        flight?.arrAirport || '',
+        Number.isFinite(flight?.taxIncluded) ? flight.taxIncluded : null,
+      ]);
+      return hashOf(['watch', flights]);
+    }
+    const rows = (list) => (Array.isArray(list) ? list.map((row) => [row?.date || '', Number(row?.total) || 0]) : null);
+    return hashOf(['calendar', rows(report.snapshot?.out), rows(report.snapshot?.back)]);
   }
+
+  /** The card for one collection report. */
+  function buildCardFor(monitor, report) {
+    const url = panelUrl();
+    if (report.kind === 'failure') return buildFailureCard({ monitor, error: report.error, panelUrl: url });
+    if (report.kind === 'watch') {
+      const lowest = report.lowest || null;
+      const lowestFlight = (Array.isArray(report.flights) ? report.flights : [])
+        .find((flight) => flight?.no && flight.no === lowest?.flightNo) || null;
+      return buildWatchCard({
+        monitor,
+        lowest,
+        lowestFlight,
+        previous: report.previous,
+        minSeries: report.minSeries,
+        flights: report.flights,
+        panelUrl: url,
+      });
+    }
+    return buildCalendarCard({
+      monitor,
+      out: report.snapshot?.out || [],
+      back: report.snapshot?.back || null,
+      previous: report.previous,
+      panelUrl: url,
+    });
+  }
+
+  /**
+   * Push at most one card for one collection attempt (spec §1.1).
+   *
+   *  - no webhook configured → not a delivery at all: no state, no log line, so
+   *    a user who does not use Feishu never sees a red "delivery failed";
+   *  - same key as the last delivered card → skip the push (data is already
+   *    stored by the caller), keep the previous delivery record;
+   *  - otherwise push exactly once (`sendFeishu` has no retry loop any more) and
+   *    record `{hash, at, ok, error, kind}` in `state.delivery`, plus one line in
+   *    the delivery log.
+   *
+   * Never throws: a delivery problem must not affect data collection.
+   */
+  async function deliverReport(monitor, report) {
+    try {
+      const webhook = String(store.getConfig()?.notify?.feishuWebhook || '').trim();
+      if (!webhook) return { skipped: 'no-webhook' };
+      const hash = deliveryKeyFor(report);
+      const previous = store.getState().delivery?.[monitor.id];
+      if (previous && previous.hash === hash) return { skipped: 'duplicate' };
+
+      const card = buildCardFor(monitor, report);
+      const result = await sendFeishu(webhook, card, { logger });
+      const at = isoNow();
+      const entry = {
+        hash,
+        at,
+        ok: result.ok === true,
+        error: result.ok === true ? null : String(result.error || '投递失败'),
+        kind: report.kind,
+      };
+      const state = store.getState();
+      await store.saveState({ delivery: { ...(state.delivery || {}), [monitor.id]: entry } });
+      await store.appendDelivery({
+        monitorId: monitor.id,
+        title: monitor.title,
+        kind: entry.kind,
+        at,
+        ok: entry.ok,
+        error: entry.error,
+      });
+      if (!entry.ok) logger.warn(`飞书投递失败（不重试） ${monitor.title}: ${entry.error}`);
+      return { delivered: entry.ok, error: entry.error };
+    } catch (error) {
+      logger.warn(`投递流程异常 ${monitor?.title || monitor?.id}: ${String(error?.message || error)}`);
+      return { error: String(error?.message || error) };
+    }
+  }
+
+  /** Newest delivery attempt across all monitors, for `/status.notify`. */
+  function lastDeliveryOf(state) {
+    let last = null;
+    for (const entry of Object.values(state?.delivery || {})) {
+      if (!entry || typeof entry.at !== 'string') continue;
+      if (!last || Date.parse(entry.at) > Date.parse(last.at)) last = entry;
+    }
+    if (!last) return null;
+    return { at: last.at, ok: last.ok === true, error: last.error || null, kind: last.kind || 'calendar' };
+  }
+  // #endregion
 
   // #region cadence and cursors
   /** The cadence that decides this monitor's rhythm, in minutes (spec §3). */
@@ -178,51 +272,23 @@ export function apply(ctx) {
   }
   // #endregion
 
-  // #region rules
-  /**
-   * Evaluate rules per passenger series. Every point here is an L2 point and
-   * carries its passenger, so each passenger gets its own thresholds. Calendar
-   * monitors never reach this function and old L1 reference points are not fed
-   * in: they are a different kind of number.
-   */
-  async function evaluateAndNotify(monitor, points) {
-    if (monitor.mode !== 'watch') return 0;
-    if (!Array.isArray(points) || points.length === 0) return 0;
-    const config = store.getConfig();
-    let state = store.getState();
-    let alerts = 0;
-    const grouped = new Map();
-    for (const point of points) {
-      const pid = point?.key?.passengerId || '';
-      if (!grouped.has(pid)) grouped.set(pid, []);
-      grouped.get(pid).push(point);
+  // #region failure bookkeeping
+  /** Lowest positive total of a calendar row list (null when the leg has no price). */
+  function lowestOfRows(rows) {
+    if (!Array.isArray(rows)) return null;
+    let best = null;
+    for (const row of rows) {
+      const total = Number(row?.total);
+      if (Number.isFinite(total) && total > 0 && (best === null || total < best)) best = total;
     }
-    for (const [pid] of grouped) {
-      // 只看本次新点的乘客：没有新点的人不该被重新评估。
-      const history = await store.readPoints(monitor.id, { limit: 2000 });
-      const series = history
-        .filter((point) => (point?.key?.passengerId || '') === pid)
-        .map((point) => ({ ...point, price: point.price || {} }));
-      if (series.length === 0) continue;
-      const passenger = pid ? store.findPassenger(pid) : null;
-      const scoped = {
-        ...monitor,
-        title: passenger ? `${monitor.title} · ${passenger.nickname}` : monitor.title,
-      };
-      const outcome = evaluate(scoped, series, { state, config });
-      state = { ...state, ...outcome.state };
-      for (const alert of outcome.alerts) {
-        logger.info(`触发提醒 ${alert.rule} ${scoped.title} ${alert.total}`);
-        await deliver(alert);
-        alerts += 1;
-      }
-    }
-    await store.saveState(state);
-    return alerts;
+    return best;
   }
 
-  /** Record one failed watch-monitor run; calendar stays silent by design. */
-  async function noteWatchFailure(monitor, message) {
+  /**
+   * 记一次失败的采集：累加失败次数 + 最近一次原因。面板的「上次采集失败原因」
+   * 与 `/status.failures` 都读这里；投递失败卡片由 `deliverReport` 单独负责。
+   */
+  async function recordFailure(monitor, message) {
     const state = store.getState();
     const failures = { ...(state.failures || {}) };
     const count = Number(failures[monitor.id] || 0) + 1;
@@ -231,14 +297,15 @@ export function apply(ctx) {
       failures,
       lastError: { ...(state.lastError || {}), [monitor.id]: { at: isoNow(), message, count } },
     });
-    if (count < PER_MONITOR_ANOMALY_THRESHOLD) return;
-    const today = isoDate();
-    const dayFired = { ...(store.getState().dayFired || {}) };
-    const key = `${monitor.id}:anomaly`;
-    if (dayFired[key] === today) return;
-    dayFired[key] = today;
-    await store.saveState({ dayFired });
-    await deliver(anomalyAlert(monitor, message, count));
+  }
+
+  /** 采集成功后清掉该监控的失败计数与原因。 */
+  async function clearFailure(monitor) {
+    const state = store.getState();
+    await store.saveState({
+      failures: { ...(state.failures || {}), [monitor.id]: 0 },
+      lastError: { ...(state.lastError || {}), [monitor.id]: null },
+    });
   }
   // #endregion
 
@@ -253,10 +320,15 @@ export function apply(ctx) {
     l1LastAt = Date.now();
   }
 
-  /** 行情模式（spec §4.1）：只写日历快照，不写价格序列、不告警。 */
+  /**
+   * 行情模式（spec §4.1）：只写日历快照，不写价格序列。成功/失败都会投递一张
+   * 卡片（A2 §1.1：每次采集尝试后一条），失败卡片同样受幂等约束。
+   */
   async function collectCalendarOne(monitor) {
     const startedAt = isoNow();
     try {
+      // 先读旧快照：卡片上的「比上次 ±x%」需要上一轮的最低值。
+      const previousSnapshot = await store.readCalendarSnapshot(monitor.id);
       const snapshot = await collectCalendar(monitor, { pace: paceL1 });
       const state = store.getState();
       await store.writeCalendarSnapshot(monitor.id, snapshot);
@@ -268,20 +340,21 @@ export function apply(ctx) {
         lastError: { ...(state.lastError || {}), [monitor.id]: null },
       });
       await setNextDue(monitor.id, computeNextDue(monitor));
-      return { ok: true, source: 'calendar', points: 0, alerts: 0 };
+      const delivery = await deliverReport(monitor, {
+        kind: 'calendar',
+        snapshot,
+        previous: previousSnapshot
+          ? { out: lowestOfRows(previousSnapshot.out), back: lowestOfRows(previousSnapshot.back) }
+          : null,
+      });
+      return { ok: true, source: 'calendar', points: 0, delivery };
     } catch (error) {
       const message = String(error?.message || error);
-      // 行情模式不发告警（spec §4.1）：失败只是没刷新快照，面板上还有上一次的数据。
       logger.warn(`日历采集失败 ${monitor.title}: ${message}`);
-      const state = store.getState();
-      const failures = { ...(state.failures || {}) };
-      failures[monitor.id] = Number(failures[monitor.id] || 0) + 1;
-      await store.saveState({
-        failures,
-        lastError: { ...(state.lastError || {}), [monitor.id]: { at: isoNow(), message, count: failures[monitor.id] } },
-      });
+      await recordFailure(monitor, message);
       await setNextDue(monitor.id, computeNextDue(monitor));
-      return { ok: false, error: message, source: 'calendar', points: 0, alerts: 0 };
+      const delivery = await deliverReport(monitor, { kind: 'failure', error: message });
+      return { ok: false, error: message, source: 'calendar', points: 0, delivery };
     }
   }
 
@@ -290,27 +363,29 @@ export function apply(ctx) {
    *
    * 前置条件只有两个；任一不满足就只记错误、不写点。风控页 / 登录失效 / 其它
    * 异常同样只记错误、不写点，图表因此留空洞 —— 这是故意的：L1 参考价与乘客
-   * 实付价不是同一种数，混写会画出假曲线。
+   * 实付价不是同一种数，混写会画出假曲线。无论成功还是失败，最后都投递一张卡片。
    */
   async function collectWatchOne(monitor) {
     const startedAt = isoNow();
     const ready = await l2Ready();
     if (!ready.ok) {
-      await noteWatchFailure(monitor, ready.message);
+      await recordFailure(monitor, ready.message);
       await setNextDue(monitor.id, computeNextDue(monitor));
-      return { ok: false, error: ready.message, skipped: ready.reason, source: 'l2', points: 0, alerts: 0 };
+      const delivery = await deliverReport(monitor, { kind: 'failure', error: ready.message });
+      return { ok: false, error: ready.message, skipped: ready.reason, source: 'l2', points: 0, delivery };
     }
 
     try {
+      // 先读旧快照：卡片要「比上次 ±x%」，用它上一次的最低价。
+      const previousSnapshot = await store.readFlightsSnapshot(monitor.id);
+      const previous = Number(previousSnapshot?.lowest?.total);
       const result = await browser.collect(monitor);
       const at = isoNow();
       const points = Array.isArray(result?.points) ? result.points : [];
+      const flights = Array.isArray(result?.flights) ? result.flights : [];
+      const lowest = result?.lowest || null;
       await store.appendPoints(monitor.id, points);
-      await store.writeFlightsSnapshot(monitor.id, {
-        fetchedAt: at,
-        flights: Array.isArray(result?.flights) ? result.flights : [],
-        tax: result?.tax || null,
-      });
+      await store.writeFlightsSnapshot(monitor.id, { fetchedAt: at, flights, tax: result?.tax || null, lowest });
       const state = store.getState();
       await store.saveState({
         l2LastRunBy: { ...(state.l2LastRunBy || {}), [monitor.id]: at },
@@ -322,8 +397,17 @@ export function apply(ctx) {
         lastError: { ...(state.lastError || {}), [monitor.id]: null },
       });
       await setNextDue(monitor.id, computeNextDue(monitor));
-      const alerts = await evaluateAndNotify(monitor, points);
-      return { ok: true, source: 'l2', points: points.length, alerts };
+      // 卡片的「最近 20 次采集走势」取每次采集的最低可订价（同一次采集共享 at）。
+      const history = await store.readPoints(monitor.id, { limit: 600 });
+      const minSeriesTotals = minSeries(history).slice(-20).map((entry) => entry.total);
+      const delivery = await deliverReport(monitor, {
+        kind: 'watch',
+        flights,
+        lowest,
+        previous: Number.isFinite(previous) && previous > 0 ? previous : null,
+        minSeries: minSeriesTotals,
+      });
+      return { ok: true, source: 'l2', points: points.length, delivery };
     } catch (error) {
       const message = String(error?.message || error);
       const state = store.getState();
@@ -337,12 +421,13 @@ export function apply(ctx) {
         patch.auth = { ...(state.auth || {}), status: 'expired', lastVerifiedAt: isoNow() };
       }
       await store.saveState(patch);
-      await noteWatchFailure(monitor, message);
+      await recordFailure(monitor, message);
       const blocked = error instanceof BlockedError || error?.code === 'BLOCKED';
       if (blocked) logger.warn(`携程返回风控页，${monitor.title} 跳过一次采集`);
       // 唯一安全阀：风控页额外推后一个完整周期（跳过一轮）；其它失败按正常节奏。
       await setNextDue(monitor.id, blocked ? blockedNextDue(monitor) : computeNextDue(monitor));
-      return { ok: false, error: message, source: 'l2', points: 0, alerts: 0 };
+      const delivery = await deliverReport(monitor, { kind: 'failure', error: message });
+      return { ok: false, error: message, source: 'l2', points: 0, delivery };
     }
   }
 
@@ -357,48 +442,6 @@ export function apply(ctx) {
     }
   }
   // #endregion
-
-  async function maybeDigest() {
-    try {
-      const config = store.getConfig();
-      const at = String(config?.notify?.digestAt || '09:00');
-      const [hour, minute] = at.split(':').map((part) => Number(part) || 0);
-      const now = new Date();
-      const today = isoDate(now);
-      const state = store.getState();
-      if (state.lastDigest === today) return;
-      const due = new Date(now.getTime());
-      due.setHours(hour, minute, 0, 0);
-      if (now.getTime() < due.getTime()) return;
-
-      const webhook = config?.notify?.feishuWebhook || '';
-      if (webhook) {
-        const rows = [];
-        for (const monitor of store.listMonitors()) {
-          // Calendar monitors have no series: the digest only covers dated trips.
-          if (monitor.mode === 'calendar') continue;
-          const points = await store.readPoints(monitor.id, { limit: 1 });
-          const latest = points[points.length - 1];
-          if (latest) rows.push({ monitor, total: latest.price?.total, at: latest.at });
-        }
-        const card = buildDigestCard(rows, { panelUrl: panelUrl() });
-        const result = await sendFeishu(webhook, card, { logger });
-        await store.appendAlert({
-          id: `a_${Math.random().toString(16).slice(2, 10)}`,
-          monitorId: 'digest',
-          monitorTitle: '价格日报',
-          rule: 'digest',
-          level: 'info',
-          firedAt: isoNow(),
-          total: 0,
-          delivery: { channel: 'feishu', ok: result.ok, at: isoNow(), error: result.error },
-        });
-      }
-      await store.saveState({ lastDigest: today });
-    } catch (error) {
-      logger.warn('每日摘要失败', error);
-    }
-  }
 
   async function tick({ force = false } = {}) {
     if (running || disposed) return { ok: true, skipped: 'busy' };
@@ -418,7 +461,6 @@ export function apply(ctx) {
         // 同一 tick 内多个 monitor 之间也要错开，不要连发。
         await sleep(1500 + Math.floor(Math.random() * 2500));
       }
-      await maybeDigest();
       return { ok: true, collected };
     } catch (error) {
       logger.error('调度心跳失败', error);
@@ -490,7 +532,7 @@ export function apply(ctx) {
       const monitors = store.listMonitors();
       const failures = Object.values(state.failures || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
       return {
-        version: '0.3.0',
+        version: '0.4.0',
         auth: { ...(state.auth || { status: 'unknown' }), available },
         lastCollectAt: state.lastCollectAt,
         monitorCount: monitors.length,
@@ -511,7 +553,8 @@ export function apply(ctx) {
           ...(available ? {} : { loadError: browser.loadError?.() || null }),
         },
         cadence: config.cadence,
-        notify: { feishu: Boolean(config?.notify?.feishuWebhook) },
+        // A2 §1.3: 只剩「是否配置了飞书」+ 最近一次投递结果，日报/冷却/规则都没了。
+        notify: { feishu: Boolean(config?.notify?.feishuWebhook), lastDelivery: lastDeliveryOf(state) },
         panelUrl: panelUrl(),
       };
     },

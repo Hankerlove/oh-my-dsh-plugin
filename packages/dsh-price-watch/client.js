@@ -11,19 +11,21 @@
  *
  * A monitor is either a `calendar` watch (no date: the L1 lowest-price calendar,
  * drawn as a bar chart of the next ~380 days) or a `watch` (a fixed date: only
- * L2 `{points, flights, tax}` from the logged-in browser). Both modes share one
- * rhythm ladder (`CADENCE_MINUTES`) and one wording for it; there is no budget,
- * no quiet window and no L1 fallback for a watch.
+ * L2 `{min, series}` + the `flights` snapshot from the logged-in browser). Both
+ * modes share one rhythm ladder (`CADENCE_MINUTES`) and one wording for it; the
+ * watch page is a conclusion block, one merged price trend and a TOP10 flight
+ * table, with the Feishu delivery status at the bottom. Rules and the daily
+ * digest are gone from the model, so the page neither renders nor edits them.
  *
  * Data comes from this bundle's Host half over same-origin JSON:
  *   GET   /price-watch/api/status                       health, auth, L2 availability
  *   GET   /price-watch/api/monitors                     mode/latest/spark/calendarSummary/nextDue
  *   POST  /price-watch/api/monitors                     flat body; no date ⇒ calendar mode
- *   PATCH /price-watch/api/monitors/:id                 enabled / rules / passengers / params / cadence
+ *   PATCH /price-watch/api/monitors/:id                 enabled / passengers / params / cadence
  *   DELETE /price-watch/api/monitors/:id
  *   GET   /price-watch/api/monitors/:id/calendar        the ~380-day snapshot (calendar mode)
  *   GET   /price-watch/api/monitors/:id/flights         last L2 snapshot + tax split
- *   GET   /price-watch/api/monitors/:id/prices?days=90   per-passenger L2 series
+ *   GET   /price-watch/api/monitors/:id/prices?days=90   `min` trend + per-passenger series
  *   POST  /price-watch/api/monitors/:id/refresh          collect once, right now
  *   GET/POST /price-watch/api/passengers, PATCH/DELETE /price-watch/api/passengers/:id
  *   GET/POST /price-watch/api/settings
@@ -207,23 +209,6 @@ window.__ModuleLoader__.load({
 		// #region monitor helpers
 		function monitorParams(monitor) {
 			return monitor && typeof monitor === 'object' && monitor.params && typeof monitor.params === 'object' ? monitor.params : {};
-		}
-
-		function monitorRules(monitor) {
-			return monitor && Array.isArray(monitor.rules) ? monitor.rules.filter((rule) => rule && typeof rule === 'object') : [];
-		}
-
-		function ruleHas(rules, kind) {
-			return (Array.isArray(rules) ? rules : []).some((rule) => rule && rule.kind === kind);
-		}
-
-		/** Legacy rules may still carry a target price; it is only displayed, never edited. */
-		function ruleTarget(rules) {
-			for (const rule of Array.isArray(rules) ? rules : []) {
-				if (!rule || rule.kind !== 'target') continue;
-				if (typeof rule.value === 'number' && Number.isFinite(rule.value)) return rule.value;
-			}
-			return null;
 		}
 
 		function monitorTrip(monitor) {
@@ -630,41 +615,29 @@ window.__ModuleLoader__.load({
 			'calendar.stat.avg': '平均',
 			'calendar.stat.minDay': '最低日',
 			'calendar.dayHint': '{date} · {price}',
-			'watch.realTitle': '乘客实付价',
-			'watch.realHint': '登录态真实航班 · 含机建燃油',
-			'watch.waitingPrecise': '等待采集',
-			'watch.fareLabel': '票价 {label}',
-			'watch.taxSource.order': '订单页含税',
-			'watch.taxSource.estimate': '估算含税',
-			'watch.seriesTitle': '{name} · {type}',
-			'watch.seriesEmpty': '还没有这个乘客的实付价数据',
-			'watch.flights': '航班快照',
-			'watch.flightsEmpty': '还没有航班快照，点右上角「立即采集」试试',
+			'watch.flights': '航班与待支付价',
+			'watch.flightsEmpty': '还没有航班快照，点「立即采集」试试',
+			'watch.lowestLabel': '当前最低可订价',
+			'watch.vsLast': '比上次 {percent}（上次 {price}）',
+			'watch.trendTitle': '最低可订价走势',
+			'watch.trendEmpty': '还没有采集到实付价，登录携程后点「立即采集」',
+			'watch.taxIncluded': '待支付价',
+			'watch.status': '状态',
+			'watch.noPrice': '未采到价格',
+			'watch.bookable': '可订',
+			'watch.priceMissingHint': '该航班未采到价格',
+			'watch.flightsHelp': '按待支付价升序的前 10 个航班',
+			'delivery.ok': '上次投递：成功 {when}',
+			'delivery.failed': '上次投递失败：{error}',
+			'delivery.none': '还没有投递记录',
+			'delivery.unknownError': '未知错误',
 			'watch.flightNo': '航班号',
 			'watch.airline': '航司',
 			'watch.time': '时刻',
 			'watch.craft': '机型',
 			'watch.airport': '机场',
-			'watch.listPrice': '列表价',
-			'watch.yourPrice': '你的价格',
-			'watch.expanded': '展开行',
 			'watch.fetchedAt': '采集于 {when}',
-			'watch.taxTitle': '税费拆分',
-			'watch.taxAirport': '机建 {price}',
-			'watch.taxFuel': '燃油 {price}',
-			'watch.taxTotal': '合计 {price}',
-			'watch.rules': '提醒规则',
-			'watch.rulesEmpty': '还没有规则',
-			'watch.rules.newLow': '创新低',
-			'watch.rules.newHigh': '创新高',
-			'watch.rules.digest': '每日汇总',
-			'watch.rules.save': '保存规则',
-			'watch.rules.cancel': '取消',
-			'watch.rules.failed': '规则保存失败，请重试',
-			'watch.emptyPrecise': '还没有实付价，登录携程后点「立即采集」。',
-			'watch.noPassengers': '这个监控没有指定乘客，采集会被跳过。',
 			'chart.title': '价格走势',
-			'chart.ref.target': '目标价',
 			'chart.empty': '还没有数据点',
 			'settings.title': '设置',
 			'settings.back': '返回',
@@ -681,8 +654,6 @@ window.__ModuleLoader__.load({
 			'settings.feishu.label': 'Webhook 地址',
 			'settings.feishu.help': '在飞书群聊里添加自定义机器人，粘贴 webhook 地址。',
 			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
-			'settings.feishu.digestAt': '每日汇总时间',
-			'settings.feishu.digestHelp': '每天这个时间把当前所有已打开监控的汇总推送到飞书。',
 			'passengers.title': '乘客',
 			'passengers.manage': '管理乘客',
 			'passengers.new': '新建乘客',
@@ -866,41 +837,29 @@ window.__ModuleLoader__.load({
 			'calendar.stat.avg': 'Average',
 			'calendar.stat.minDay': 'Cheapest day',
 			'calendar.dayHint': '{date} · {price}',
-			'watch.realTitle': 'Passenger fares',
-			'watch.realHint': 'Signed-in real flights · taxes included',
-			'watch.waitingPrecise': 'Waiting for a collection',
-			'watch.fareLabel': 'Fare {label}',
-			'watch.taxSource.order': 'Tax included (order page)',
-			'watch.taxSource.estimate': 'Tax estimated',
-			'watch.seriesTitle': '{name} · {type}',
-			'watch.seriesEmpty': 'No real fares for this passenger yet',
-			'watch.flights': 'Flight snapshot',
-			'watch.flightsEmpty': 'No flight snapshot yet. Try "Collect now" above.',
+			'watch.flights': 'Flights and payable price',
+			'watch.flightsEmpty': 'No flight snapshot yet. Try "Collect now".',
+			'watch.lowestLabel': 'Lowest bookable price',
+			'watch.vsLast': '{percent} vs last time ({price})',
+			'watch.trendTitle': 'Lowest bookable price trend',
+			'watch.trendEmpty': 'No real fares collected yet. Sign in to Ctrip and use "Collect now".',
+			'watch.taxIncluded': 'Payable',
+			'watch.status': 'Status',
+			'watch.noPrice': 'No price',
+			'watch.bookable': 'Bookable',
+			'watch.priceMissingHint': 'No price collected for this flight',
+			'watch.flightsHelp': 'Top 10 flights by payable price',
+			'delivery.ok': 'Last delivery: success {when}',
+			'delivery.failed': 'Last delivery failed: {error}',
+			'delivery.none': 'No deliveries yet',
+			'delivery.unknownError': 'Unknown error',
 			'watch.flightNo': 'Flight',
 			'watch.airline': 'Airline',
 			'watch.time': 'Time',
 			'watch.craft': 'Aircraft',
 			'watch.airport': 'Airports',
-			'watch.listPrice': 'List price',
-			'watch.yourPrice': 'Your price',
-			'watch.expanded': 'Expanded',
 			'watch.fetchedAt': 'Collected {when}',
-			'watch.taxTitle': 'Tax breakdown',
-			'watch.taxAirport': 'Airport fee {price}',
-			'watch.taxFuel': 'Fuel {price}',
-			'watch.taxTotal': 'Total {price}',
-			'watch.rules': 'Alert rules',
-			'watch.rulesEmpty': 'No rules yet',
-			'watch.rules.newLow': 'New low',
-			'watch.rules.newHigh': 'New high',
-			'watch.rules.digest': 'Daily digest',
-			'watch.rules.save': 'Save rules',
-			'watch.rules.cancel': 'Cancel',
-			'watch.rules.failed': 'Failed to save rules, try again',
-			'watch.emptyPrecise': 'No real fares yet. Sign in to Ctrip and use "Collect now".',
-			'watch.noPassengers': 'This watch has no passengers, so collection is skipped.',
 			'chart.title': 'Price history',
-			'chart.ref.target': 'Target',
 			'chart.empty': 'No data points yet',
 			'settings.title': 'Settings',
 			'settings.back': 'Back',
@@ -917,8 +876,6 @@ window.__ModuleLoader__.load({
 			'settings.feishu.label': 'Webhook URL',
 			'settings.feishu.help': 'Add a custom bot to a Feishu group, then paste its webhook URL here.',
 			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
-			'settings.feishu.digestAt': 'Daily digest time',
-			'settings.feishu.digestHelp': 'Every day at this time, a digest of all enabled watches is pushed to Feishu.',
 			'passengers.title': 'Passengers',
 			'passengers.manage': 'Manage passengers',
 			'passengers.new': 'New passenger',
@@ -1050,7 +1007,6 @@ window.__ModuleLoader__.load({
 /* typography */
 .pw-hint { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .pw-label { font-size: 12px; line-height: 18px; font-weight: 500; color: var(--dsw-alias-label-secondary); }
-.pw-field-head { display: flex; align-items: center; gap: 6px; min-height: 18px; }
 .pw-group-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--dsw-alias-label-primary); }
 .pw-linkbtn { padding: 0; border: none; background: none; color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: 12px; line-height: 20px; cursor: pointer; }
 .pw-linkbtn:hover { color: var(--dsw-alias-label-primary); }
@@ -1194,16 +1150,14 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-table-wrap { width: 100%; overflow-x: auto; }
 .pw-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .pw-table th { padding: 8px; text-align: left; font-weight: 500; color: var(--dsw-alias-label-secondary); border-bottom: .5px solid var(--dsw-alias-border-l2); white-space: nowrap; }
-.pw-table td { padding: 8px; border-bottom: .5px solid var(--dsw-alias-border-l2); vertical-align: top; }
-.pw-table tr[data-expanded="true"] td { background: var(--dsw-alias-bg-layer-2); }
+.pw-table td { padding: 8px; border-bottom: .5px solid var(--dsw-alias-border-l2); vertical-align: middle; }
+.pw-table tbody tr:hover td { background: var(--dsw-alias-interactive-bg-hover); }
+.pw-table tbody tr[data-cheapest="true"] td { background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, transparent); }
+.pw-table tbody tr[data-cheapest="true"] td:first-child { box-shadow: inset 2px 0 0 var(--dsw-alias-state-success-primary); }
+.pw-nowrap { white-space: nowrap; }
 .pw-table tr:last-child td { border-bottom: none; }
 .pw-table .pw-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* watch detail bits */
-.pw-pax-card { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2); }
-.pw-pax-name { font-size: 13px; font-weight: 500; }
-.pw-pax-price { margin-left: auto; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.pw-tax-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.pw-rule-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 2px 0; }
 .pw-notice { display: flex; align-items: center; gap: 8px; color: var(--dsw-alias-state-success-primary); font-size: 12px; }
 /* city combobox */
 .pw-combo { position: relative; }
@@ -1219,6 +1173,18 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-empty-icon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: var(--dsw-radius-md, 12px); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-caption); }
 .pw-empty-title { font-size: 14px; font-weight: 500; line-height: 20px; color: var(--dsw-alias-label-primary); }
 .pw-empty-body { max-width: 420px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+/* watch detail: conclusion block + delivery status */
+.pw-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 16px; border-radius: var(--dsw-radius-lg, 16px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
+.pw-summary-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pw-summary-label { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.pw-summary-price { font-size: 28px; font-weight: 600; line-height: 34px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary); }
+.pw-summary-delta { font-size: 12px; line-height: 18px; }
+.pw-summary-delta[data-tone="up"] { color: var(--dsw-alias-state-error-primary); }
+.pw-summary-delta[data-tone="down"] { color: var(--dsw-alias-state-success-primary); }
+.pw-summary-delta[data-tone="flat"] { color: var(--dsw-alias-label-secondary); }
+.pw-summary-route { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+.pw-delivery { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.pw-delivery[data-ok="false"] { color: var(--dsw-alias-state-error-primary); }
 .pw-strip-sep { color: var(--dsw-alias-border-l2); }
 @media (max-width: 780px) { .pw-spark { display: none; } .pw-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pw-head-row { flex-wrap: wrap; } .pw-head-actions { margin-left: 0; } }
 @media (max-width: 520px) { .pw-card { flex-wrap: wrap; } }
@@ -1599,6 +1565,23 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					h('div', { className: 'pw-dialog-body' }, props.children)
 				)
 			);
+		}
+		/**
+		 * Delivery status line, shared by the watch detail footer and the Feishu
+		 * settings group: success shows the time, failure shows the Host's reason in
+		 * the error colour, and "never delivered" is a muted note.
+		 */
+		function DeliveryLine(props) {
+			const delivery = props.delivery && typeof props.delivery === 'object' ? props.delivery : null;
+			if (delivery === null || typeof delivery.at !== 'string' || delivery.at === '') {
+				return h('div', { className: 'pw-delivery' }, h('span', null, t('delivery.none')));
+			}
+			const when = formatLastCollect(delivery.at);
+			if (delivery.ok === false) {
+				const reason = typeof delivery.error === 'string' && delivery.error.trim() !== '' ? delivery.error.trim() : t('delivery.unknownError');
+				return h('div', { className: 'pw-delivery', 'data-ok': 'false', role: 'status' }, h('span', null, t('delivery.failed', { error: reason })), when === null ? null : h('span', { className: 'pw-mono' }, when));
+			}
+			return h('div', { className: 'pw-delivery', 'data-ok': 'true' }, h('span', null, t('delivery.ok', { when: when === null ? '—' : when })));
 		}
 		// #endregion
 
@@ -2327,16 +2310,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		// #endregion
 
 		// #region detail view
-		function ruleSummary(rules) {
-			const chips = [];
-			const target = ruleTarget(rules);
-			if (target !== null) chips.push({ key: 'target', label: `${t('chart.ref.target')} ${formatMoney(target)}` });
-			if (ruleHas(rules, 'new_low')) chips.push({ key: 'new_low', label: t('watch.rules.newLow') });
-			if (ruleHas(rules, 'new_high')) chips.push({ key: 'new_high', label: t('watch.rules.newHigh') });
-			if (ruleHas(rules, 'digest')) chips.push({ key: 'digest', label: t('watch.rules.digest') });
-			return chips;
-		}
-
 		/** Stats row for one calendar chart (out or back). */
 		function calendarStatsItems(days) {
 			const stats = calendarStats(days);
@@ -2555,73 +2528,110 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			);
 		}
 
-		/** One row per passenger: latest real fare, change and the fare product label. */
-		function PassengerPriceCard(props) {
-			const passenger = props.passenger;
-			const points = useMemo(() => (props.series ? normalizePricePoints(props.series.points) : []), [props.series]);
-			const latest = points.length === 0 ? null : points[points.length - 1];
-			const delta = trendPercent(points);
-			const chip = trendChip(delta);
-			const typeLabel = passenger && PASSENGER_TYPES.indexOf(passenger.type) >= 0 ? t(`type.${passenger.type}`) : passenger && passenger.type ? passenger.type : '';
-			const fareLabel = props.fareLabel;
-			return h(
-				'div',
-				{ className: 'pw-pax-card' },
-				h('div', { className: 'pw-col', style: { gap: 2 } }, h('span', { className: 'pw-pax-name' }, passenger ? passenger.nickname : '—'), typeLabel === '' ? null : h('span', { className: 'pw-hint' }, typeLabel)),
-				fareLabel ? h(Chip, { tone: 'flat' }, t('watch.fareLabel', { label: fareLabel })) : null,
-				latest === null
-					? h('span', { className: 'pw-hint', style: { marginLeft: 'auto' } }, t('watch.waitingPrecise'))
-					: h(
-							'div',
-							{ className: 'pw-row', style: { marginLeft: 'auto', gap: 6 } },
-							h('span', { className: 'pw-pax-price' }, formatMoney(latest.total)),
-							h(Chip, { tone: chip.tone }, chip.text)
-						),
-				latest !== null && latest.taxSource !== '' ? h('span', { className: 'pw-hint' }, latest.taxSource === 'order' ? t('watch.taxSource.order') : t('watch.taxSource.estimate')) : null
-			);
+		/** `-2.5%` / `+1.2%`; null when there is nothing to compare. */
+		function formatPercentDelta(delta) {
+			if (delta === null || !Number.isFinite(delta)) return null;
+			const magnitude = Math.abs(delta);
+			const text = `${magnitude < 0.05 ? '0.0' : magnitude.toFixed(1)}%`;
+			if (delta > 0.05) return `+${text}`;
+			if (delta < -0.05) return `-${text}`;
+			return text;
 		}
 
-		/** The signed-in flight list; only the expanded row carries per-passenger prices. */
+		/** `prices.min` = one point per collection: `[{ at, total }]`, oldest first. */
+		function normalizeMinSeries(points) {
+			if (!Array.isArray(points)) return [];
+			const out = [];
+			for (const point of points) {
+				if (!point || typeof point !== 'object') continue;
+				if (typeof point.total !== 'number' || !Number.isFinite(point.total)) continue;
+				const at = parseTime(point.at);
+				if (at === null) continue;
+				out.push({ at, total: point.total });
+			}
+			out.sort((left, right) => left.at - right.at);
+			return out;
+		}
+
+		/** `MF8561 · 08:00 大兴国际机场 → 10:10 浦东国际机场T2`. */
+		function flightRouteLine(flight) {
+			if (flight === null || flight === undefined) return '';
+			const route = `${flight.depTime || '—'} ${flight.depAirport || '—'} → ${flight.arrTime || '—'} ${flight.arrAirport || '—'}`;
+			return typeof flight.no === 'string' && flight.no !== '' ? `${flight.no} · ${route}` : route;
+		}
+
+		/** Cheapest bookable total in the snapshot: `flights.lowest.total`, else the newest trend point. */
+		function lowestBookable(flightsData, minSeries) {
+			const lowest = flightsData && flightsData.lowest && typeof flightsData.lowest === 'object' ? flightsData.lowest : null;
+			if (lowest !== null && typeof lowest.total === 'number' && Number.isFinite(lowest.total)) {
+				return { total: lowest.total, flightNo: typeof lowest.flightNo === 'string' ? lowest.flightNo : null };
+			}
+			const last = Array.isArray(minSeries) && minSeries.length > 0 ? minSeries[minSeries.length - 1] : null;
+			if (last !== null) return { total: last.total, flightNo: null };
+			return null;
+		}
+
+		/** The flight row the summary line describes: by `lowest.flightNo`, else by price. */
+		function lowestFlightOf(flights, lowest) {
+			if (lowest === null) return null;
+			if (lowest.flightNo !== null) {
+				const byNumber = flights.find((flight) => flight && flight.no === lowest.flightNo);
+				if (byNumber) return byNumber;
+			}
+			return flights.find((flight) => flight && Number.isFinite(flight.taxIncluded) && flight.taxIncluded === lowest.total) || null;
+		}
+
+		/** One flight's payable total, or null when the row was never priced. */
+		function payableOf(flight) {
+			return flight && typeof flight.taxIncluded === 'number' && Number.isFinite(flight.taxIncluded) ? flight.taxIncluded : null;
+		}
+
+		/**
+		 * TOP10 flights: 航班号 / 航司 / 时刻 / 机场 / 机型 / 待支付价 / 状态, cheapest
+		 * first with unpriced rows last. The cheapest row is highlighted; an unpriced
+		 * row shows `—` and explains itself in its `title`.
+		 */
 		function FlightTable(props) {
-			const flights = Array.isArray(props.flights) ? props.flights : [];
-			const passengers = Array.isArray(props.passengers) ? props.passengers : [];
+			const flights = Array.isArray(props.flights) ? props.flights.filter((flight) => flight && typeof flight === 'object') : [];
 			if (flights.length === 0) return h('div', { className: 'pw-hint' }, t('watch.flightsEmpty'));
-			const nameOf = (id) => {
-				const found = passengers.find((passenger) => passenger.id === id);
-				return found ? found.nickname : '';
-			};
-			const headers = [t('watch.flightNo'), t('watch.airline'), t('watch.time'), t('watch.craft'), t('watch.airport'), t('watch.listPrice'), t('watch.yourPrice')];
+			const sorted = flights
+				.slice()
+				.sort((left, right) => {
+					const a = payableOf(left);
+					const b = payableOf(right);
+					if (a === null && b === null) return 0;
+					if (a === null) return 1;
+					if (b === null) return -1;
+					return a - b;
+				})
+				.slice(0, 10);
+			const cheapest = payableOf(sorted[0]);
+			const headers = [t('watch.flightNo'), t('watch.airline'), t('watch.time'), t('watch.airport'), t('watch.craft'), t('watch.taxIncluded'), t('watch.status')];
 			return h(
 				'div',
 				{ className: 'pw-table-wrap' },
 				h(
 					'table',
 					{ className: 'pw-table' },
-					h('thead', null, h('tr', null, headers.map((label, index) => h('th', { key: index, className: index >= 5 ? 'pw-num' : undefined }, label)))),
+					h('thead', null, h('tr', null, headers.map((label, index) => h('th', { key: index, className: index === 5 ? 'pw-num' : undefined }, label)))),
 					h(
 						'tbody',
 						null,
-						flights.map((flight, index) => {
+						sorted.map((flight, index) => {
+							const total = payableOf(flight);
 							const prices = Array.isArray(flight.prices) ? flight.prices : [];
-							const priceText =
-								prices.length === 0
-									? '—'
-									: prices
-											.map((item) => {
-												const name = nameOf(item.passengerId);
-												return name === '' ? formatMoney(item.total) : `${name} ${formatMoney(item.total)}`;
-											})
-											.join(' · ');
+							const fareLabel = prices.map((item) => (item && typeof item.fareLabel === 'string' ? item.fareLabel : '')).find((label) => label !== '') || '';
+							const isCheapest = total !== null && total === cheapest;
 							return h(
 								'tr',
-								{ key: `${flight.no || 'flight'}-${index}`, 'data-expanded': flight.expanded === true ? 'true' : 'false' },
-								h('td', null, h('div', { className: 'pw-row', style: { gap: 5 } }, h('span', null, flight.no || '—'), flight.expanded === true ? h(Chip, { tone: 'brand' }, t('watch.expanded')) : null)),
+								{ key: `${flight.no || 'flight'}-${index}`, 'data-cheapest': isCheapest ? 'true' : 'false', title: total === null ? t('watch.priceMissingHint') : undefined },
+								h('td', { className: 'pw-mono pw-nowrap' }, flight.no || '—'),
 								h('td', null, flight.airline || '—'),
-								h('td', { className: 'pw-num' }, `${flight.depTime || '—'} – ${flight.arrTime || '—'}`),
-								h('td', null, flight.craft || '—'),
+								h('td', { className: 'pw-mono pw-nowrap' }, `${flight.depTime || '—'} – ${flight.arrTime || '—'}`),
 								h('td', null, `${flight.depAirport || '—'} → ${flight.arrAirport || '—'}`),
-								h('td', { className: 'pw-num' }, formatMoney(flight.listPrice)),
-								h('td', { className: 'pw-num' }, priceText)
+								h('td', null, flight.craft || '—'),
+								h('td', { className: 'pw-num' }, total === null ? '—' : formatMoney(total)),
+								h('td', { className: 'pw-nowrap' }, total === null ? h('span', { className: 'pw-hint' }, t('watch.noPrice')) : fareLabel !== '' ? h('span', { className: 'pw-hint' }, fareLabel) : h('span', { className: 'pw-hint' }, t('watch.bookable')))
 							);
 						})
 					)
@@ -2629,88 +2639,50 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			);
 		}
 
-		/** 监控 mode: passenger fares, reference chart, per-passenger series, flight snapshot. */
+		/**
+		 * 监控 mode, rebuilt per A2/B3: the conclusion block (lowest bookable price,
+		 * change since the previous collection, the cheapest flight), one merged
+		 * trend of that same price, the TOP10 flight table and the delivery status.
+		 */
 		function WatchDetailView(props) {
 			useLocaleRevision();
 			const monitor = props.monitor;
-			const passengers = Array.isArray(props.passengers) ? props.passengers : [];
 			const prices = props.prices;
 			const flightsData = props.flights;
-			// `prices.reference` is a historical L1 leftover: watch mode is L2 only,
-			// so the page renders `series` and nothing else.
-			const seriesList = Array.isArray(prices && prices.series) ? prices.series : [];
-			const flights = Array.isArray(flightsData && flightsData.flights) ? flightsData.flights : [];
-			const tax = flightsData && flightsData.tax && typeof flightsData.tax === 'object' ? flightsData.tax : null;
+			const flights = Array.isArray(flightsData && flightsData.flights) ? flightsData.flights.filter((flight) => flight && typeof flight === 'object') : [];
 			const flightsFetchedAt = flightsData && typeof flightsData.fetchedAt === 'string' ? flightsData.fetchedAt : null;
 			const enabled = monitor.enabled !== false;
-			const rules = monitorRules(monitor);
-			const ruleChips = ruleSummary(rules);
-			const [editingRules, setEditingRules] = useState(false);
-			const [ruleDraft, setRuleDraft] = useState({ newLow: false, newHigh: false, digest: false });
-			const [savingRules, setSavingRules] = useState(false);
-			const [ruleError, setRuleError] = useState(null);
 			const busy = props.busy === true;
 			const passengerIds = Array.isArray(monitor.passengerIds) ? monitor.passengerIds : [];
-			const hasAnyPoint = seriesList.some((entry) => Array.isArray(entry && entry.points) && entry.points.length > 0);
-			const passengerById = (id) => passengers.find((passenger) => passenger.id === id) || null;
-			const fareByPassenger = new Map();
-			for (const flight of flights) {
-				if (!Array.isArray(flight.prices)) continue;
-				for (const item of flight.prices) {
-					if (item && typeof item.passengerId === 'string' && !fareByPassenger.has(item.passengerId)) fareByPassenger.set(item.passengerId, typeof item.fareLabel === 'string' ? item.fareLabel : '');
-				}
-			}
+
+			// One point per collection: the price the conclusion block shows.
+			const minSeries = useMemo(() => normalizeMinSeries(prices && prices.min), [prices]);
+			const lowest = lowestBookable(flightsData, minSeries);
+			const lowestFlight = lowestFlightOf(flights, lowest);
+			const latestPoint = minSeries.length > 0 ? minSeries[minSeries.length - 1] : null;
+			const previousPoint = minSeries.length > 1 ? minSeries[minSeries.length - 2] : null;
+			const deltaPercent = latestPoint !== null && previousPoint !== null && previousPoint.total > 0 ? ((latestPoint.total - previousPoint.total) / previousPoint.total) * 100 : null;
+			const deltaText = formatPercentDelta(deltaPercent);
+			const deltaTone = deltaPercent === null || Math.abs(deltaPercent) < 0.05 ? 'flat' : deltaPercent > 0 ? 'up' : 'down';
 
 			const meta = [monitorDates(monitor)];
 			meta.push(h('span', { key: 'sep-0', className: 'pw-strip-sep' }, '·'));
 			meta.push(h('span', { key: 'passengers' }, passengerIds.length === 0 ? t('detail.passengersNone') : t('detail.passengersCount', { n: passengerIds.length })));
 			if (!enabled) meta.push(h(Chip, { key: 'paused', tone: 'flat' }, t('card.paused')));
 
-			const beginEditRules = () => {
-				setRuleDraft({ newLow: ruleHas(rules, 'new_low'), newHigh: ruleHas(rules, 'new_high'), digest: ruleHas(rules, 'digest') });
-				setRuleError(null);
-				setEditingRules(true);
-			};
-
-			const submitRules = async () => {
-				const next = [];
-				if (ruleDraft.newLow) next.push({ kind: 'new_low' });
-				if (ruleDraft.newHigh) next.push({ kind: 'new_high' });
-				if (ruleDraft.digest) next.push({ kind: 'digest' });
-				setSavingRules(true);
-				setRuleError(null);
-				try {
-					await props.onSaveRules(monitor.id, next);
-					setEditingRules(false);
-				} catch (error) {
-					setRuleError(error && error.message ? error.message : t('watch.rules.failed'));
-				} finally {
-					setSavingRules(false);
-				}
-			};
-
-			const ruleSection = editingRules
-				? h(
-						Section,
-						{ title: t('watch.rules') },
-						['newLow', 'newHigh', 'digest'].map((key) => {
-							const label = key === 'newLow' ? t('watch.rules.newLow') : key === 'newHigh' ? t('watch.rules.newHigh') : t('watch.rules.digest');
-							return h('div', { className: 'pw-rule-row', key }, h('span', null, label), h(Switch, { checked: ruleDraft[key] === true, label, onChange: (next) => setRuleDraft({ ...ruleDraft, [key]: next }) }));
-						}),
-						ruleError === null ? null : h('div', { className: 'pw-hint', style: { color: 'var(--dsw-alias-state-error-primary)' }, role: 'alert' }, ruleError),
-						h(
-							'div',
-							{ className: 'pw-row', style: { justifyContent: 'flex-end', gap: 8 } },
-							h(Button, { size: 'sm', onClick: () => setEditingRules(false), disabled: savingRules }, t('watch.rules.cancel')),
-							h(Button, { size: 'sm', variant: 'primary', onClick: submitRules, disabled: savingRules }, savingRules ? t('common.saving') : t('watch.rules.save'))
-						)
-					)
-				: h(
-						Section,
-						{ title: t('watch.rules') },
-						ruleChips.length === 0 ? h('span', { className: 'pw-muted', style: { fontSize: 12 } }, t('watch.rulesEmpty')) : h('div', { className: 'pw-row', style: { flexWrap: 'wrap', gap: 6 } }, ruleChips.map((chip) => h(Chip, { key: chip.key, tone: 'flat' }, chip.label))),
-						h('div', { className: 'pw-row', style: { justifyContent: 'flex-end' } }, h(Button, { size: 'sm', onClick: beginEditRules, disabled: busy }, t('watch.rules'))),
-					);
+			const conclusion = h(
+				'div',
+				{ className: 'pw-summary', key: 'summary' },
+				h(
+					'div',
+					{ className: 'pw-summary-main' },
+					h('span', { className: 'pw-summary-label' }, t('watch.lowestLabel')),
+					h('span', { className: 'pw-summary-price' }, lowest === null ? '—' : formatMoney(lowest.total)),
+					deltaText === null ? null : h('span', { className: 'pw-summary-delta', 'data-tone': deltaTone }, t('watch.vsLast', { percent: deltaText, price: formatMoney(previousPoint.total) })),
+					lowestFlight === null ? null : h('span', { className: 'pw-summary-route' }, flightRouteLine(lowestFlight))
+				),
+				h(Button, { variant: 'primary', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: busy }, t('detail.refresh'))
+			);
 
 			return h(
 				PageShell,
@@ -2719,7 +2691,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					title: monitorTitle(monitor),
 					meta,
 					actions: [
-						h(Button, { key: 'refresh', size: 'sm', variant: 'primary', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: busy }, t('detail.refresh')),
 						h(
 							Button,
 							{ key: 'pause', size: 'sm', icon: enabled ? h(PauseIcon, { size: 13 }) : h(PlayIcon, { size: 13 }), onClick: () => props.onToggleEnabled(monitor), disabled: busy },
@@ -2731,55 +2702,20 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				props.banner,
 				props.pricesError ? h(ErrorBar, { key: 'prices-error', message: props.pricesError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
 				props.flightsError ? h(ErrorBar, { key: 'flights-error', message: props.flightsError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
+				conclusion,
 				h(
 					Section,
-					{ key: 'real', title: t('watch.realTitle'), help: t('watch.realHint') },
-					passengerIds.length === 0
-						? h('span', { className: 'pw-hint' }, t('watch.noPassengers'))
-						: h(
-								'div',
-								{ className: 'pw-col', style: { gap: 8 } },
-								passengerIds.map((id) => {
-									const series = seriesList.find((entry) => entry && entry.passengerId === id) || null;
-									return h(PassengerPriceCard, {
-										key: id,
-										passenger: passengerById(id) || (series && series.passenger) || null,
-										series,
-										fareLabel: fareByPassenger.get(id) || '',
-									});
-								}),
-								hasAnyPoint ? null : h('span', { className: 'pw-hint' }, t('watch.emptyPrecise'))
-							)
+					{ key: 'trend', title: t('watch.trendTitle') },
+					prices === null && props.pricesError === null ? h(Skeleton, { height: 150, radius: 12 }) : h(PriceChart, { points: prices && prices.min, emptyText: t('watch.trendEmpty') })
 				),
-				seriesList.length === 0
-					? null
-					: seriesList.map((series) => {
-							const passenger = passengerById(series.passengerId) || (series.passenger && typeof series.passenger === 'object' ? series.passenger : null);
-							const name = passenger && typeof passenger.nickname === 'string' ? passenger.nickname : series.passengerId;
-							const typeLabel = passenger && PASSENGER_TYPES.indexOf(passenger.type) >= 0 ? t(`type.${passenger.type}`) : '';
-							const points = normalizePricePoints(series.points);
-							return h(
-								Section,
-								{ key: series.passengerId, title: t('watch.seriesTitle', { name, type: typeLabel }) },
-								points.length === 0 ? h('span', { className: 'pw-hint' }, t('watch.seriesEmpty')) : h(PriceChart, { points: series.points, compact: true, emptyText: t('watch.seriesEmpty') })
-							);
-						}),
 				h(
 					Section,
-					{ key: 'flights', title: t('watch.flights'), help: flightsFetchedAt === null ? null : t('watch.fetchedAt', { when: relativeTime(flightsFetchedAt) }) },
-					flightsData === null && props.flightsError === null ? h(Skeleton, { height: 120, radius: 12 }) : h(FlightTable, { flights, passengers }),
-					tax === null
-						? null
-						: h(
-								'div',
-								{ className: 'pw-tax-line' },
-								h('span', { style: { fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } }, t('watch.taxTitle')),
-								h('span', null, t('watch.taxAirport', { price: formatMoney(tax.airportFee) })),
-								h('span', { className: 'pw-strip-sep' }, '·'),
-								h('span', null, t('watch.taxFuel', { price: formatMoney(tax.fuel) })),
-								h('span', { className: 'pw-strip-sep' }, '·'),
-								h('span', null, t('watch.taxTotal', { price: formatMoney(tax.total) }))
-							)
+					{
+						key: 'flights',
+						title: t('watch.flights'),
+						help: flightsFetchedAt === null ? t('watch.flightsHelp') : `${t('watch.flightsHelp')} · ${t('watch.fetchedAt', { when: relativeTime(flightsFetchedAt) })}`,
+					},
+					flightsData === null && props.flightsError === null ? h(Skeleton, { height: 180, radius: 12 }) : h(FlightTable, { flights })
 				),
 				h(CadenceEditor, {
 					key: 'cadence',
@@ -2789,7 +2725,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					busy: props.busy,
 					onSave: (next) => props.onSaveCadence(monitor.id, next),
 				}),
-				ruleSection
+				h(DeliveryLine, { key: 'delivery', delivery: monitor.delivery })
 			);
 		}
 
@@ -2817,7 +2753,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const notify = source.notify && typeof source.notify === 'object' ? source.notify : {};
 			return {
 				feishuWebhook: typeof notify.feishuWebhook === 'string' ? notify.feishuWebhook : '',
-				digestAt: typeof notify.digestAt === 'string' && /^\d{2}:\d{2}$/.test(notify.digestAt) ? notify.digestAt : '09:00',
 			};
 		}
 
@@ -2844,10 +2779,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				// Partial POST: only the Feishu fields this page still edits. The Host
 				// keeps the cooldown, the cadence and everything else untouched.
 				const body = {
-					notify: {
-						feishuWebhook: draft.feishuWebhook.trim(),
-						digestAt: /^\d{2}:\d{2}$/.test(draft.digestAt) ? draft.digestAt : '09:00',
-					},
+					notify: { feishuWebhook: draft.feishuWebhook.trim() },
 				};
 				setSaving(true);
 				setSettingsError(null);
@@ -2862,6 +2794,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			};
 
 			const statusSnapshot = props.status && typeof props.status === 'object' ? props.status : null;
+			const statusNotify = statusSnapshot && statusSnapshot.notify && typeof statusSnapshot.notify === 'object' ? statusSnapshot.notify : null;
+			const lastDelivery = statusNotify && statusNotify.lastDelivery && typeof statusNotify.lastDelivery === 'object' ? statusNotify.lastDelivery : null;
 			const auth = statusSnapshot && statusSnapshot.auth && typeof statusSnapshot.auth === 'object' ? statusSnapshot.auth : null;
 			const l2Live = l2State(statusSnapshot);
 			const signedIn = auth !== null && (auth.status === 'valid' || auth.status === 'expired');
@@ -2933,17 +2867,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 							h(InfoTip, { text: t('settings.feishu.help'), align: 'end' })
 						)
 					),
-					h(
-						'div',
-						{ className: 'pw-field', style: { maxWidth: 240 } },
-						h(
-							'div',
-							{ className: 'pw-field-head' },
-							h('label', { className: 'pw-label' }, t('settings.feishu.digestAt')),
-							h(InfoTip, { text: t('settings.feishu.digestHelp') })
-						),
-						h('input', { className: 'pw-input', type: 'time', value: draft.digestAt, onChange: (event) => update({ digestAt: event.target.value }) })
-					)
+					h(DeliveryLine, { delivery: lastDelivery })
 				)
 			);
 		}
@@ -3648,14 +3572,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				[loadCore, fail]
 			);
 
-			const saveRules = useCallback(
-				async (id, rules) => {
-					await apiFetch(`/monitors/${encodeURIComponent(id)}`, { method: 'PATCH', body: { rules } });
-					await loadCore();
-				},
-				[loadCore]
-			);
-
 			/** Only `cadence` is sent; the detail page re-reads it after the save. */
 			const saveCadence = useCallback(
 				async (id, cadence) => {
@@ -3780,7 +3696,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								onToggleEnabled: toggleEnabled,
 								onRefresh: refreshMonitor,
 								onDelete: deleteMonitor,
-								onSaveRules: saveRules,
 								onSaveCadence: saveCadence,
 								onSettings: goSettings,
 								onPin: (selection) => void pinDate(detailMonitor, selection),

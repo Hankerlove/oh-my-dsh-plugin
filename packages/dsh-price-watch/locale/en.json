@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Price watch",
-    "description": "Watch flight prices: without fixed dates a Calendar monitor keeps the next 380 days of lowest fares, and pinning a day turns it into a Watch; with fixed dates a Watch collects the real flights and each passenger's tax-included fare at the rhythm you pick (30 min to 24 h) — Ctrip sign-in required. Price alerts and the daily digest are pushed to Feishu."
+    "description": "Watch flight prices: without fixed dates a Calendar monitor keeps the next 380 days of lowest fares, and pinning a day turns it into a Watch; with fixed dates a Watch collects the real flights and each passenger's tax-included fare at the rhythm you pick (30 min to 24 h) — Ctrip sign-in required. Every collection with new prices pushes one Feishu card; identical results are not pushed twice."
   }
 }

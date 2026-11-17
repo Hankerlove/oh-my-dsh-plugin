@@ -4,13 +4,13 @@
  * Everything lives under `$DSH_HOME/price-watch/`, never in the project
  * directory:
  *
- *   config.json      passengers, the two global cadences, notification settings
+ *   config.json      passengers, the two global cadences, the Feishu webhook
  *   monitors.json    the watched routes, each either `calendar` or `watch`
- *   state.json       scheduler cursors, last-run marks, alert bookkeeping
+ *   state.json       scheduler cursors, last-run marks, delivery bookkeeping
  *   prices/*.jsonl   one append-only series per watch monitor (L2 points only)
  *   calendar/*.json  latest full calendar snapshot per calendar monitor
  *   flights/*.json   latest browser flight list per watch monitor
- *   alerts.jsonl     recent deliveries
+ *   alerts.jsonl     the delivery log (kept under its historical name)
  *
  * JSON documents are written through a temp file + rename so a crash mid-write
  * cannot truncate them. A document that fails to parse is moved aside to
@@ -26,20 +26,27 @@
  * count, no minimum L2 interval, no quiet window and no backoff anywhere in this
  * file — those concepts are gone, not merely defaulted off.
  *
+ * Delivery model (A2 spec §1): `state.delivery[monitorId]` remembers the sha1 of
+ * the last card that was actually delivered, so the next identical collection
+ * skips the push but still stores its data. `alerts.jsonl` keeps one line per
+ * delivery attempt. There are no alert rules, no cooldowns and no daily digest.
+ *
  * Migration is idempotent: `init()` reads, folds every historical shape into the
  * current one and writes back only when the serialised document really changed,
  * so a second `init()` on migrated files performs no write at all.
  *
  *   config   `cadence.calendarHours` → `calendarMinutes` (×60); the legacy
  *            `cadence.watchMinutes` / `cadence.l1Minutes` → `watchMinutes`
- *            (clamped); the dead `l1` / `l2` / `notify.quietHours` blocks are
- *            dropped because nothing reads them any more.
+ *            (clamped); the dead `l1` / `l2` / `notify.quietHours` /
+ *            `notify.cooldownMinutes` / `notify.digestAt` fields are dropped
+ *            because nothing reads them any more.
  *   monitor  `cadence.hours` → `minutes` (×60); `cadence.minutes` kept; all
- *            clamped to the shared tier list.
+ *            clamped to the shared tier list; the dead `rules` field dropped
+ *            (alert rules were replaced by the per-collection delivery card).
  *   state    `l1Runs` / `l2Runs` / `l2Backoff` / `l2DisabledForDay` /
- *            `l1BlockedUntil` / `l1FailCount` / `l2BlockedUntil` are dropped
- *            (they describe a model that no longer exists); every field the
- *            scheduler and the rules still need is kept as-is.
+ *            `l1BlockedUntil` / `l1FailCount` / `l2BlockedUntil` and the alert
+ *            bookkeeping (`cooldowns` / `dayFired` / `sides` / `lastDigest`) are
+ *            dropped; every field the scheduler and the API still read is kept.
  */
 import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -58,8 +65,8 @@ import {
 
 /** How many price points a single series read may return. */
 const MAX_POINTS = 5000;
-/** How many alerts are kept on disk. */
-const MAX_ALERTS = 5000;
+/** How many delivery-log lines are kept on disk. */
+const MAX_DELIVERIES = 5000;
 /** Hard cap on watched routes. */
 export const MAX_MONITORS = 20;
 export const MAX_PASSENGERS = 12;
@@ -75,24 +82,20 @@ export const CADENCE_MINUTES = [30, 60, 180, 360, 720, 1440];
 /** Global defaults picked by the user: calendar 6h, watch 6h. */
 const DEFAULT_CADENCE = { calendarMinutes: 360, watchMinutes: 360 };
 
-/** Default rules for a dated monitor; a calendar monitor always has none. */
-const DEFAULT_WATCH_RULES = () => [{ kind: 'new_low' }, { kind: 'new_high' }];
-
 // #region normalisation helpers
 const DEFAULT_CONFIG = () => ({
   passengers: [],
   cadence: { ...DEFAULT_CADENCE },
+  // A2 spec §1.3: the only notification setting left is the webhook itself.
+  // Rules, cooldowns and the digest time were deleted along with rules.js.
   notify: {
     feishuWebhook: '',
-    // Still patchable through the API, but no longer surfaced in the UI.
-    cooldownMinutes: 360,
-    digestAt: '09:00',
   },
   panelBaseUrl: '',
 });
 
 /**
- * State that survives v2. Written in a fixed key order so that the document
+ * State that survives A2. Written in a fixed key order so that the document
  * round-trips byte-identically through `normaliseState()`.
  */
 const DEFAULT_STATE = () => ({
@@ -104,12 +107,14 @@ const DEFAULT_STATE = () => ({
   l2LastRunBy: {},
   l2LastOk: {},
   l2LastError: null,
-  cooldowns: {},
-  dayFired: {},
-  sides: {},
-  lastDigest: null,
   lastError: {},
   failures: {},
+  /**
+   * `{[monitorId]: { hash, at, ok, error, kind }}` — the sha1 of the last card
+   * actually pushed to Feishu. Equal hash on the next collection ⇒ skip the
+   * push (but still store the data); different ⇒ push exactly once.
+   */
+  delivery: {},
 });
 
 /** A finite number or `null`; `null` lets the caller fall back to a default. */
@@ -168,10 +173,11 @@ function normaliseConfig(raw) {
     : [];
 
   const inputNotify = input.notify && typeof input.notify === 'object' ? input.notify : {};
+  // Only the webhook survives A2. `cooldownMinutes` / `digestAt` are read past
+  // and dropped: a migrated config must not keep fields that imply a feature
+  // (quiet cooldowns, daily digest) the Host no longer implements.
   const notify = {
     feishuWebhook: typeof inputNotify.feishuWebhook === 'string' ? inputNotify.feishuWebhook : base.notify.feishuWebhook,
-    cooldownMinutes: Math.max(0, finiteOrNull(inputNotify.cooldownMinutes) ?? base.notify.cooldownMinutes),
-    digestAt: /^\d{1,2}:\d{2}$/.test(String(inputNotify.digestAt || '')) ? String(inputNotify.digestAt) : base.notify.digestAt,
   };
 
   return {
@@ -234,22 +240,48 @@ function normaliseStoredMonitor(monitor, config) {
     // that rule is enforced on create/update, not on read: disk data must always
     // load so an upgrade can never brick the panel.
     passengerIds: Array.isArray(monitor.passengerIds) ? monitor.passengerIds.filter((id) => typeof id === 'string') : [],
-    rules: mode === 'calendar' ? [] : Array.isArray(monitor.rules) ? monitor.rules : [],
     cadence: normaliseCadence(monitor.cadence, config, mode),
   };
-  // An empty rules list is a legitimate choice (track the price, stay silent),
-  // so an upgrade must not resurrect defaults here.
+  // Alert rules were removed with rules.js (A2 §1.2): drop the field instead of
+  // carrying a dead array around, otherwise every reader has to know it is inert.
+  delete next.rules;
   return next;
 }
 
 /**
- * Keep exactly the state fields frequency model v2 still reads.
+ * Normalise the delivery bookkeeping: `{[monitorId]: {hash, at, ok, error, kind}}`.
+ *
+ * Why a fixed field order and a drop of everything else: this record decides
+ * whether the next collection pushes a card, so a half-written or hand-edited
+ * entry must not be able to make the Host spam Feishu. An entry without a hash
+ * is simply forgotten (the next collection will deliver again once).
+ */
+function normaliseDelivery(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [id, entry] of Object.entries(raw)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const hash = typeof entry.hash === 'string' ? entry.hash : '';
+    if (!hash) continue;
+    out[id] = {
+      hash,
+      at: typeof entry.at === 'string' ? entry.at : null,
+      ok: entry.ok === true,
+      error: typeof entry.error === 'string' ? entry.error : null,
+      kind: entry.kind === 'watch' || entry.kind === 'failure' ? entry.kind : 'calendar',
+    };
+  }
+  return out;
+}
+
+/**
+ * Keep exactly the state fields A2 still reads.
  *
  * This is a whitelist on purpose: spreading the raw document would preserve
- * `l1Runs`, `l2Backoff`, `l2DisabledForDay`, … forever, and a dead field that
- * keeps being written looks authoritative to the next reader. Dropping unknown
- * keys is safe here because every one of them belonged to the budget/backoff
- * model that no longer exists.
+ * `l1Runs`, `l2Backoff`, `cooldowns`, `dayFired`, `sides`, `lastDigest`, …
+ * forever, and a dead field that keeps being written looks authoritative to the
+ * next reader. Dropping unknown keys is safe here because every one of them
+ * belonged to a model that no longer exists (budgets, backoff, alert rules).
  *
  * Key order is fixed by the object literal below, which is what makes a second
  * `init()` byte-identical and therefore write-free.
@@ -273,12 +305,9 @@ function normaliseState(raw) {
     l2LastRunBy: obj(input.l2LastRunBy, {}),
     l2LastOk: obj(input.l2LastOk, {}),
     l2LastError: typeof input.l2LastError === 'string' ? input.l2LastError : null,
-    cooldowns: obj(input.cooldowns, {}),
-    dayFired: obj(input.dayFired, {}),
-    sides: obj(input.sides, {}),
-    lastDigest: isoOrNull(input.lastDigest),
     lastError: obj(input.lastError, {}),
     failures: obj(input.failures, {}),
+    delivery: normaliseDelivery(input.delivery),
   };
 }
 // #endregion
@@ -489,21 +518,6 @@ export function createStore(rootDir) {
     return params;
   }
 
-  function normaliseRules(input) {
-    const rules = [];
-    if (!Array.isArray(input)) return rules;
-    for (const rule of input) {
-      if (!rule || typeof rule !== 'object') continue;
-      if (rule.kind === 'target') {
-        const value = numberOr(rule.value, NaN);
-        if (Number.isFinite(value) && value > 0) rules.push({ kind: 'target', value: Math.round(value) });
-      } else if (rule.kind === 'new_low' || rule.kind === 'new_high' || rule.kind === 'digest') {
-        rules.push({ kind: rule.kind });
-      }
-    }
-    return rules;
-  }
-
   /** Accept both the flat V2 body and the legacy `{ params: {...} }` shape. */
   function inputParams(input) {
     return input?.params && typeof input.params === 'object' ? input.params : input;
@@ -517,11 +531,6 @@ export function createStore(rootDir) {
     const passengerIds = Array.isArray(input.passengerIds) ? input.passengerIds.filter((id) => findPassenger(id)) : [];
     // 行情模式按平台最低参考价，与乘客身份无关，允许留空；监控模式仍必须有人。
     if (mode === 'watch' && passengerIds.length === 0) throw new Error('监控模式至少选择一位乘客');
-    const rules = mode === 'calendar'
-      ? []
-      : input.rules === undefined
-        ? DEFAULT_WATCH_RULES()
-        : normaliseRules(input.rules);
     const now = isoNow();
     const monitor = {
       id: monitorId(),
@@ -531,8 +540,8 @@ export function createStore(rootDir) {
       mode,
       params,
       passengerIds,
-      rules,
       // 不传 cadence 就用该模式的全局默认（spec §1），存成统一的 minutes。
+      // 没有 rules 字段：提醒规则随 rules.js 一起删除，卡片由每次采集后的投递负责。
       cadence: normaliseCadence(input.cadence, cache.config, mode),
       createdAt: now,
       updatedAt: now,
@@ -558,13 +567,8 @@ export function createStore(rootDir) {
       next.mode = monitorMode(next.params);
       next.title = monitorTitle(next.params);
     }
-    if (input.rules !== undefined) {
-      next.rules = next.mode === 'calendar' ? [] : normaliseRules(input.rules);
-    } else if (next.mode === 'calendar') {
-      next.rules = [];
-    } else if (current.mode === 'calendar') {
-      next.rules = DEFAULT_WATCH_RULES();
-    }
+    // `rules` 已被删除（A2 §1.2）：老客户端 PATCH 上来的 rules 直接忽略，不报错。
+    delete next.rules;
     if (input.cadence !== undefined) next.cadence = normaliseCadence(input.cadence, cache.config, next.mode || monitorMode(next.params));
 
     // 与 createMonitor 同一规则：行情可以没有乘客，监控必须至少一位。只在这次
@@ -597,7 +601,7 @@ export function createStore(rootDir) {
     // dead entry per deleted monitor forever and grows without bound.
     const state = { ...cache.state };
     let touched = false;
-    for (const field of ['nextDue', 'lastCollectBy', 'failures', 'lastError', 'l2LastRunBy', 'l2LastOk', 'calendarFetchedAt']) {
+    for (const field of ['nextDue', 'lastCollectBy', 'failures', 'lastError', 'l2LastRunBy', 'l2LastOk', 'calendarFetchedAt', 'delivery']) {
       if (state[field] && Object.prototype.hasOwnProperty.call(state[field], id)) {
         state[field] = { ...state[field] };
         delete state[field][id];
@@ -628,11 +632,20 @@ export function createStore(rootDir) {
     return (await readJson(join(flightsDir, `${id}.json`), null)).value;
   }
 
+  /** `lowest` = 所有航班所有乘客里的最低含税价（A2 spec §3.3），卡片和面板都用它。 */
+  function normaliseLowest(value) {
+    if (!value || typeof value !== 'object') return null;
+    const total = Number(value.total);
+    if (!Number.isFinite(total) || total <= 0) return null;
+    return { flightNo: typeof value.flightNo === 'string' ? value.flightNo : '', total: Math.round(total) };
+  }
+
   async function writeFlightsSnapshot(id, snapshot) {
     const doc = {
       fetchedAt: typeof snapshot?.fetchedAt === 'string' ? snapshot.fetchedAt : isoNow(),
-      flights: Array.isArray(snapshot?.flights) ? snapshot.flights : [],
       tax: snapshot?.tax && typeof snapshot.tax === 'object' ? snapshot.tax : null,
+      lowest: normaliseLowest(snapshot?.lowest),
+      flights: Array.isArray(snapshot?.flights) ? snapshot.flights : [],
     };
     await writeJsonAtomic(join(flightsDir, `${id}.json`), doc);
     return doc;
@@ -691,24 +704,39 @@ export function createStore(rootDir) {
   }
   // #endregion
 
-  // #region alerts
-  async function appendAlert(alert) {
-    const line = JSON.stringify(alert) + '\n';
+  // #region delivery log
+  /**
+   * Append one delivery attempt to `alerts.jsonl` (the file keeps its historical
+   * name; the payload is the A2 delivery record, not an alert).
+   *
+   * Fields are fixed so `/deliveries` can document one shape:
+   * `{ monitorId, title, kind, at, ok, error }`.
+   */
+  async function appendDelivery(entry) {
+    const line = JSON.stringify({
+      monitorId: String(entry?.monitorId || ''),
+      title: String(entry?.title || ''),
+      kind: entry?.kind === 'watch' || entry?.kind === 'failure' ? entry.kind : 'calendar',
+      at: typeof entry?.at === 'string' ? entry.at : isoNow(),
+      ok: entry?.ok === true,
+      error: typeof entry?.error === 'string' ? entry.error : null,
+    }) + '\n';
     await appendFile(alertsPath, line, 'utf8').catch(() => {});
     try {
       const info = await stat(alertsPath);
       if (info.size > 4 * 1024 * 1024) {
         const raw = await readFile(alertsPath, 'utf8');
-        const kept = raw.trim().split('\n').slice(-MAX_ALERTS);
+        const kept = raw.trim().split('\n').slice(-MAX_DELIVERIES);
         await writeFile(alertsPath, kept.join('\n') + '\n', 'utf8');
       }
     } catch {
       /* compaction is best effort */
     }
-    return alert;
+    return entry;
   }
 
-  async function readAlerts(limit = 50) {
+  /** Newest first, at most 200 per call. */
+  async function readDeliveries(limit = 50) {
     let raw = '';
     try {
       raw = await readFile(alertsPath, 'utf8');
@@ -719,9 +747,14 @@ export function createStore(rootDir) {
     for (const line of raw.trim().split('\n')) {
       if (!line) continue;
       try {
-        out.push(JSON.parse(line));
+        const entry = JSON.parse(line);
+        // The file predates the A2 delivery log: old alert records carry no
+        // `kind`, and showing them as blank rows in the panel is worse than
+        // dropping them. New entries always have kind + at.
+        if (!entry || typeof entry.kind !== 'string' || typeof entry.at !== 'string') continue;
+        out.push(entry);
       } catch {
-        /* skip */
+        /* skip a torn line */
       }
     }
     return out.slice(-Math.max(1, Math.min(200, limit))).reverse();
@@ -752,8 +785,8 @@ export function createStore(rootDir) {
     appendPoints,
     readPoints,
     readAllPoints,
-    appendAlert,
-    readAlerts,
+    appendDelivery,
+    readDeliveries,
     today: () => isoDate(),
   };
 }

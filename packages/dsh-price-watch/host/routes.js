@@ -10,10 +10,15 @@
  * summary for date-less monitors. The detail endpoints (`/calendar`, `/flights`,
  * `/prices`) carry the heavy payloads.
  *
+ * A2 additions: `/deliveries` (with `/alerts` as an alias) exposes the delivery
+ * log, `/prices` gained the per-collection `min` series (the old L1 `reference`
+ * line is gone), and every list item carries `delivery: { at, ok, error } | null`
+ * plus `lastError` so the panel never has to join against `/status`.
+ *
  * Write requests pass a same-origin check because plugin routes are not behind
  * the Host web token. Bodies are capped and destroyed when oversized.
  */
-import { MAX_BODY_BYTES } from './util.js';
+import { MAX_BODY_BYTES, minSeries } from './util.js';
 import { renderPage } from './page.js';
 
 const API = '/api';
@@ -135,6 +140,18 @@ export function createRouter({ store, logger, actions }) {
     return typeof message === 'string' && message ? message : null;
   }
 
+  /**
+   * Last delivery result for the list item (A2 §1.3): `{ at, ok, error }` or
+   * null when nothing was ever pushed. Deliberately drops `hash` and `kind`:
+   * the panel does not need the fingerprint, and leaking it invites a client to
+   * compute its own idempotency.
+   */
+  function deliveryOf(monitor) {
+    const entry = store.getState().delivery?.[monitor.id];
+    if (!entry || typeof entry.at !== 'string') return null;
+    return { at: entry.at, ok: entry.ok === true, error: entry.error || null };
+  }
+
   /** One list item, exactly the fields spec §5 promises. */
   async function monitorListItem(monitor) {
     const item = {
@@ -147,13 +164,14 @@ export function createRouter({ store, logger, actions }) {
       enabled: monitor.enabled !== false,
       params: monitor.params,
       passengerIds: monitor.passengerIds || [],
-      rules: monitor.rules || [],
       // 频率模型 v2：只有一种节奏写法 `{ minutes }`，两种模式同构；
       // 预算 / 退避 / 每日次数相关的字段一律不再出现在列表项里。
       cadence: monitor.cadence || {},
       nextDue: store.getState().nextDue?.[monitor.id] || null,
       // 客户端只读这一个字段：最近一次采集失败原因，成功后为 null。
       lastError: lastErrorOf(monitor),
+      // A2 §1.3：最近一次「投递」结果（不是采集结果），未投递过为 null。
+      delivery: deliveryOf(monitor),
       updatedAt: monitor.updatedAt,
       latest: null,
       spark: [],
@@ -248,13 +266,15 @@ export function createRouter({ store, logger, actions }) {
       }
 
       if (segments[2] === 'flights' && method === 'GET') {
+        // A2 §3.3 snapshot: fetchedAt + tax + lowest + the TOP10 flight array.
         const doc = await store.readFlightsSnapshot(id);
         return sendJson(res, 200, {
           ok: true,
           data: {
             fetchedAt: doc?.fetchedAt || null,
-            flights: Array.isArray(doc?.flights) ? doc.flights : [],
             tax: doc?.tax && typeof doc.tax === 'object' ? doc.tax : null,
+            lowest: doc?.lowest && typeof doc.lowest === 'object' ? doc.lowest : null,
+            flights: Array.isArray(doc?.flights) ? doc.flights : [],
           },
         });
       }
@@ -264,18 +284,14 @@ export function createRouter({ store, logger, actions }) {
         const since = new Date(Date.now() - days * 86400000).toISOString();
         const points = await store.readPoints(id, { since, limit: 5000 });
 
-        // L1 points carry no passenger and form the shared reference line;
-        // L2 points are grouped per passenger.
-        const reference = [];
+        // 每位乘客一条序列（L2 点自带 passengerId）。旧的 `reference`（L1 参考价）
+        // 已删除：A1 起监控模式完全不调 L1，那个字段只会永远为空。
         const grouped = new Map();
         for (const point of points) {
           const total = Number(point.price?.total);
           if (!Number.isFinite(total) || total <= 0) continue;
           const passengerId = point.key?.passengerId;
-          if (!passengerId) {
-            reference.push({ at: point.at, total });
-            continue;
-          }
+          if (!passengerId) continue;
           if (!grouped.has(passengerId)) grouped.set(passengerId, []);
           grouped.get(passengerId).push({
             at: point.at,
@@ -295,22 +311,19 @@ export function createRouter({ store, logger, actions }) {
           };
         });
 
-        const totals = points.map((point) => Number(point.price?.total)).filter((value) => Number.isFinite(value) && value > 0);
-        const last7 = points
-          .filter((point) => Date.parse(point.at) > Date.now() - 7 * 86400000)
-          .map((point) => Number(point.price?.total))
-          .filter(Number.isFinite);
-        const target = (monitor.rules || []).find((rule) => rule.kind === 'target');
+        // A2 §5 新增 `min`：每次采集的最低可订价。同一次采集的所有点共享 `at`，
+        // 所以按 `at` 分组取最小值即是「这一轮的结论价」，详情页的趋势图用它。
+        const min = minSeries(points);
+        const last7 = min.filter((entry) => Date.parse(entry.at) > Date.now() - 7 * 86400000);
         return sendJson(res, 200, {
           ok: true,
           data: {
-            reference,
+            min,
             series,
             stats: {
-              min: totals.length ? Math.min(...totals) : null,
-              max: totals.length ? Math.max(...totals) : null,
-              avg7: last7.length ? Math.round(last7.reduce((sum, value) => sum + value, 0) / last7.length) : null,
-              target: target ? target.value : null,
+              min: min.length ? Math.min(...min.map((entry) => entry.total)) : null,
+              max: min.length ? Math.max(...min.map((entry) => entry.total)) : null,
+              avg7: last7.length ? Math.round(last7.reduce((sum, entry) => sum + entry.total, 0) / last7.length) : null,
             },
           },
         });
@@ -391,9 +404,7 @@ export function createRouter({ store, logger, actions }) {
     if (segments[0] === 'settings') {
       if (method === 'GET') {
         const config = store.getConfig();
-        // 只回传频率模型 v2 还存在的配置；l1 / l2 整块已经删除。
-        // cooldownMinutes 仍然回传（客户端不展示），否则一个只提交
-        // webhook + digestAt 的设置页会把它清掉。
+        // 只回传还存在的配置：A2 之后 notify 里只剩 webhook（日报时间与冷却已删除）。
         return sendJson(res, 200, {
           ok: true,
           data: { cadence: config.cadence, notify: config.notify, panelBaseUrl: config.panelBaseUrl },
@@ -416,10 +427,11 @@ export function createRouter({ store, logger, actions }) {
       return sendJson(res, 405, { ok: false, error: '方法不支持' });
     }
 
-    // /api/alerts
-    if (segments[0] === 'alerts' && method === 'GET') {
+    // /api/deliveries — 投递日志，最新在前（A2 §1.3）。`/alerts` 保留为别名，
+    // 因为老的面板页面和外部脚本可能还在拉它。
+    if ((segments[0] === 'deliveries' || segments[0] === 'alerts') && method === 'GET') {
       const limit = Math.max(1, Math.min(200, Number(searchParams.get('limit') || 50)));
-      return sendJson(res, 200, { ok: true, data: { alerts: await store.readAlerts(limit) } });
+      return sendJson(res, 200, { ok: true, data: { deliveries: await store.readDeliveries(limit) } });
     }
 
     // /api/refresh — collect every monitor now (the panel's ↻ button)

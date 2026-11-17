@@ -101,29 +101,38 @@ export function renderPage({ title = '价格监控', origin = '' } = {}) {
       var delta = latest && isFinite(prev) && prev > 0 ? ((latest.total - prev) / prev) * 100 : null;
       var cls = delta == null ? '' : delta > 0 ? 'up' : 'down';
       var deltaText = delta == null ? '' : (delta > 0 ? '↑' : '↓') + Math.abs(delta).toFixed(1) + '%';
-      return '<div class="card">' +
+      return '<div class="card" id="m-' + esc(m.id) + '">' +
         '<div class="row"><span class="title">' + esc(m.title) + '</span>' +
         '<span><span class="price">' + (latest ? money(latest.total) : '—') + '</span> <span class="' + cls + '">' + deltaText + '</span></span></div>' +
         '<div class="row"><span class="muted">' + esc(dateLabel(m)) + '</span><span class="muted">' + ago(latest && latest.at) + '</span></div>' +
         spark(pts, 300, 34) +
         chart(pts) +
+        deliveryLine(m) +
         '</div>';
     }).join('');
   }
   function calendarCard(m) {
     var s = m.calendarSummary;
     if (!s) {
-      return '<div class="card"><div class="row"><span class="title">' + esc(m.title) + '</span>' +
+      return '<div class="card" id="m-' + esc(m.id) + '"><div class="row"><span class="title">' + esc(m.title) + '</span>' +
         '<span class="price">—</span></div><div class="row"><span class="muted">日期待定 · 还没采到日历</span></div></div>';
     }
     var chips = (s.cheapest || []).map(function (row) {
       return esc(String(row.date).slice(5)) + ' ' + money(row.total);
     }).join('　');
-    return '<div class="card">' +
+    return '<div class="card" id="m-' + esc(m.id) + '">' +
       '<div class="row"><span class="title">' + esc(m.title) + '</span><span class="price">' + money(s.min.total) + '</span></div>' +
       '<div class="row"><span class="muted">380天最低 · 更新于 ' + ago(s.fetchedAt) + '</span><span class="muted">' + s.count + ' 天有价</span></div>' +
       '<div class="muted" style="margin-top:6px">最便宜：' + chips + '</div>' +
+      deliveryLine(m) +
       '</div>';
+  }
+  // A2 §1.3：列表项自带最近一次投递结果，页面直接显示，不用再拉 /status。
+  function deliveryLine(m) {
+    var d = m.delivery;
+    if (!d) return '';
+    var text = d.ok ? '上次投递：成功 ' + String(d.at || '').slice(11, 16) : '上次投递失败：' + (d.error || '未知原因');
+    return '<div class="muted" style="margin-top:6px;' + (d.ok ? '' : 'color:var(--up)') + '">' + esc(text) + '</div>';
   }
   function dateLabel(m) {
     var p = m.params || {};
@@ -141,18 +150,32 @@ export function renderPage({ title = '价格监控', origin = '' } = {}) {
       })
       .catch(function () { document.getElementById('sub').textContent = '读取失败，请确认 DSH 正在运行'; });
 
-    fetch(BASE + '/alerts?limit=8', { credentials: 'same-origin' })
+    // A2：/alerts 已是 /deliveries 的别名，内容变成投递日志（成功/失败）。
+    fetch(BASE + '/deliveries?limit=8', { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (json) {
-        var items = (json && json.data && json.data.alerts) || [];
+        var items = (json && json.data && json.data.deliveries) || [];
         if (!items.length) return;
-        document.getElementById('alerts').innerHTML = '<div class="muted" style="margin-bottom:6px">最近提醒</div>' + items.map(function (a) {
-          return '<div class="alert"><b>' + esc(a.monitorTitle || '') + '</b>　' + esc(a.rule) + '　' + money(a.total) + '　' + esc(String(a.firedAt || '').slice(5, 16).replace('T', ' ')) + '</div>';
+        document.getElementById('alerts').innerHTML = '<div class="muted" style="margin-bottom:6px">最近投递</div>' + items.map(function (a) {
+          var when = String(a.at || '').slice(5, 16).replace('T', ' ');
+          var state = a.ok ? '成功' : '失败：' + (a.error || '未知原因');
+          return '<div class="alert"><b>' + esc(a.title || '') + '</b>　' + esc(a.kind || '') + '　' + esc(state) + '　' + esc(when) + '</div>';
         }).join('');
       })
       .catch(function () {});
   }
+  function focusFromHash() {
+    var match = /^#m=(.+)$/.exec(location.hash || '');
+    if (!match) return;
+    var node = document.getElementById('m-' + decodeURIComponent(match[1]));
+    if (!node) return;
+    node.scrollIntoView({ block: 'center' });
+    node.style.outline = '2px solid var(--brand)';
+  }
+
   load();
+  focusFromHash();
+  window.addEventListener('hashchange', focusFromHash);
   setInterval(load, 60000);
 })();
 </script>

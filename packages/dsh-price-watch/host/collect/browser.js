@@ -7,14 +7,23 @@
  * profile passes. Nothing here fabricates requests: it drives the same pages a
  * human would open and reads the text.
  *
- * V2 (contract §8) returns `{ points, flights, tax }`:
- *  - `flights` lists up to 8 rows of static information read straight from the
- *    list page; only the cheapest row is expanded and gets `products` / `prices`;
- *  - `points` carries one fare per passenger, taken from the cheapest bookable
- *    product of that expanded row;
- *  - `tax` is the order-page fee breakdown, or `null` when it could not be read.
- * Multi-row reading is best effort: when the row selectors do not match, the
- * collector degrades to the single expanded row instead of failing the run.
+ * A2 (spec §3) returns `{ points, flights, tax, lowest }` and every one of the
+ * ten cheapest rows carries a real payable price:
+ *  - the list page is read for up to READ_ROWS static rows, sorted by list price,
+ *    and the cheapest TOP_N (10) are expanded one by one; a row that fails to
+ *    expand keeps its static data with `taxIncluded: null` instead of aborting
+ *    the run, so one broken row never costs the whole collection;
+ *  - the tax part (机建 + 燃油) is constant for one route + one date, so the
+ *    booking page is opened exactly once, after all rows are expanded, and the
+ *    same figure is applied to every row;
+ *  - each flight gets `prices: [{ passengerId, bare, total, fareLabel }]` and
+ *    `taxIncluded` (its cheapest payable price); the array is sorted by
+ *    `taxIncluded` ascending with the priceless rows last;
+ *  - `points` carries one point per passenger: that passenger's cheapest payable
+ *    price across the TOP10;
+ *  - `lowest = { flightNo, total }` is the cheapest payable price overall.
+ * When the row selectors do not match at all the collector degrades to the old
+ * single-row behaviour instead of failing the run.
  *
  * Safety rules baked in:
  *  - one persistent profile under `$DSH_HOME/price-watch/browser-profile/`;
@@ -34,8 +43,10 @@ import { isoNow } from '../util.js';
 const LIST_BASE = 'https://flights.ctrip.com';
 const HOME = 'https://www.ctrip.com/';
 const BLOCK_RE = /whaleguard|访问异常|禁止访问|安全验证|请完成验证|拖动滑块|滑动验证/;
-/** How many flight rows one run reads, per contract §8. */
-const MAX_ROWS = 8;
+/** How many flight rows are read from the list page before sorting by price. */
+const READ_ROWS = 25;
+/** How many of the cheapest rows are expanded and returned (A2 spec §3.2). */
+const TOP_N = 10;
 /** Park the window for ten idle minutes before closing it. */
 const IDLE_CLOSE_MS = 10 * 60 * 1000;
 /** Dwell on a page 3–8 s so the traffic still looks human. */
@@ -349,7 +360,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   async function readRowList(page) {
     try {
       return await page.evaluate(({ selectors, maxRows }) => {
-        const cap = Math.max(1, Math.min(12, Number(maxRows) || 8));
+        const cap = Math.max(1, Math.min(30, Number(maxRows) || READ_ROWS));
         const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
         const plausiblyARow = (node) => Boolean(
           node
@@ -416,9 +427,14 @@ export function createBrowserCollector({ rootDir, logger, store }) {
             depAirport = airportOf(text.slice(i1 + depTime.length));
           }
           const cabinMatch = text.match(/(超级经济舱|经济舱|公务舱|头等舱)\s*([\d.]+\s*折)?/);
-          const prices = [...text.matchAll(/¥\s?(\d{2,6})/g)]
-            .map((match) => Number(match[1]))
-            .filter((value) => Number.isFinite(value) && value > 0);
+          // Rows carry several ¥ numbers: the fare ("¥330起"), sometimes a
+          // discount ("立减¥50") or a coupon. Prefer numbers marked 起, and never
+          // trust anything below ¥100 as an airfare — a 50 here sorts the row to
+          // the front of the TOP-N queue for no reason.
+          const matches = [...text.matchAll(/¥\s?(\d{2,6})\s*(起)?/g)];
+          const fromMarked = matches.filter((match) => match[2]).map((match) => Number(match[1]));
+          const prices = (fromMarked.length ? fromMarked : matches.map((match) => Number(match[1])))
+            .filter((value) => Number.isFinite(value) && value >= 100);
           return {
             node,
             flightNo,
@@ -433,8 +449,9 @@ export function createBrowserCollector({ rootDir, logger, store }) {
             listPrice: prices.length ? Math.min(...prices) : 0,
           };
         }).filter((row) => row.listPrice > 0);
-        // Re-number after the filter so row N in the returned array is also the
-        // node the "expand row N" step later clicks.
+        // Re-number after the filter so `rowIndex` is the DOM marker the later
+        // "expand this row" click uses; the returned array keeps DOM order and is
+        // sorted by price only by the caller.
         return parsed.map((row, index) => {
           try {
             row.node.setAttribute('data-pw-row', String(index));
@@ -442,9 +459,9 @@ export function createBrowserCollector({ rootDir, logger, store }) {
             /* cosmetic */
           }
           delete row.node;
-          return row;
+          return { rowIndex: index, ...row };
         });
-      }, { selectors: ROW_SELECTORS, maxRows: MAX_ROWS });
+      }, { selectors: ROW_SELECTORS, maxRows: READ_ROWS });
     } catch (error) {
       logger.warn('读取航班列表失败，降级为只返回已展开的航班', error);
       return [];
@@ -512,8 +529,11 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   async function readProducts(page, rowIndex) {
     return page.evaluate((index) => {
       const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-      const row = document.querySelector('.flight-item.active')
-        || (Number.isInteger(index) && index >= 0 ? document.querySelector('[data-pw-row="' + index + '"]') : null);
+      // Prefer the row this run actually clicked: with several rows on screen the
+      // `.active` class can still point at the previously expanded one, and then
+      // the products read would belong to a different flight.
+      const row = (Number.isInteger(index) && index >= 0 ? document.querySelector('[data-pw-row="' + index + '"]') : null)
+        || document.querySelector('.flight-item.active');
       if (!row) return null;
       const header = norm(row.innerText);
       const flightNo = (header.match(/\b[A-Z]{2}\d{3,4}\b/) || [])[0] || '';
@@ -521,6 +541,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       const craft = (header.match(/((?:空客|波音|商飞)\s?[A-Z0-9]{2,4})/) || [])[1] || '';
       const times = header.match(/\b\d{2}:\d{2}\b/g) || [];
       const airports = header.match(/[\u4e00-\u9fa5]{2,6}T\d/g) || [];
+      const headerCabin = header.match(/(超级经济舱|经济舱|公务舱|头等舱)\s*([\d.]+\s*折)?/);
       const products = [];
       const seen = new Set();
       for (const button of row.querySelectorAll('button.btn-book')) {
@@ -569,6 +590,8 @@ export function createBrowserCollector({ rootDir, logger, store }) {
         arrTime: times[1] || '',
         depAirport: airports[0] || '',
         arrAirport: airports[1] || '',
+        cabin: headerCabin ? headerCabin[1] : '',
+        discount: headerCabin && headerCabin[2] ? headerCabin[2].replace(/\s+/g, '') : null,
         products,
       };
     }, rowIndex ?? null).catch(() => null);
@@ -614,46 +637,143 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     }
   }
 
-  /** Contract §8 flight object for a row that was not expanded. */
-  function passiveFlight(row) {
-    return {
-      no: row.flightNo || '',
-      airline: row.airline || '',
-      craft: row.craft || '',
-      depTime: row.depTime || '',
-      arrTime: row.arrTime || '',
-      depAirport: row.depAirport || '',
-      arrAirport: row.arrAirport || '',
-      listPrice: Number(row.listPrice) || 0,
-      products: null,
-      prices: [],
-      expanded: false,
-    };
+  /** Best-effort wait until clicking a row actually rendered its fare products. */
+  async function waitRowExpanded(page, rowIndex, timeoutMs = 9000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      await page.waitForTimeout(500);
+      const ready = await page.evaluate((idx) => {
+        const explicit = Number.isInteger(idx) && idx >= 0 ? document.querySelector('[data-pw-row="' + idx + '"]') : null;
+        const scope = explicit || document.querySelector('.flight-item.active');
+        if (!scope) return false;
+        const text = scope.innerText || '';
+        const bookButtons = scope.querySelectorAll('button.btn-book').length;
+        // A collapsed row has exactly one 「预订」 button; an expanded one has one
+        // per fare product (or an explicit 「选购」/「展开所有产品」 entry).
+        return bookButtons >= 2 || /选购|展开查看所有产品/.test(text);
+      }, rowIndex).catch(() => false);
+      if (ready) return true;
+    }
+    return false;
   }
 
-  /** Contract §8 flight object for the expanded (cheapest) row. */
-  function expandedFlight(row, snapshot, products, prices) {
+  /** `经济舱 2.1折`, falling back to the product card's own cleaned text. */
+  function fareLabelOf(product, fallback) {
+    const cabin = product.cabin || fallback.cabin || '';
+    const discount = product.discount ?? fallback.discount ?? null;
+    if (cabin) return discount ? `${cabin} ${discount}` : cabin;
+    const cleaned = String(product.text || '')
+      .replace(/¥\s?\d+/g, '')
+      .replace(/(选购|预订|订票|剩\s?\d+\s?张|展开查看所有产品)/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleaned.slice(0, 24) || '票价';
+  }
+
+  /** Payable total: real tax when the order page was read, +15% estimate otherwise. */
+  function totalWith(bare, feesTotal) {
+    return feesTotal !== null ? Math.round(Number(bare) + feesTotal) : Math.round(Number(bare) * 1.15);
+  }
+
+  /**
+   * Choose one bookable product per passenger out of an expanded row.
+   * Returns `null` when the row cannot serve any passenger (e.g. every product is
+   * student-only), which the caller treats as "this row has no payable price".
+   */
+  function chooseFares(snapshot, passengers, paxCount) {
+    if (!snapshot || !Array.isArray(snapshot.products) || snapshot.products.length === 0) return null;
+    const catalogue = snapshot.products
+      .map((product) => ({ product, rules: parseFareRules(product.limits.join(' ') || product.text) }))
+      .sort((a, b) => a.product.price - b.product.price);
+    const chosen = [];
+    for (const passenger of passengers) {
+      const winner = catalogue.find((entry) => fareFits(entry.rules, passenger, paxCount));
+      if (!winner) continue;
+      chosen.push({
+        passengerId: passenger.id,
+        bare: Number(winner.product.price),
+        // The row header carries the cabin when the product card omits it.
+        fareLabel: fareLabelOf(winner.product, {
+          cabin: snapshot.cabin,
+          discount: snapshot.discount,
+        }),
+      });
+    }
+    if (chosen.length === 0) return null;
+    return { flightNo: snapshot.flightNo || '', snapshot, chosen };
+  }
+
+  /**
+   * Expand one row and read its fares, retrying once because the first click can
+   * land before the list finishes rendering. Returns `null` (never throws) when
+   * the row cannot be read — the caller keeps its static data and moves on.
+   */
+  async function expandAndRead(page, row, passengers, paxCount) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const clicked = await expandRow(page, row.rowIndex);
+      if (!clicked && attempt === 1) return null;
+      await waitRowExpanded(page, row.rowIndex);
+      await expandAllProducts(page);
+      const snapshot = await readProducts(page, row.rowIndex);
+      if (!snapshot) {
+        await page.waitForTimeout(1200);
+        continue;
+      }
+      // 选择器降级时点击可能落到别的行：航班号对不上就放弃这一行，宁缺毋错。
+      if (row.flightNo && snapshot.flightNo && row.flightNo !== snapshot.flightNo) {
+        logger.warn(`展开的航班号不一致（期望 ${row.flightNo}，实际 ${snapshot.flightNo}），跳过该行`);
+        return null;
+      }
+      const hit = chooseFares(snapshot, passengers, paxCount);
+      if (hit) return hit;
+      await page.waitForTimeout(1200);
+    }
+    return null;
+  }
+
+  /**
+   * One A2 §3.3 flight object. `hit` is `{flightNo, snapshot, chosen}` from
+   * `chooseFares`, or `null` when the row could not be expanded (static data only).
+   */
+  function flightOf(row, hit, feesTotal) {
+    const snapshot = hit?.snapshot || null;
+    const prices = (hit?.chosen || []).map((entry) => ({
+      passengerId: entry.passengerId,
+      bare: entry.bare,
+      total: totalWith(entry.bare, feesTotal),
+      fareLabel: entry.fareLabel,
+    }));
+    const totals = prices.map((price) => price.total).filter((value) => Number.isFinite(value) && value > 0);
     return {
-      no: row.flightNo || snapshot.flightNo || '',
-      airline: row.airline || snapshot.airline || '',
-      craft: row.craft || snapshot.craft || '',
-      depTime: row.depTime || snapshot.depTime || '',
-      arrTime: row.arrTime || snapshot.arrTime || '',
+      no: row.flightNo || hit?.flightNo || snapshot?.flightNo || '',
+      airline: row.airline || snapshot?.airline || '',
+      craft: row.craft || snapshot?.craft || '',
+      depTime: row.depTime || snapshot?.depTime || '',
+      arrTime: row.arrTime || snapshot?.arrTime || '',
       // The row parser knows which airport sits between the two clock times; the
       // expanded-product reader only sees them in DOM order and gets the
       // departure wrong when an airport has no terminal suffix.
-      depAirport: row.depAirport || snapshot.depAirport || '',
-      arrAirport: row.arrAirport || snapshot.arrAirport || '',
+      depAirport: row.depAirport || snapshot?.depAirport || '',
+      arrAirport: row.arrAirport || snapshot?.arrAirport || '',
       listPrice: Number(row.listPrice) || 0,
-      products,
+      taxIncluded: totals.length ? Math.min(...totals) : null,
       prices,
-      expanded: true,
+      expanded: prices.length > 0,
     };
+  }
+
+  /** Cheapest payable price first; rows without any payable price go last. */
+  function payableOrder(a, b) {
+    const left = Number.isFinite(a.taxIncluded) ? a.taxIncluded : Number.POSITIVE_INFINITY;
+    const right = Number.isFinite(b.taxIncluded) ? b.taxIncluded : Number.POSITIVE_INFINITY;
+    if (left !== right) return left - right;
+    return (Number(a.listPrice) || 0) - (Number(b.listPrice) || 0);
   }
 
   /**
    * Collect one monitor with the browser.
-   * @returns {Promise<{points:Array<object>, flights:Array<object>, tax:object|null}>}
+   * @returns {Promise<{points:Array<object>, flights:Array<object>, tax:object|null,
+   *                    lowest:{flightNo:string,total:number}}>}
    */
   async function collect(monitor, { signal } = {}) {
     const run = async () => {
@@ -670,115 +790,98 @@ export function createBrowserCollector({ rootDir, logger, store }) {
         // Human pacing: look at the list for a few seconds before touching it.
         await dwell(page);
 
-        // Step 1 — static information for up to 8 rows (best effort).
-        const rows = await readRowList(page);
-        const cheapest = rows.length ? rows.reduce((best, row) => (row.listPrice < best.listPrice ? row : best)) : null;
-        const targetIndex = cheapest ? rows.indexOf(cheapest) : null;
-
-        // Step 2 — expand only the cheapest row.
-        const expanded = await expandRow(page, targetIndex);
-        if (!expanded) throw new Error('未能展开票价产品列表');
-        await expandAllProducts(page);
-        const snapshot = await readProducts(page, targetIndex);
-        if (!snapshot || snapshot.products.length === 0) throw new Error('没有解析到票价产品');
-
         const passengers = (monitor.passengerIds || []).map((id) => store.findPassenger(id)).filter(Boolean);
         if (passengers.length === 0) throw new Error('监控没有有效乘客');
         const paxCount = passengers.length;
 
-        // Cheapest first: products are ordered by bare fare, and the tax part is
-        // a constant for the whole page, so the same order holds for totals.
-        const catalogue = snapshot.products
-          .map((product) => ({ product, rules: parseFareRules(product.limits.join(' ') || product.text) }))
-          .sort((a, b) => a.product.price - b.product.price);
+        // Step 1 — static rows, then the cheapest TOP_N by *price*: the list is
+        // often ordered by departure time, so the DOM order is not the answer.
+        const rows = await readRowList(page);
+        const targets = rows.slice().sort((a, b) => a.listPrice - b.listPrice).slice(0, TOP_N);
 
-        // Step 3 — the tax breakdown, which turns bare fares into real totals.
+        // Step 2 — expand each target row. A single failure only loses that row;
+        // the cheapest one failing is tolerated as long as some row succeeded.
+        const expanded = new Map();
+        for (const row of targets) {
+          const label = row.flightNo || `第 ${row.rowIndex + 1} 行`;
+          try {
+            const hit = await expandAndRead(page, row, passengers, paxCount);
+            if (hit) expanded.set(row.rowIndex, hit);
+          } catch (error) {
+            logger.warn(`展开航班 ${label} 失败，跳过该行: ${String(error?.message || error)}`);
+          }
+          // Human pacing between row expansions.
+          await page.waitForTimeout(900 + Math.floor(Math.random() * 1200)).catch(() => {});
+        }
+
+        // Degrade: if the row selectors found nothing at all, fall back to the old
+        // "expand the first row" path so a layout change still yields one price.
+        let single = null;
+        if (rows.length === 0) {
+          if (!(await expandFirstFlight(page))) throw new Error('未能展开票价产品列表');
+          await expandAllProducts(page);
+          const snapshot = await readProducts(page, null);
+          single = chooseFares(snapshot, passengers, paxCount);
+          if (!single) throw new Error('没有解析到票价产品');
+        } else if (expanded.size === 0) {
+          // 最低价那行也失败了：这次采集算失败，否则卡片上只有「—」。
+          throw new Error('没有展开到任何航班的票价产品');
+        }
+
+        // Step 3 — tax once: 机建 + 燃油 are constant for one route + one date, so
+        // the booking page is opened exactly once and applied to every row.
         const tax = await readOrderTax(page);
         const feesTotal = tax && Number.isFinite(tax.total) ? tax.total : null;
-        const estimateTotal = (bare) => Math.round(Number(bare) * 1.15);
-        const totalFor = (bare) => (feesTotal !== null ? Math.round(Number(bare) + feesTotal) : estimateTotal(bare));
+        const taxSource = feesTotal !== null ? 'order' : 'estimate';
 
-        // Which row was actually expanded: the click may land on another row when
-        // the selector fallback kicked in, so trust the flight number the page
-        // rendered. Its cabin/discount also fills in what a product card omits.
-        let expandedIndex = targetIndex;
-        if (rows.length > 0 && snapshot.flightNo) {
-          const match = rows.findIndex((row) => row.flightNo === snapshot.flightNo);
-          if (match >= 0) expandedIndex = match;
+        // Step 4 — flight objects, cheapest payable first.
+        const flights = single
+          ? [flightOf({}, single, feesTotal)]
+          : targets.map((row) => flightOf(row, expanded.get(row.rowIndex) || null, feesTotal));
+        flights.sort(payableOrder);
+
+        // Step 5 — overall lowest plus one point per passenger (its cheapest row).
+        let lowest = null;
+        const bestByPassenger = new Map();
+        for (const flight of flights) {
+          if (Number.isFinite(flight.taxIncluded) && (!lowest || flight.taxIncluded < lowest.total)) {
+            lowest = { flightNo: flight.no, total: flight.taxIncluded };
+          }
+          for (const price of flight.prices) {
+            if (!Number.isFinite(price.total)) continue;
+            const current = bestByPassenger.get(price.passengerId);
+            if (!current || price.total < current.total) {
+              bestByPassenger.set(price.passengerId, { price, flight });
+            }
+          }
         }
-        const expandedRow = expandedIndex !== null && rows[expandedIndex] ? rows[expandedIndex] : {};
-        const cabinOf = (product) => product.cabin || expandedRow.cabin || '';
-        const discountOf = (product) => product.discount ?? expandedRow.discount ?? null;
-        const fareLabelOf = (product) => {
-          const cabin = cabinOf(product);
-          const discount = discountOf(product);
-          if (cabin) return discount ? `${cabin} ${discount}` : cabin;
-          const cleaned = String(product.text || '')
-            .replace(/¥\s?\d+/g, '')
-            .replace(/(选购|预订|订票|剩\s?\d+\s?张|展开查看所有产品)/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
-          return cleaned.slice(0, 24) || '票价';
-        };
-
-        const products = catalogue.map((entry) => ({
-          price: entry.product.price,
-          total: feesTotal !== null ? Math.round(Number(entry.product.price) + feesTotal) : null,
-          cabin: cabinOf(entry.product),
-          discount: discountOf(entry.product),
-          text: entry.product.text,
-          limits: entry.product.limits,
-        }));
-
-        const chosen = [];
-        for (const passenger of passengers) {
-          const winner = catalogue.find((entry) => fareFits(entry.rules, passenger, paxCount));
-          if (!winner) continue;
-          chosen.push({ passenger, product: winner.product, rules: winner.rules });
-        }
-        if (chosen.length === 0) throw new Error('当前乘客没有可订的票价产品');
+        if (!lowest || bestByPassenger.size === 0) throw new Error('本次没有采到可订的含税价');
 
         const at = isoNow();
-        const points = chosen.map((entry) => {
-          const bare = Number(entry.product.price);
-          return {
-            at,
-            src: 'l2',
-            taxSource: feesTotal !== null ? 'order' : 'estimate',
-            key: {
-              departDate: params.departDate,
-              ...(params.trip === 'round' ? { returnDate: params.returnDate } : {}),
-              passengerId: entry.passenger.id,
-            },
-            price: { bare, total: totalFor(bare) },
-            meta: {
-              flightNo: snapshot.flightNo,
-              airline: snapshot.airline,
-              depTime: snapshot.depTime,
-              arrTime: snapshot.arrTime,
-              fareLabel: fareLabelOf(entry.product),
-              fareText: entry.product.text.slice(0, 160),
-              restrictions: entry.rules,
-              airportFee: tax?.airportFee ?? null,
-              fuel: tax?.fuel ?? null,
-            },
-          };
-        });
-        const prices = chosen.map((entry) => ({
-          passengerId: entry.passenger.id,
-          total: totalFor(entry.product.price),
-          fareLabel: fareLabelOf(entry.product),
+        const points = [...bestByPassenger.entries()].map(([passengerId, entry]) => ({
+          at,
+          src: 'l2',
+          taxSource,
+          key: {
+            departDate: params.departDate,
+            ...(params.trip === 'round' ? { returnDate: params.returnDate } : {}),
+            passengerId,
+          },
+          price: { bare: entry.price.bare, total: entry.price.total },
+          meta: {
+            flightNo: entry.flight.no,
+            airline: entry.flight.airline,
+            depTime: entry.flight.depTime,
+            arrTime: entry.flight.arrTime,
+            depAirport: entry.flight.depAirport,
+            arrAirport: entry.flight.arrAirport,
+            fareLabel: entry.price.fareLabel,
+            airportFee: tax?.airportFee ?? null,
+            fuel: tax?.fuel ?? null,
+          },
         }));
 
-        // Contract §8 `flights`: every static row, with only the expanded one
-        // carrying products.
-        const flights = rows.length === 0
-          ? [expandedFlight({}, snapshot, products, prices)]
-          : rows.map((row, index) => (index === expandedIndex
-            ? expandedFlight(row, snapshot, products, prices)
-            : passiveFlight(row)));
-
-        return { points, flights, tax };
+        return { points, flights, tax, lowest };
       } finally {
         scheduleIdleClose();
       }

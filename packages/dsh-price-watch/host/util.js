@@ -35,6 +35,27 @@ export function addDays(dateString, days) {
   return base.toISOString().slice(0, 10);
 }
 
+/**
+ * 每次采集的最低可订价（A2 §5 的 `min` 序列）。
+ *
+ * 同一次采集写下的所有点共享同一个 `at`，所以按 `at` 分组取最小值，就等于
+ * 「这一轮的最低可订价」。这样不需要额外存一条序列，历史数据也自动生效。
+ * 只统计带 positive `price.total` 的点；一次失败的采集没有点，图上就是空洞。
+ */
+export function minSeries(points) {
+  const byAt = new Map();
+  for (const point of Array.isArray(points) ? points : []) {
+    const at = typeof point?.at === 'string' ? point.at : '';
+    const total = Number(point?.price?.total);
+    if (!at || !Number.isFinite(total) || total <= 0) continue;
+    const current = byAt.get(at);
+    if (current === undefined || total < current) byAt.set(at, total);
+  }
+  return [...byAt.entries()]
+    .map(([at, total]) => ({ at, total }))
+    .sort((a, b) => a.at.localeCompare(b.at));
+}
+
 /** A valid YYYY-MM-DD string? */
 export function isDateString(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`));
@@ -88,8 +109,8 @@ export function monitorMode(params) {
  * silently stretch a 30-minute cadence to a 7-hour gap overnight.
  */
 
-/** `12月03日` — the compact date the title uses. */
-function monthDay(dateString) {
+/** `12月03日` — the compact date the titles and cards use. */
+export function monthDay(dateString) {
   const parts = String(dateString || '').split('-');
   if (parts.length !== 3) return '';
   return `${Number(parts[1])}月${parts[2]}日`;
