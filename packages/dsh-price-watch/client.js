@@ -391,10 +391,16 @@ window.__ModuleLoader__.load({
 			return `${pad2(parsed.getMonth() + 1)}-${pad2(parsed.getDate())}`;
 		}
 
-		/** Watch monitors store their own rhythm; calendar monitors use the global one. */
+		/** Watch monitors store their own rhythm in minutes. */
 		function monitorCadence(monitor) {
 			const cadence = monitor && monitor.cadence && typeof monitor.cadence === 'object' ? monitor.cadence : {};
 			return numberOrNull(cadence.minutes);
+		}
+
+		/** Calendar monitors store their own rhythm in hours. */
+		function monitorCalendarHours(monitor) {
+			const cadence = monitor && monitor.cadence && typeof monitor.cadence === 'object' ? monitor.cadence : {};
+			return numberOrNull(cadence.hours);
 		}
 
 		/** Match a typed query against IATA codes and localized city names. */
@@ -557,6 +563,13 @@ window.__ModuleLoader__.load({
 			'type.child': '儿童',
 			'cadence.hours': '每 {n} 小时',
 			'cadence.minutes': '每 {n} 分钟',
+			'cadence.title': '采集节奏',
+			'cadence.help.calendar': '行情监控按这个间隔刷新未来 380 天的价格日历。',
+			'cadence.help.watch': '监控按这个间隔采集该日期的价格走势。',
+			'cadence.interval': '间隔',
+			'cadence.edit': '调整节奏',
+			'cadence.save': '保存节奏',
+			'cadence.failed': '节奏保存失败，请重试',
 			'detail.back': '返回',
 			'detail.pause': '暂停',
 			'detail.resume': '启用',
@@ -565,6 +578,7 @@ window.__ModuleLoader__.load({
 			'detail.delete': '删除',
 			'detail.deleteConfirm': '删除这个监控？历史数据也会一并移除。',
 			'detail.passengersCount': '{n} 位乘客',
+			'detail.passengersNone': '未指定乘客',
 			'detail.cadence': '每 {n} 分钟采集',
 			'detail.cadenceCalendar': '每 {n} 小时刷新行情',
 			'calendar.title': '未来价格日历',
@@ -576,6 +590,9 @@ window.__ModuleLoader__.load({
 			'calendar.pin': '钉住 {date} · {price}',
 			'calendar.pinRound': '钉住 {depart} – {return} · {price}',
 			'calendar.pinNeedReturn': '再选一个回程日期',
+			'calendar.pinNeedPassenger': '钉住这天会创建「监控」，先选一位乘客',
+			'calendar.pinPickPassenger': '选择乘客',
+			'calendar.pinCreatePassenger': '新建乘客',
 			'calendar.stat.min': '最低',
 			'calendar.stat.max': '最高',
 			'calendar.stat.avg': '平均',
@@ -615,6 +632,7 @@ window.__ModuleLoader__.load({
 			'watch.rules.cancel': '取消',
 			'watch.rules.failed': '规则保存失败，请重试',
 			'watch.emptyPrecise': '还没有精确价，登录携程后点「查一次真实价」。',
+			'watch.noPassengers': '这个监控没有指定乘客，精确采集会被跳过。',
 			'chart.title': '价格走势',
 			'chart.ref.min': '历史最低',
 			'chart.ref.target': '目标价',
@@ -673,6 +691,7 @@ window.__ModuleLoader__.load({
 			'new.returnDate': '返回日',
 			'new.passengers.title': '乘客',
 			'new.passengers.empty': '还没有乘客，先新建一位。',
+			'new.passengers.calendarHint': '行情价按平台最低参考价，与你选的乘客无关，可以不选。',
 			'new.advanced.title': '高级选项',
 			'new.advanced.cadence': '采集节奏',
 			'new.submit.calendar': '创建行情监控',
@@ -791,6 +810,13 @@ window.__ModuleLoader__.load({
 			'type.child': 'Child',
 			'cadence.hours': 'Every {n} h',
 			'cadence.minutes': 'Every {n} min',
+			'cadence.title': 'Collection rhythm',
+			'cadence.help.calendar': 'How often the calendar monitor refreshes the next 380 days of lowest fares.',
+			'cadence.help.watch': 'How often the watch collects this date\'s price trend.',
+			'cadence.interval': 'Interval',
+			'cadence.edit': 'Change rhythm',
+			'cadence.save': 'Save rhythm',
+			'cadence.failed': 'Failed to save the rhythm, try again',
 			'detail.back': 'Back',
 			'detail.pause': 'Pause',
 			'detail.resume': 'Resume',
@@ -799,6 +825,7 @@ window.__ModuleLoader__.load({
 			'detail.delete': 'Delete',
 			'detail.deleteConfirm': 'Delete this watch? Its history is removed too.',
 			'detail.passengersCount': '{n} passengers',
+			'detail.passengersNone': 'No passengers',
 			'detail.cadence': 'Collects every {n} min',
 			'detail.cadenceCalendar': 'Calendar refresh every {n} h',
 			'calendar.title': 'Upcoming price calendar',
@@ -810,6 +837,9 @@ window.__ModuleLoader__.load({
 			'calendar.pin': 'Pin {date} · {price}',
 			'calendar.pinRound': 'Pin {depart} – {return} · {price}',
 			'calendar.pinNeedReturn': 'Pick a return day too',
+			'calendar.pinNeedPassenger': 'Pinning creates a Watch, so pick a passenger first',
+			'calendar.pinPickPassenger': 'Pick a passenger',
+			'calendar.pinCreatePassenger': 'New passenger',
 			'calendar.stat.min': 'Low',
 			'calendar.stat.max': 'High',
 			'calendar.stat.avg': 'Average',
@@ -849,6 +879,7 @@ window.__ModuleLoader__.load({
 			'watch.rules.cancel': 'Cancel',
 			'watch.rules.failed': 'Failed to save rules, try again',
 			'watch.emptyPrecise': 'No precise fares yet. Sign in to Ctrip and use "Fetch real prices".',
+			'watch.noPassengers': 'This watch has no passengers, so precise collection is skipped.',
 			'chart.title': 'Price history',
 			'chart.ref.min': 'Historical low',
 			'chart.ref.target': 'Target',
@@ -907,6 +938,7 @@ window.__ModuleLoader__.load({
 			'new.returnDate': 'Return',
 			'new.passengers.title': 'Passengers',
 			'new.passengers.empty': 'No passengers yet. Create one first.',
+			'new.passengers.calendarHint': 'Calendar fares are the platform lowest reference price and do not depend on passengers — leaving this empty is fine.',
 			'new.advanced.title': 'Advanced',
 			'new.advanced.cadence': 'Collection rhythm',
 			'new.submit.calendar': 'Create calendar watch',
@@ -2349,6 +2381,78 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		}
 
 		/**
+		 * Shared "collection rhythm" editor for both detail pages. A calendar monitor
+		 * stores `{hours}`, a watch stores `{minutes}`, and the buckets are exactly the
+		 * ones the new-monitor page offers — `PATCH /monitors/:id { cadence }` carries
+		 * nothing else, so editing the rhythm can never touch another field.
+		 */
+		function CadenceEditor(props) {
+			const calendar = props.mode === 'calendar';
+			const choices = calendar ? CALENDAR_HOURS : WATCH_MINUTES;
+			const current = numberOrNull(props.value);
+			const fallback = calendar ? 6 : 60;
+			const selected = current !== null && choices.indexOf(current) >= 0 ? current : fallback;
+			const [editing, setEditing] = useState(false);
+			const [draft, setDraft] = useState(selected);
+			const [saving, setSaving] = useState(false);
+			const [error, setError] = useState(null);
+			const busy = props.busy === true;
+
+			const beginEdit = () => {
+				setDraft(selected);
+				setError(null);
+				setEditing(true);
+			};
+
+			const save = async () => {
+				const value = Number(draft);
+				setSaving(true);
+				setError(null);
+				try {
+					await props.onSave(calendar ? { hours: value } : { minutes: value });
+					setEditing(false);
+				} catch (reason) {
+					setError(reason && reason.message ? reason.message : t('cadence.failed'));
+				} finally {
+					setSaving(false);
+				}
+			};
+
+			const summary = current === null ? null : t(calendar ? 'cadence.hours' : 'cadence.minutes', { n: current });
+			return h(
+				Section,
+				{ title: t('cadence.title'), help: calendar ? t('cadence.help.calendar') : t('cadence.help.watch') },
+				editing
+					? h(
+							'div',
+							{ className: 'pw-col', style: { gap: 8 } },
+							h(
+								Field,
+								{ label: t('cadence.interval') },
+								h(
+									'select',
+									{ className: 'pw-input', value: String(draft), onChange: (event) => setDraft(Number(event.target.value)) },
+									choices.map((value) => h('option', { key: value, value: String(value) }, t(calendar ? 'cadence.hours' : 'cadence.minutes', { n: value })))
+								)
+							),
+							error === null ? null : h('div', { className: 'pw-hint', style: { color: 'var(--dsw-alias-state-error-primary)' }, role: 'alert' }, error),
+							h(
+								'div',
+								{ className: 'pw-row', style: { justifyContent: 'flex-end', gap: 8 } },
+								h(Button, { size: 'sm', onClick: () => setEditing(false), disabled: saving }, t('common.cancel')),
+								h(Button, { size: 'sm', variant: 'primary', onClick: () => void save(), disabled: saving }, saving ? t('common.saving') : t('cadence.save'))
+							)
+						)
+					: h(
+							'div',
+							{ className: 'pw-row', style: { gap: 8, alignItems: 'center' } },
+							summary === null ? h('span', { className: 'pw-hint' }, '—') : h(Chip, { tone: 'flat' }, summary),
+							h(Button, { size: 'sm', onClick: beginEdit, disabled: busy }, t('cadence.edit'))
+						)
+			);
+		}
+
+		/**
 		 * 行情 mode: two bar calendars (round) and a pin bar that turns the picked
 		 * day (or day pair) into a watch monitor via `POST /monitors`. Every number
 		 * here is the tax-included `total`.
@@ -2363,20 +2467,30 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const backStatsItems = useMemo(() => calendarStatsItems(backDays), [backDays, runtime.revision.get()]);
 			const [selectedOut, setSelectedOut] = useState(null);
 			const [selectedBack, setSelectedBack] = useState(null);
+			// The pin creates a watch, which must carry a passenger; a calendar monitor
+			// may have none, so this picker only appears when the source roster is empty.
+			const [pinPassengerId, setPinPassengerId] = useState('');
 			useLocaleRevision();
 
 			const outPick = outDays.find((day) => day.date === selectedOut) || null;
 			const backPick = backDays.find((day) => day.date === selectedBack) || null;
 			const pinTotal = outPick === null ? null : round ? (backPick === null ? null : outPick.total + backPick.total) : outPick.total;
-			const canPin = outPick !== null && pinTotal !== null && !props.busy;
+			const sourcePassengerIds = Array.isArray(monitor.passengerIds) ? monitor.passengerIds.filter((id) => typeof id === 'string') : [];
+			const needsPassenger = sourcePassengerIds.length === 0;
+			const passengerOptions = Array.isArray(props.passengers) ? props.passengers : [];
+			const pickedPassenger = needsPassenger && passengerOptions.some((passenger) => passenger.id === pinPassengerId);
+			const canPin = outPick !== null && pinTotal !== null && !props.busy && (!needsPassenger || pickedPassenger);
 			const enabled = monitor.enabled !== false;
 			const fetchedAt = calendar && typeof calendar.fetchedAt === 'string' ? calendar.fetchedAt : null;
-			const passengerCount = Array.isArray(monitor.passengerIds) ? monitor.passengerIds.length : 0;
-			const cadenceHours = props.calendarHours;
+			const passengerCount = sourcePassengerIds.length;
+			// Edit the monitor's own rhythm, falling back to the global default so an
+			// old record without `cadence` still shows something truthful.
+			const ownCadenceHours = monitorCalendarHours(monitor);
+			const cadenceHours = ownCadenceHours === null ? props.calendarHours : ownCadenceHours;
 
 			const meta = [monitorDates(monitor)];
 			meta.push(h('span', { key: 'sep-0', className: 'pw-strip-sep' }, '·'));
-			meta.push(h('span', { key: 'passengers' }, t('detail.passengersCount', { n: passengerCount })));
+			meta.push(h('span', { key: 'passengers' }, passengerCount === 0 ? t('detail.passengersNone') : t('detail.passengersCount', { n: passengerCount })));
 			if (typeof cadenceHours === 'number' && Number.isFinite(cadenceHours)) {
 				meta.push(h('span', { key: 'sep-1', className: 'pw-strip-sep' }, '·'));
 				meta.push(h('span', { key: 'cadence' }, t('detail.cadenceCalendar', { n: cadenceHours })));
@@ -2429,14 +2543,52 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 							backStatsItems.length === 0 ? null : h(Stats, { items: backStatsItems })
 						)
 					: null,
+				h(CadenceEditor, { key: 'cadence', mode: 'calendar', value: ownCadenceHours, busy: props.busy, onSave: (cadence) => props.onSaveCadence(monitor.id, cadence) }),
 				selectedOut === null
 					? null
 					: h(
 							'div',
-							{ className: 'pw-pin-bar', key: 'pin' },
+							{ className: 'pw-pin-bar', key: 'pin', style: { flexWrap: 'wrap' } },
 							h('span', { className: 'pw-grow', style: { fontSize: 12 } }, outPick === null ? '' : `${monthDay(outPick.date)}${round && backPick !== null ? ` – ${monthDay(backPick.date)}` : ''}${pinTotal === null ? '' : ` · ${formatMoney(pinTotal)}`}`),
-							h(Button, { size: 'sm', onClick: () => { setSelectedOut(null); setSelectedBack(null); }, disabled: props.busy === true }, t('common.cancel')),
-							h(Button, { variant: 'primary', size: 'sm', onClick: () => props.onPin({ departDate: outPick === null ? null : outPick.date, returnDate: round && backPick !== null ? backPick.date : null }), disabled: !canPin }, pinLabel)
+							// 来源监控没有乘客时，钉住必须先补一位：绝不带着空乘客去 POST，
+							// 否则 Host 会拒绝创建 watch 监控。
+							needsPassenger
+								? h(
+										'div',
+										{ className: 'pw-row', style: { gap: 6, alignItems: 'center' } },
+										h('span', { className: 'pw-hint' }, t('calendar.pinNeedPassenger')),
+										passengerOptions.length === 0
+											? h(Button, { size: 'sm', onClick: props.onSettings }, t('calendar.pinCreatePassenger'))
+											: h(
+													'select',
+													{
+														className: 'pw-input',
+														style: { width: 'auto', minWidth: 132 },
+														value: pinPassengerId,
+														'aria-label': t('calendar.pinPickPassenger'),
+														onChange: (event) => setPinPassengerId(event.target.value),
+													},
+													h('option', { value: '' }, t('calendar.pinPickPassenger')),
+													passengerOptions.map((passenger) => h('option', { key: passenger.id, value: passenger.id }, passenger.nickname))
+												)
+									)
+								: null,
+							h(Button, { size: 'sm', onClick: () => { setSelectedOut(null); setSelectedBack(null); setPinPassengerId(''); }, disabled: props.busy === true }, t('common.cancel')),
+							h(
+								Button,
+								{
+									variant: 'primary',
+									size: 'sm',
+									onClick: () =>
+										props.onPin({
+											departDate: outPick === null ? null : outPick.date,
+											returnDate: round && backPick !== null ? backPick.date : null,
+											passengerIds: needsPassenger ? [pinPassengerId] : sourcePassengerIds.slice(),
+										}),
+									disabled: !canPin,
+								},
+								pinLabel
+							)
 						)
 			);
 		}
@@ -2550,7 +2702,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 
 			const meta = [monitorDates(monitor)];
 			meta.push(h('span', { key: 'sep-0', className: 'pw-strip-sep' }, '·'));
-			meta.push(h('span', { key: 'passengers' }, t('detail.passengersCount', { n: passengerIds.length })));
+			meta.push(h('span', { key: 'passengers' }, passengerIds.length === 0 ? t('detail.passengersNone') : t('detail.passengersCount', { n: passengerIds.length })));
 			if (cadence !== null) {
 				meta.push(h('span', { key: 'sep-1', className: 'pw-strip-sep' }, '·'));
 				meta.push(h('span', { key: 'cadence' }, t('detail.cadence', { n: cadence })));
@@ -2627,7 +2779,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					Section,
 					{ key: 'real', title: t('watch.realTitle'), help: t('watch.realHint') },
 					passengerIds.length === 0
-						? h('span', { className: 'pw-hint' }, t('watch.emptyPrecise'))
+						? h('span', { className: 'pw-hint' }, t('watch.noPassengers'))
 						: h(
 								'div',
 								{ className: 'pw-col', style: { gap: 8 } },
@@ -2677,6 +2829,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								h('span', null, t('watch.taxTotal', { price: formatMoney(tax.total) }))
 							)
 				),
+				h(CadenceEditor, { key: 'cadence', mode: 'watch', value: cadence, busy: props.busy, onSave: (next) => props.onSaveCadence(monitor.id, next) }),
 				ruleSection
 			);
 		}
@@ -2733,7 +2886,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 
 			const saveSettings = async () => {
 				// Only the fields this page still edits: a partial POST must not clear the
-				// quiet hours, the cooldown or the global cadence the Host keeps.
+				// cooldown, the L1 budget or the global cadence the Host keeps.
 				const body = {
 					l2: {
 						enabled: draft.l2Enabled === true,
@@ -3034,7 +3187,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [datesFixed, setDatesFixed] = useState(false);
 			const [departDate, setDepartDate] = useState('');
 			const [returnDate, setReturnDate] = useState('');
-			// Nothing is selected by default: at least one passenger has to be picked.
+			// Nothing is selected by default. A watch needs at least one passenger;
+			// a calendar monitor may go without (the calendar price is passenger-agnostic).
 			const [selected, setSelected] = useState([]);
 			const [advancedOpen, setAdvancedOpen] = useState(false);
 			const [cadenceTouched, setCadenceTouched] = useState(false);
@@ -3046,7 +3200,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const passengers = Array.isArray(props.passengers) ? props.passengers : null;
 			const mode = datesFixed ? 'watch' : 'calendar';
 			const ids = Array.isArray(selected) ? selected : [];
-			const canSubmit = submitting === false && ids.length > 0;
+			// 行情模式可以不选乘客；只有定了日期的监控才强制至少一位。
+			const canSubmit = submitting === false && (datesFixed ? ids.length > 0 : true);
 
 			// Keep only ids that still exist; a later reload never re-selects anything.
 			useEffect(() => {
@@ -3097,7 +3252,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						}
 					}
 				}
-				if (ids.length === 0) {
+				// Host enforces the same rule; surfacing it here keeps the message local.
+				if (datesFixed && ids.length === 0) {
 					setError(t('new.passengerRequired'));
 					return;
 				}
@@ -3212,7 +3368,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 							title: t('new.passengers.title'),
 							action: passengers === null ? null : h('button', { type: 'button', className: 'pw-linkbtn', onClick: () => setManagerOpen(true) }, t('passengers.manage')),
 						},
-						passengerBlock
+						passengerBlock,
+						// 行情价是平台最低参考价，乘客选择只影响「监控」模式。
+						mode === 'calendar' ? h('span', { className: 'pw-hint' }, t('new.passengers.calendarHint')) : null
 					),
 					h(
 						'div',
@@ -3448,6 +3606,24 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			}, [auxView, auxReloadKey]);
 
 			const reloadAux = useCallback(() => setAuxReloadKey((value) => value + 1), []);
+
+			// Detail views name passengers, and the calendar pin bar may need to pick
+			// one, so the roster is read on demand even if the user never opened the
+			// new/settings view. `tick` retries a failed read on the next poll.
+			useEffect(() => {
+				if (view.kind !== 'detail' || passengers !== null) return undefined;
+				let live = true;
+				apiFetch('/passengers')
+					.then((data) => {
+						if (live) setPassengers(data && Array.isArray(data.passengers) ? data.passengers : []);
+					})
+					.catch(() => {
+						/* the roster is optional here; the rest of the page still works */
+					});
+				return () => {
+					live = false;
+				};
+			}, [view, passengers, tick]);
 			// #endregion
 
 			// #region navigation
@@ -3519,10 +3695,18 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					if (!monitor || !selection || typeof selection.departDate !== 'string') return;
 					const params = monitorParams(monitor);
 					const trip = monitorTrip(monitor);
+					const sourceIds = Array.isArray(monitor.passengerIds) ? monitor.passengerIds.slice() : [];
+					const passengerIds = Array.isArray(selection.passengerIds) ? selection.passengerIds.slice() : sourceIds;
+					// 钉住生成的是 watch 监控，Host 要求至少一位乘客：宁可在这里拦住，
+					// 也不能把空乘客发出去换一个 400。
+					if (passengerIds.length === 0) {
+						fail(new Error(t('calendar.pinNeedPassenger')));
+						return;
+					}
 					const key = `pin:${monitor.id}`;
 					setBusyKey(key);
 					try {
-						const body = { trip, dep: params.dep, arr: params.arr, departDate: selection.departDate, passengerIds: Array.isArray(monitor.passengerIds) ? monitor.passengerIds.slice() : [] };
+						const body = { trip, dep: params.dep, arr: params.arr, departDate: selection.departDate, passengerIds };
 						if (trip === 'round' && typeof selection.returnDate === 'string') body.returnDate = selection.returnDate;
 						const data = await apiFetch('/monitors', { method: 'POST', body });
 						const created = data && data.monitor && typeof data.monitor === 'object' ? data.monitor : null;
@@ -3561,6 +3745,17 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				async (id, rules) => {
 					await apiFetch(`/monitors/${encodeURIComponent(id)}`, { method: 'PATCH', body: { rules } });
 					await loadCore();
+				},
+				[loadCore]
+			);
+
+			/** Only `cadence` is sent; the detail page re-reads it after the save. */
+			const saveCadence = useCallback(
+				async (id, cadence) => {
+					await apiFetch(`/monitors/${encodeURIComponent(id)}`, { method: 'PATCH', body: { cadence } });
+					await loadCore();
+					// Re-read the detail payload so the page reflects the new rhythm at once.
+					setTick((value) => value + 1);
 				},
 				[loadCore]
 			);
@@ -3680,6 +3875,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								onRefreshL2: refreshRealPrice,
 								onDelete: deleteMonitor,
 								onSaveRules: saveRules,
+								onSaveCadence: saveCadence,
+								onSettings: goSettings,
 								onPin: (selection) => void pinDate(detailMonitor, selection),
 							});
 			} else if (view.kind === 'settings') {

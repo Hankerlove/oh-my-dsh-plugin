@@ -19,9 +19,10 @@
  *
  * The two on-disk schemas from M1/M2 are migrated in `init()` and written back
  * once (idempotent): `cadence.l1Minutes` is folded into `cadence.watchMinutes`,
- * the missing `l1` / `l2.minIntervalMinutes` fields are filled in, and the old
- * `state.l2BlockedUntil` is inherited as `state.l2Backoff` so a running cooldown
- * is not lost on upgrade.
+ * the missing `l1` / `l2.minIntervalMinutes` fields are filled in, the dead
+ * `notify.quietHours` is dropped (nothing ever read it; the quiet window is
+ * hard-coded in the scheduler), and the old `state.l2BlockedUntil` is inherited
+ * as `state.l2Backoff` so a running cooldown is not lost on upgrade.
  */
 import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -61,7 +62,6 @@ const DEFAULT_CONFIG = () => ({
   l2: { enabled: false, perDay: 3, minIntervalMinutes: 720 },
   notify: {
     feishuWebhook: '',
-    quietHours: [22, 8],
     cooldownMinutes: 360,
     digestAt: '09:00',
   },
@@ -109,7 +109,9 @@ function positiveInt(value, fallback) {
 /**
  * Fold every accepted config shape into the current schema.
  * `cadence.l1Minutes` is V2's removed field: its value is carried over to
- * `watchMinutes` (rounded up) and then dropped.
+ * `watchMinutes` (rounded up) and then dropped. `notify.quietHours` is dead
+ * weight (the settings page never exposed it, no collector read it), so it is
+ * stripped here and the cleaned document is written back by `init()`.
  */
 function normaliseConfig(raw) {
   const base = DEFAULT_CONFIG();
@@ -137,12 +139,18 @@ function normaliseConfig(raw) {
 
   const passengers = Array.isArray(input.passengers) ? input.passengers.filter((item) => item && typeof item === 'object' && item.id) : [];
 
+  // Spread first, then delete, so a field this version does not know about is
+  // preserved; only the known-dead key is removed. The key order stays stable,
+  // which keeps the second `init()` byte-identical and therefore write-free.
+  const notify = { ...base.notify, ...(input.notify && typeof input.notify === 'object' ? input.notify : {}) };
+  delete notify.quietHours;
+
   return {
     passengers,
     cadence,
     l1,
     l2,
-    notify: { ...base.notify, ...(input.notify && typeof input.notify === 'object' ? input.notify : {}) },
+    notify,
     panelBaseUrl: typeof input.panelBaseUrl === 'string' ? input.panelBaseUrl : '',
   };
 }
@@ -191,6 +199,10 @@ function normaliseStoredMonitor(monitor, config) {
     params,
     title: monitorTitle(params),
     enabled: monitor.enabled !== false,
+    // A calendar monitor may legitimately carry no passenger (the calendar
+    // price is passenger-agnostic); only a watch needs a non-empty roster, and
+    // that rule is enforced on create/update, not on read: disk data must always
+    // load so an upgrade can never brick the panel.
     passengerIds: Array.isArray(monitor.passengerIds) ? monitor.passengerIds.filter((id) => typeof id === 'string') : [],
     rules: mode === 'calendar' ? [] : Array.isArray(monitor.rules) ? monitor.rules : [],
     cadence: normaliseCadence(monitor.cadence, config, mode),
@@ -469,7 +481,8 @@ export function createStore(rootDir) {
     const params = normaliseParams(inputParams(input));
     const mode = monitorMode(params);
     const passengerIds = Array.isArray(input.passengerIds) ? input.passengerIds.filter((id) => findPassenger(id)) : [];
-    if (passengerIds.length === 0) throw new Error('至少选择一位乘客');
+    // 行情模式按平台最低参考价，与乘客身份无关，允许留空；监控模式仍必须有人。
+    if (mode === 'watch' && passengerIds.length === 0) throw new Error('监控模式至少选择一位乘客');
     const rules = mode === 'calendar'
       ? []
       : input.rules === undefined
@@ -503,9 +516,7 @@ export function createStore(rootDir) {
 
     if (input.enabled !== undefined) next.enabled = Boolean(input.enabled);
     if (input.passengerIds !== undefined) {
-      const ids = input.passengerIds.filter((pid) => findPassenger(pid));
-      if (ids.length === 0) throw new Error('至少选择一位乘客');
-      next.passengerIds = ids;
+      next.passengerIds = Array.isArray(input.passengerIds) ? input.passengerIds.filter((pid) => findPassenger(pid)) : [];
     }
     if (input.params !== undefined) {
       next.params = normaliseParams({ ...current.params, ...inputParams(input.params) });
@@ -520,6 +531,13 @@ export function createStore(rootDir) {
       next.rules = DEFAULT_WATCH_RULES();
     }
     if (input.cadence !== undefined) next.cadence = normaliseCadence(input.cadence, cache.config, next.mode || monitorMode(next.params));
+
+    // 与 createMonitor 同一规则：行情可以没有乘客，监控必须至少一位。只在这次
+    // PATCH 动了乘客或日期（可能把 calendar 变成 watch）时校验，这样一份缺少
+    // 乘客的老 watch 数据仍能被暂停/改节奏，不会在无关操作上被卡死。
+    if (input.passengerIds !== undefined || input.params !== undefined) {
+      if (next.mode === 'watch' && next.passengerIds.length === 0) throw new Error('监控模式至少选择一位乘客');
+    }
 
     cache.monitors[index] = next;
     await saveMonitors();
@@ -540,6 +558,18 @@ export function createStore(rootDir) {
         /* the file may never have been written */
       }
     }
+    // Drop this monitor's scheduler bookkeeping, otherwise `state.json` keeps a
+    // dead entry per deleted monitor forever and grows without bound.
+    const state = { ...cache.state };
+    let touched = false;
+    for (const field of ['nextDue', 'lastCollectBy', 'failures', 'lastError', 'l2LastRunBy', 'l2LastOk', 'calendarFetchedAt']) {
+      if (state[field] && Object.prototype.hasOwnProperty.call(state[field], id)) {
+        state[field] = { ...state[field] };
+        delete state[field][id];
+        touched = true;
+      }
+    }
+    if (touched) await saveState(state);
     return true;
   }
   // #endregion

@@ -300,6 +300,15 @@ export function createRouter({ store, logger, actions }) {
           const body = await readBody(req);
           const next = await store.updateMonitor(id, body);
           if (!next) return sendJson(res, 404, { ok: false, error: '监控不存在' });
+          if (body.cadence !== undefined) {
+            // A cadence edit has to take effect now: the scheduler only compares
+            // `nextDue`, so a stale entry would keep the old rhythm until the
+            // previous interval expired. Dropping it makes the next tick collect.
+            const state = store.getState();
+            const nextDue = { ...(state.nextDue || {}) };
+            delete nextDue[id];
+            await store.saveState({ nextDue });
+          }
           return sendJson(res, 200, { ok: true, data: { monitor: await monitorListItem(next) } });
         }
         if (method === 'DELETE') {
