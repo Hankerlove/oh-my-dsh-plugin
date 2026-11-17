@@ -191,7 +191,8 @@ export function apply(ctx) {
     const config = store.getConfig();
     let base;
     if (monitor.mode === 'calendar') {
-      base = Math.max(1, Number(config?.cadence?.calendarHours) || 6) * 3600e3;
+      const hours = Math.max(1, Number(monitor.cadence?.hours) || Number(config?.cadence?.calendarHours) || 6);
+      base = hours * 3600e3;
     } else {
       const minutes = Math.max(1, Number(monitor.cadence?.minutes) || Number(config?.cadence?.watchMinutes) || 60);
       // 夜间静默期间 watch 的 L1 间隔 ×4：不做全停，但也不按原节奏跑。

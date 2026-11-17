@@ -495,7 +495,8 @@ window.__ModuleLoader__.load({
 			'list.settings': '设置',
 			'list.refresh': '刷新',
 			'filter.all': '全部',
-			'filter.flight': '机票',
+			'filter.calendar': '行情',
+			'filter.watch': '监控',
 			'status.ok': '采集正常',
 			'status.warn': '采集异常',
 			'status.never': '尚未采集',
@@ -527,6 +528,7 @@ window.__ModuleLoader__.load({
 			'empty.title': '还没有价格监控',
 			'empty.body': '没定日期就创建「行情监控」，看未来 380 天的价格日历；定了日期就创建「监控」，追踪价格走势和登录态实付价。',
 			'empty.action': '新建监控',
+			'empty.filtered': '当前筛选下没有监控。',
 			'error.network': '网络请求失败，请检查连接后重试',
 			'error.http': '请求失败（HTTP {status}）',
 			'common.retry': '重试',
@@ -541,6 +543,8 @@ window.__ModuleLoader__.load({
 			'type.adult': '成人',
 			'type.student': '学生',
 			'type.child': '儿童',
+			'cadence.hours': '每 {n} 小时',
+			'cadence.minutes': '每 {n} 分钟',
 			'detail.back': '返回',
 			'detail.pause': '暂停',
 			'detail.resume': '启用',
@@ -557,7 +561,6 @@ window.__ModuleLoader__.load({
 			'calendar.back': '回程',
 			'calendar.empty': '还没有日历数据，稍后会自动刷新',
 			'calendar.fetchedAt': '更新于 {when}',
-			'calendar.pickHint': '点柱子挑日子，再点下方按钮把它钉成监控',
 			'calendar.pin': '钉住 {date} · {price}',
 			'calendar.pinRound': '钉住 {depart} – {return} · {price}',
 			'calendar.pinNeedReturn': '再选一个回程日期',
@@ -605,73 +608,61 @@ window.__ModuleLoader__.load({
 			'chart.ref.target': '目标价',
 			'chart.ref.avg7': '7 日均价',
 			'chart.empty': '还没有数据点',
-			'chart.bare': '裸价 {price}',
 			'settings.title': '设置',
 			'settings.back': '返回',
-			'settings.passengers.title': '乘客名单',
-			'settings.passengers.help': '任务里勾选乘客，价格按乘客类型取最低可订票价。',
-			'settings.passengers.empty': '还没有乘客，先添加一位。',
-			'settings.passengers.nickname': '昵称',
-			'settings.passengers.type': '类型',
-			'settings.passengers.age': '年龄（可选）',
-			'settings.passengers.ageUnit': '岁',
-			'settings.passengers.ageInvalid': '年龄需在 0–120 之间。',
-			'settings.passengers.nicknameRequired': '请填写昵称。',
-			'settings.passengers.add': '添加',
-			'settings.passengers.delete': '删除乘客',
-			'settings.passengers.deleteConfirm': '删除乘客「{name}」？',
-			'settings.passengers.referenced': '该乘客仍被任务引用，请先在任务里取消勾选。',
-			'settings.feishu.title': '飞书通知',
-			'settings.feishu.help': '在飞书单人群里添加自定义机器人，粘贴 webhook 地址。',
-			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
-			'settings.cadence.title': '采集节奏',
-			'settings.cadence.calendar': '行情刷新（日历）',
-			'settings.cadence.watch': '监控刷新（走势）',
-			'settings.cadence.help': '行情模式按小时刷新未来日历；监控模式按分钟刷新该日期的价格。',
-			'settings.cadence.hours': '{n} 小时',
-			'settings.cadence.minutes': '{n} 分钟',
-			'settings.l2.title': '精确采集',
-			'settings.l2.enable': '启用精确采集（需登录携程）',
-			'settings.l2.perDay': '每天最多精确采集次数',
-			'settings.l2.times': '{n} 次',
-			'settings.l2.minInterval': '最短间隔',
-			'settings.l2.hours': '{n} 小时',
-			'settings.l2.help': '精确采集会用真实浏览器读取航班列表、票价产品与含机建燃油总价；每天次数越多、间隔越短，被携程风控的概率越高。',
-			'settings.l2.auth': '携程登录',
-			'settings.l2.lastVerified': '上次校验 {time}',
-			'settings.l2.neverVerified': '尚未校验登录态',
-			'settings.l2.budget': '今日已用 {used}/{perDay} 次',
-			'settings.login': '登录携程',
-			'settings.logout': '退出登录',
-			'settings.logoutConfirm': '退出登录会删除浏览器里的携程登录信息，确认退出？',
-			'settings.notify.title': '通知降噪',
-			'settings.notify.quiet': '静默时段',
-			'settings.notify.cooldown': '冷却（分钟）',
-			'settings.notify.digestAt': '每日汇总时间',
 			'settings.save': '保存设置',
 			'settings.saved': '已保存',
 			'settings.saving': '保存中…',
+			'settings.login': '登录携程',
+			'settings.logout': '退出登录',
+			'settings.logoutConfirm': '退出登录会删除浏览器里的携程登录信息，确认退出？',
+			'settings.l2.auth': '携程登录',
+			'settings.l2.enable': '精确采集',
+			'settings.l2.lastVerified': '上次校验 {time}',
+			'settings.l2.neverVerified': '尚未校验登录态',
+			'settings.l2.perDay': '每日上限',
+			'settings.l2.times': '{n} 次',
+			'settings.l2.minInterval': '最短间隔',
+			'settings.l2.hours': '{n} 小时',
+			'settings.l2.budget': '今日已用 {used}/{perDay} 次',
+			'settings.feishu.title': '飞书通知',
+			'settings.feishu.label': 'Webhook 地址',
+			'settings.feishu.help': '在飞书群聊里添加自定义机器人，粘贴 webhook 地址。',
+			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
+			'settings.feishu.digestAt': '每日汇总时间',
+			'settings.feishu.digestHelp': '每天这个时间把当前所有已打开监控的汇总推送到飞书。',
+			'passengers.title': '乘客',
+			'passengers.manage': '管理乘客',
+			'passengers.new': '新建乘客',
+			'passengers.empty': '还没有乘客。',
+			'passengers.nickname': '昵称',
+			'passengers.type': '类型',
+			'passengers.age': '年龄（可选）',
+			'passengers.ageUnit': '岁',
+			'passengers.ageInvalid': '年龄需在 0–120 之间。',
+			'passengers.nicknameRequired': '请填写昵称。',
+			'passengers.add': '添加',
+			'passengers.delete': '删除乘客',
+			'passengers.deleteConfirm': '删除乘客「{name}」？',
+			'passengers.referenced': '该乘客仍被任务引用，请先在任务里取消勾选。',
 			'new.title': '新建监控',
 			'new.back': '取消',
 			'new.route.title': '航线',
 			'new.from': '出发地',
 			'new.to': '目的地',
 			'new.cityPlaceholder': '三字码或城市名，如 BJS / 北京',
-			'new.cityHint': '支持三字码（BJS）或城市名（北京）。',
 			'new.cityEmpty': '没有匹配的城市',
 			'new.trip.title': '行程',
 			'new.trip.oneway': '单程',
 			'new.trip.round': '往返',
 			'new.date.title': '日期',
 			'new.date.known': '已确定日期',
-			'new.date.calendarHint': '关掉时只追踪未来 380 天行情，从日历里挑日子。',
-			'new.date.watchHint': '开的时候按这个日期监控价格走势与登录态实付价。',
 			'new.departDate': '出发日',
 			'new.returnDate': '返回日',
 			'new.passengers.title': '乘客',
-			'new.passengers.help': '至少选 1 位乘客，默认全选。',
-			'new.passengers.empty': '还没有乘客，先去设置里添加乘客。',
-			'new.passengers.goSettings': '去设置添加乘客',
+			'new.passengers.empty': '还没有乘客，先新建一位。',
+			'new.advanced.title': '高级选项',
+			'new.advanced.cadence': '采集节奏',
 			'new.submit.calendar': '创建行情监控',
 			'new.submit.watch': '创建监控',
 			'new.submitting': '创建中…',
@@ -731,7 +722,8 @@ window.__ModuleLoader__.load({
 			'list.settings': 'Settings',
 			'list.refresh': 'Refresh',
 			'filter.all': 'All',
-			'filter.flight': 'Flights',
+			'filter.calendar': 'Calendar',
+			'filter.watch': 'Watch',
 			'status.ok': 'Collector healthy',
 			'status.warn': 'Collector failing',
 			'status.never': 'Never collected',
@@ -763,10 +755,11 @@ window.__ModuleLoader__.load({
 			'empty.title': 'No price watches yet',
 			'empty.body': 'Create a calendar watch when the dates are open: it keeps the next 380 days of lowest fares. Fix the dates for a watch that tracks the price trend and the signed-in real fare.',
 			'empty.action': 'New watch',
+			'empty.filtered': 'Nothing matches this filter.',
 			'error.network': 'Network request failed. Check your connection and retry.',
 			'error.http': 'Request failed (HTTP {status})',
 			'common.retry': 'Retry',
-			'common.dismiss': 'Dismiss',
+			'common.dismiss': 'Close',
 			'common.saving': 'Saving…',
 			'common.cancel': 'Cancel',
 			'time.justNow': 'just now',
@@ -777,6 +770,8 @@ window.__ModuleLoader__.load({
 			'type.adult': 'Adult',
 			'type.student': 'Student',
 			'type.child': 'Child',
+			'cadence.hours': 'Every {n} h',
+			'cadence.minutes': 'Every {n} min',
 			'detail.back': 'Back',
 			'detail.pause': 'Pause',
 			'detail.resume': 'Resume',
@@ -793,7 +788,6 @@ window.__ModuleLoader__.load({
 			'calendar.back': 'Return',
 			'calendar.empty': 'No calendar data yet. It refreshes on schedule.',
 			'calendar.fetchedAt': 'Updated {when}',
-			'calendar.pickHint': 'Pick a bar to choose the day, then pin it as a watch below',
 			'calendar.pin': 'Pin {date} · {price}',
 			'calendar.pinRound': 'Pin {depart} – {return} · {price}',
 			'calendar.pinNeedReturn': 'Pick a return day too',
@@ -841,73 +835,61 @@ window.__ModuleLoader__.load({
 			'chart.ref.target': 'Target',
 			'chart.ref.avg7': '7-day avg',
 			'chart.empty': 'No data points yet',
-			'chart.bare': 'Fare {price}',
 			'settings.title': 'Settings',
 			'settings.back': 'Back',
-			'settings.passengers.title': 'Passengers',
-			'settings.passengers.help': 'Pick passengers per watch; each price uses the cheapest fare that passenger can book.',
-			'settings.passengers.empty': 'No passengers yet. Add one below.',
-			'settings.passengers.nickname': 'Nickname',
-			'settings.passengers.type': 'Type',
-			'settings.passengers.age': 'Age (optional)',
-			'settings.passengers.ageUnit': 'y',
-			'settings.passengers.ageInvalid': 'Age must be between 0 and 120.',
-			'settings.passengers.nicknameRequired': 'Nickname is required.',
-			'settings.passengers.add': 'Add',
-			'settings.passengers.delete': 'Delete passenger',
-			'settings.passengers.deleteConfirm': 'Delete passenger "{name}"?',
-			'settings.passengers.referenced': 'This passenger is still used by a watch. Uncheck it there first.',
-			'settings.feishu.title': 'Feishu notifications',
-			'settings.feishu.help': 'Add a custom bot to a Feishu group, then paste its webhook URL here.',
-			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
-			'settings.cadence.title': 'Collection rhythm',
-			'settings.cadence.calendar': 'Calendar refresh (hours)',
-			'settings.cadence.watch': 'Watch refresh (minutes)',
-			'settings.cadence.help': 'Calendar watches refresh the 380-day calendar on an hourly rhythm; watch monitors refresh their fixed date on a minute rhythm.',
-			'settings.cadence.hours': '{n} hours',
-			'settings.cadence.minutes': '{n} minutes',
-			'settings.l2.title': 'Precise collection',
-			'settings.l2.enable': 'Enable precise collection (Ctrip sign-in required)',
-			'settings.l2.perDay': 'Precise collections per day',
-			'settings.l2.times': '{n}×',
-			'settings.l2.minInterval': 'Minimum interval',
-			'settings.l2.hours': '{n} hours',
-			'settings.l2.help': 'Precise collection drives a real browser to read the flight list, fare products and the tax-included total. More runs per day or a shorter interval raises the chance of Ctrip rate limiting.',
-			'settings.l2.auth': 'Ctrip sign-in',
-			'settings.l2.lastVerified': 'Last checked {time}',
-			'settings.l2.neverVerified': 'Sign-in has not been checked yet',
-			'settings.l2.budget': 'Used {used}/{perDay} today',
-			'settings.login': 'Sign in to Ctrip',
-			'settings.logout': 'Sign out',
-			'settings.logoutConfirm': 'Signing out deletes the Ctrip session stored in the browser profile. Continue?',
-			'settings.notify.title': 'Notification quieting',
-			'settings.notify.quiet': 'Quiet hours',
-			'settings.notify.cooldown': 'Cooldown (minutes)',
-			'settings.notify.digestAt': 'Digest time',
 			'settings.save': 'Save settings',
 			'settings.saved': 'Saved',
 			'settings.saving': 'Saving…',
+			'settings.login': 'Sign in to Ctrip',
+			'settings.logout': 'Sign out',
+			'settings.logoutConfirm': 'Signing out deletes the Ctrip session stored in the browser profile. Continue?',
+			'settings.l2.auth': 'Ctrip sign-in',
+			'settings.l2.enable': 'Precise collection',
+			'settings.l2.lastVerified': 'Last checked {time}',
+			'settings.l2.neverVerified': 'Sign-in has not been checked yet',
+			'settings.l2.perDay': 'Daily limit',
+			'settings.l2.times': '{n}×',
+			'settings.l2.minInterval': 'Minimum interval',
+			'settings.l2.hours': '{n} hours',
+			'settings.l2.budget': 'Used {used}/{perDay} today',
+			'settings.feishu.title': 'Feishu notifications',
+			'settings.feishu.label': 'Webhook URL',
+			'settings.feishu.help': 'Add a custom bot to a Feishu group, then paste its webhook URL here.',
+			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
+			'settings.feishu.digestAt': 'Daily digest time',
+			'settings.feishu.digestHelp': 'Every day at this time, a digest of all enabled watches is pushed to Feishu.',
+			'passengers.title': 'Passengers',
+			'passengers.manage': 'Manage passengers',
+			'passengers.new': 'New passenger',
+			'passengers.empty': 'No passengers yet.',
+			'passengers.nickname': 'Nickname',
+			'passengers.type': 'Type',
+			'passengers.age': 'Age (optional)',
+			'passengers.ageUnit': 'y',
+			'passengers.ageInvalid': 'Age must be between 0 and 120.',
+			'passengers.nicknameRequired': 'Nickname is required.',
+			'passengers.add': 'Add',
+			'passengers.delete': 'Delete passenger',
+			'passengers.deleteConfirm': 'Delete passenger "{name}"?',
+			'passengers.referenced': 'This passenger is still used by a watch. Uncheck it there first.',
 			'new.title': 'New watch',
 			'new.back': 'Cancel',
 			'new.route.title': 'Route',
 			'new.from': 'From',
 			'new.to': 'To',
 			'new.cityPlaceholder': 'IATA code or city name, e.g. BJS / Beijing',
-			'new.cityHint': 'Type an IATA code (BJS) or a city name (Beijing).',
 			'new.cityEmpty': 'No matching city',
 			'new.trip.title': 'Trip',
 			'new.trip.oneway': 'One way',
 			'new.trip.round': 'Round trip',
 			'new.date.title': 'Dates',
 			'new.date.known': 'Dates fixed',
-			'new.date.calendarHint': 'Off: only track the next 380 days of fares, then pick a day from the calendar.',
-			'new.date.watchHint': 'On: watch this date for its price trend and signed-in real fares.',
 			'new.departDate': 'Departure',
 			'new.returnDate': 'Return',
 			'new.passengers.title': 'Passengers',
-			'new.passengers.help': 'Pick at least one passenger; all are selected by default.',
-			'new.passengers.empty': 'No passengers yet. Add one in Settings first.',
-			'new.passengers.goSettings': 'Add passengers in Settings',
+			'new.passengers.empty': 'No passengers yet. Create one first.',
+			'new.advanced.title': 'Advanced',
+			'new.advanced.cadence': 'Collection rhythm',
 			'new.submit.calendar': 'Create calendar watch',
 			'new.submit.watch': 'Create watch',
 			'new.submitting': 'Creating…',
@@ -960,6 +942,7 @@ window.__ModuleLoader__.load({
 			'city.CGQ': 'Changchun',
 			'city.LXA': 'Lhasa',
 		};
+
 		// #endregion
 
 		// #region styles
@@ -970,148 +953,203 @@ window.__ModuleLoader__.load({
 		 * theme token, so dark mode comes from the host variables for free.
 		 */
 		const STYLE_TEXT = `
-.pw-root { box-sizing: border-box; display: flex; flex-direction: column; flex: 1 1 auto; height: 100%; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; line-height: 1.5; }
+.pw-root { --pw-inset: clamp(24px, 4vw, 48px); --pw-max: 880px; box-sizing: border-box; display: flex; flex-direction: column; flex: 1 1 auto; height: 100%; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; line-height: 1.5; }
 .pw-root *, .pw-root *::before, .pw-root *::after { box-sizing: border-box; }
-.pw-toolbar { flex: none; display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
-.pw-page-title { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
-.pw-page-sub { color: var(--dsw-alias-label-secondary); font-size: 12px; }
-.pw-strip { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 20px; border-bottom: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-secondary); font-size: 12px; flex-wrap: wrap; }
-.pw-strip-sep { color: var(--dsw-alias-border-l2); }
-.pw-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--dsw-alias-border-l2) transparent; }
+@media (max-width: 767px) { .pw-root { --pw-inset: 20px; } }
+/* page shell: fixed head (title row + optional sub row) over one scrolling content column */
+.pw-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.pw-head { flex: none; padding: 28px var(--pw-inset) 16px; border-bottom: .5px solid var(--dsw-alias-border-l1); }
+.pw-head-row { display: flex; align-items: flex-start; gap: 10px; width: 100%; max-width: var(--pw-max); margin: 0 auto; }
+.pw-head-lead { flex: none; display: flex; align-items: center; }
+.pw-head-text { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.pw-title { margin: 0; font-size: 20px; font-weight: 500; line-height: 28px; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.pw-intro { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.pw-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.pw-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; flex: none; margin-left: auto; }
+.pw-head-sub { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; width: 100%; max-width: var(--pw-max); margin: 14px auto 0; }
+.pw-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.pw-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--dsw-alias-scrollbar-bg-l2) transparent; }
 .pw-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
-.pw-scroll::-webkit-scrollbar-thumb { background: var(--dsw-alias-border-l2); border-radius: 999px; }
+.pw-scroll::-webkit-scrollbar-thumb { background: var(--dsw-alias-scrollbar-bg-l2); border-radius: 999px; }
+.pw-scroll::-webkit-scrollbar-thumb:hover { background: var(--dsw-alias-scrollbar-hover-l2); }
 .pw-scroll::-webkit-scrollbar-track { background: transparent; }
-.pw-body { width: 100%; max-width: 880px; margin: 0 auto; padding: 16px 20px 28px; display: flex; flex-direction: column; gap: 12px; }
-.pw-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; line-height: 1; cursor: pointer; white-space: nowrap; transition: background 120ms ease, border-color 120ms ease, color 120ms ease; }
-.pw-btn:hover:not(:disabled) { background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-border-l2); }
-.pw-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
-.pw-btn:disabled { opacity: 0.55; cursor: default; }
-.pw-btn-sm { height: 26px; padding: 0 9px; font-size: 12px; border-radius: 8px; }
-.pw-btn-primary { border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-brand-primary); font-weight: 500; }
-.pw-btn-primary:hover:not(:disabled) { border-color: var(--dsw-alias-brand-primary); background: var(--dsw-alias-bg-layer-2); }
-.pw-btn-danger { border-color: var(--dsw-alias-border-l1); color: var(--dsw-alias-state-error-primary); }
-.pw-btn-danger:hover:not(:disabled) { border-color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-bg-layer-2); }
-.pw-btn-lg { height: 34px; padding: 0 16px; border-radius: 11px; }
-.pw-iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: none; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; transition: background 120ms ease, color 120ms ease; }
-.pw-iconbtn:hover:not(:disabled) { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
-.pw-iconbtn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
-.pw-iconbtn:disabled { opacity: 0.5; cursor: default; }
+.pw-content { display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: var(--pw-max); margin: 0 auto; padding: 20px var(--pw-inset) 48px; }
+/* layout helpers */
 .pw-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pw-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.pw-grow { flex: 1; min-width: 0; }
+.pw-grow { flex: 1 1 auto; min-width: 0; }
+.pw-spacer { flex: 1 1 auto; }
 .pw-muted { color: var(--dsw-alias-label-secondary); }
 .pw-mono { font-variant-numeric: tabular-nums; }
 .pw-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pw-card { position: relative; display: flex; align-items: center; gap: 14px; padding: 13px 16px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); cursor: pointer; text-align: left; font-family: inherit; color: var(--dsw-alias-label-primary); transition: background 120ms ease, border-color 120ms ease; }
+.pw-divider { height: .5px; background: var(--dsw-alias-border-l1); }
+/* typography */
+.pw-hint { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.pw-label { font-size: 12px; line-height: 18px; font-weight: 500; color: var(--dsw-alias-label-secondary); }
+.pw-group-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--dsw-alias-label-primary); }
+.pw-linkbtn { padding: 0; border: none; background: none; color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: 12px; line-height: 20px; cursor: pointer; }
+.pw-linkbtn:hover { color: var(--dsw-alias-label-primary); }
+.pw-linkbtn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; border-radius: 4px; }
+/* buttons */
+.pw-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; line-height: 20px; cursor: pointer; white-space: nowrap; transition: background 120ms ease, border-color 120ms ease, color 120ms ease; }
+.pw-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-border-l2); }
+.pw-btn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
+.pw-btn:disabled { opacity: 0.5; cursor: default; }
+.pw-btn-lg { height: 36px; padding: 0 16px; font-size: 13px; border-radius: var(--dsw-radius-lg, 16px); }
+.pw-btn-sm { height: 28px; padding: 0 10px; font-size: 12px; border-radius: var(--dsw-radius-sm, 8px); }
+.pw-btn-primary { border-color: var(--dsw-alias-state-business-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent); color: var(--dsw-alias-state-business-primary); font-weight: 500; }
+.pw-btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 16%, transparent); border-color: var(--dsw-alias-state-business-primary); }
+.pw-btn-danger { color: var(--dsw-alias-state-error-primary); }
+.pw-btn-danger:hover:not(:disabled) { border-color: var(--dsw-alias-state-error-primary); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent); }
+.pw-iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: none; border-radius: var(--dsw-radius-sm, 8px); background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; transition: background 120ms ease, color 120ms ease; }
+.pw-iconbtn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.pw-iconbtn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
+.pw-iconbtn:disabled { opacity: 0.5; cursor: default; }
+/* form */
+.pw-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pw-form-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.pw-form-row > .pw-field { flex: 1 1 160px; }
+.pw-input { width: 100%; height: 32px; padding: 0 10px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l4); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; outline: none; transition: border-color 120ms ease, box-shadow 120ms ease; }
+.pw-input:hover:not(:disabled) { border-color: var(--dsw-alias-border-l3); }
+.pw-input:focus { border-color: var(--dsw-alias-state-business-primary); box-shadow: inset 0 0 0 .5px var(--dsw-alias-state-business-primary); }
+.pw-input::placeholder { color: var(--dsw-alias-label-caption); }
+.pw-input:disabled { opacity: 0.6; }
+.pw-input[data-invalid="true"] { border-color: var(--dsw-alias-state-error-primary); box-shadow: none; }
+select.pw-input { padding-right: 6px; cursor: pointer; }
+textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: vertical; }
+/* date field: the whole box opens the native picker */
+.pw-date { position: relative; display: flex; width: 100%; cursor: pointer; }
+.pw-date input[type="date"] { cursor: pointer; }
+.pw-date input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: 0.65; }
+/* inline segmented control (trip, modes) */
+.pw-seg { display: inline-flex; align-items: center; gap: 2px; height: 30px; padding: 2px; border-radius: var(--dsw-radius-sm, 8px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2); }
+.pw-seg-btn { height: 26px; padding: 0 10px; border: none; border-radius: calc(var(--dsw-radius-sm, 8px) - 2px); background: transparent; color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: 12px; line-height: 1; cursor: pointer; white-space: nowrap; transition: background 120ms ease, color 120ms ease; }
+.pw-seg-btn:hover { color: var(--dsw-alias-label-primary); }
+.pw-seg-btn[data-active="true"] { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); font-weight: 500; }
+.pw-seg-btn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
+/* filter pills (list page) */
+.pw-filters { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.pw-filter { height: 28px; padding: 0 10px; border: none; border-radius: 14px; background: transparent; color: var(--dsw-alias-label-tertiary); font-family: inherit; font-size: 13px; line-height: 22px; cursor: pointer; white-space: nowrap; }
+.pw-filter:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.pw-filter[data-active="true"] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); font-weight: 500; }
+.pw-filter:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
+/* groups (new-monitor form) */
+.pw-form { display: flex; flex-direction: column; gap: 20px; }
+.pw-group { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pw-group-head { display: flex; align-items: center; gap: 8px; min-height: 20px; }
+.pw-group-head .pw-linkbtn { margin-left: auto; }
+/* cards */
+.pw-card { position: relative; display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: var(--dsw-radius-lg, 16px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); cursor: pointer; text-align: left; font-family: inherit; color: var(--dsw-alias-label-primary); transition: background 120ms ease, border-color 120ms ease; }
 .pw-card:hover { background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-border-l2); }
-.pw-card:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
+.pw-card:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; }
 .pw-card[data-disabled="true"] { opacity: 0.62; }
 .pw-card[data-disabled="true"]:hover { opacity: 0.85; }
-.pw-card-title { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 500; min-width: 0; }
-.pw-card-meta { font-size: 12px; color: var(--dsw-alias-label-secondary); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.pw-price { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
-.pw-spark { flex: none; display: block; overflow: visible; }
-.pw-chip { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2); font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pw-card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; line-height: 20px; min-width: 0; }
+.pw-card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.pw-list { display: flex; flex-direction: column; gap: 8px; }
+.pw-price { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.pw-section { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border-radius: var(--dsw-radius-lg, 16px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
+.pw-section-head { display: flex; flex-direction: column; gap: 3px; }
+.pw-section-title { font-size: 14px; font-weight: 600; line-height: 20px; }
+.pw-section-help { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+/* chips, dots, switches */
+.pw-chip { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2); font-size: 11px; font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pw-chip[data-tone="up"] { color: var(--dsw-alias-state-error-primary); }
 .pw-chip[data-tone="down"] { color: var(--dsw-alias-state-success-primary); }
 .pw-chip[data-tone="warn"] { color: var(--dsw-alias-state-warn-primary); }
 .pw-chip[data-tone="flat"] { color: var(--dsw-alias-label-secondary); }
-.pw-chip[data-tone="brand"] { color: var(--dsw-alias-brand-primary); }
-.pw-authchip { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; border: 1px solid transparent; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: 11px; font-weight: 500; line-height: 1; white-space: nowrap; }
+.pw-chip[data-tone="brand"] { color: var(--dsw-alias-state-business-primary); }
+.pw-authchip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; border: .5px solid transparent; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: 11px; font-weight: 500; line-height: 1; white-space: nowrap; }
 .pw-authchip[data-tone="ok"] { color: var(--dsw-alias-state-success-primary); }
 .pw-authchip[data-tone="warn"] { color: var(--dsw-alias-state-warn-primary); }
 .pw-authchip[data-tone="idle"] { color: var(--dsw-alias-label-secondary); }
 .pw-authchip[data-clickable="true"] { cursor: pointer; border-color: var(--dsw-alias-border-l1); }
-.pw-authchip[data-clickable="true"]:hover { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); }
-.pw-authchip[data-clickable="true"]:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+.pw-authchip[data-clickable="true"]:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.pw-authchip[data-clickable="true"]:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
 .pw-authchip[data-busy="true"] { color: var(--dsw-alias-label-secondary); }
 .pw-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-state-idle-primary); flex: none; }
 .pw-dot[data-tone="ok"] { background: var(--dsw-alias-state-success-primary); }
 .pw-dot[data-tone="warn"] { background: var(--dsw-alias-state-warn-primary); }
 .pw-dot[data-tone="error"] { background: var(--dsw-alias-state-error-primary); }
-.pw-switch { position: relative; flex: none; width: 36px; height: 20px; padding: 0; border-radius: 999px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-3); cursor: pointer; transition: background 140ms ease, border-color 140ms ease; }
-.pw-switch > span { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--dsw-alias-bg-base); transition: transform 140ms ease; }
-.pw-switch[data-state="on"] { background: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary); }
+.pw-switch { position: relative; flex: none; width: 36px; height: 20px; padding: 0; border-radius: 999px; border: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-3); cursor: pointer; transition: background 140ms ease, border-color 140ms ease; }
+.pw-switch > span { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--dsw-alias-switch-thumb, var(--dsw-alias-bg-base)); transition: transform 140ms ease; }
+.pw-switch[data-state="on"] { background: var(--dsw-alias-state-business-primary); border-color: var(--dsw-alias-state-business-primary); }
 .pw-switch[data-state="on"] > span { transform: translateX(16px); }
-.pw-switch:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
+.pw-switch:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; }
 .pw-switch:disabled { opacity: 0.5; cursor: default; }
-.pw-input { width: 100%; height: 32px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; outline: none; transition: border-color 120ms ease; }
-.pw-input:focus { border-color: var(--dsw-alias-brand-primary); }
-.pw-input::placeholder { color: var(--dsw-alias-label-secondary); }
-.pw-input:disabled { opacity: 0.6; }
-.pw-input[data-invalid="true"] { border-color: var(--dsw-alias-state-error-primary); }
-select.pw-input { padding-right: 6px; cursor: pointer; }
-textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: vertical; }
-.pw-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.pw-label { font-size: 12px; font-weight: 500; color: var(--dsw-alias-label-secondary); }
-.pw-hint { font-size: 11px; color: var(--dsw-alias-label-secondary); }
-.pw-section { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
-.pw-section-head { display: flex; flex-direction: column; gap: 3px; }
-.pw-section-title { font-size: 14px; font-weight: 600; }
-.pw-section-help { font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.pw-divider { height: 1px; background: var(--dsw-alias-border-l1); }
-.pw-errbar { display: flex; align-items: center; gap: 10px; margin: 12px 20px 0; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--dsw-alias-state-error-primary); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-size: 12px; }
-.pw-notice { display: flex; align-items: center; gap: 8px; color: var(--dsw-alias-state-success-primary); font-size: 12px; }
-.pw-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 64px 24px; text-align: center; }
-.pw-empty-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-brand-primary); }
-.pw-empty-title { font-size: 14px; font-weight: 600; }
-.pw-empty-body { font-size: 12px; color: var(--dsw-alias-label-secondary); max-width: 420px; line-height: 1.6; }
-.pw-skeleton { background: var(--dsw-alias-bg-layer-2); border-radius: 6px; animation: pw-skeleton-pulse 1600ms ease-in-out infinite; }
-@keyframes pw-skeleton-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
-.pw-passenger-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--dsw-alias-bg-layer-2); }
-.pw-passenger-name { font-size: 13px; font-weight: 500; }
-.pw-form-row { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
-.pw-form-row > .pw-field { flex: 1 1 140px; }
-.pw-tabs { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2); }
-.pw-tab { height: 24px; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: 12px; cursor: pointer; }
-.pw-tab:hover { color: var(--dsw-alias-label-primary); }
-.pw-tab[data-active="true"] { background: var(--dsw-alias-bg-layer-1); border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-brand-primary); font-weight: 500; }
-.pw-tab:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
-.pw-selectable { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; cursor: pointer; transition: border-color 120ms ease, background 120ms ease; }
-.pw-selectable:hover { background: var(--dsw-alias-bg-layer-2); }
-.pw-selectable[data-selected="true"] { border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-brand-primary); }
-.pw-selectable:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
-.pw-check { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-brand-primary); }
-.pw-selectable[data-selected="true"] .pw-check { border-color: var(--dsw-alias-brand-primary); background: var(--dsw-alias-bg-layer-2); }
+/* selectable passenger chips */
+.pw-selectable { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; cursor: pointer; transition: border-color 120ms ease, background 120ms ease; }
+.pw-selectable:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.pw-selectable[data-selected="true"] { border-color: var(--dsw-alias-state-business-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent); }
+.pw-selectable:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
+.pw-check { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-state-business-primary); flex: none; }
+.pw-selectable[data-selected="true"] .pw-check { border-color: var(--dsw-alias-state-business-primary); background: var(--dsw-alias-bg-layer-2); }
+/* collapsible advanced block */
+.pw-adv { display: flex; flex-direction: column; gap: 12px; padding-top: 12px; border-top: .5px solid var(--dsw-alias-border-l1); }
+.pw-adv-toggle { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; padding: 0; border: none; background: none; color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: 12px; line-height: 20px; cursor: pointer; }
+.pw-adv-toggle:hover { color: var(--dsw-alias-label-primary); }
+.pw-adv-toggle:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; border-radius: 4px; }
+.pw-adv-toggle svg { transition: transform 160ms ease; }
+.pw-adv-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.pw-adv-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* inline info tip (feishu webhook hint) */
+.pw-infowrap { position: relative; display: inline-flex; flex: none; }
+.pw-tip { position: absolute; z-index: 20; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); width: max-content; max-width: 260px; padding: 6px 10px; border-radius: var(--dsw-radius-sm, 8px); border: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 18px; text-align: left; box-shadow: var(--dsw-elevation-prominent, none); }
+.pw-tip[data-align="end"] { left: auto; right: -4px; transform: none; }
+/* dialog (passenger manager) */
+.pw-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--dsw-alias-bg-mask-1); backdrop-filter: var(--dsw-mask-blur, none); }
+.pw-dialog { display: flex; flex-direction: column; width: min(520px, 100%); max-height: min(640px, 100%); min-height: 0; overflow: hidden; border-radius: var(--dsw-radius-xl, 20px); border: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-elevation-prominent, none); }
+.pw-dialog:focus { outline: none; }
+.pw-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px 10px; }
+.pw-dialog-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 22px; }
+.pw-dialog-body { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: auto; padding: 0 18px 18px; scrollbar-width: thin; }
+.pw-listitem { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
+.pw-listitem-name { font-size: 13px; font-weight: 500; }
+/* charts */
 .pw-chart-wrap { position: relative; width: 100%; }
 .pw-chart { display: block; width: 100%; height: auto; overflow: visible; }
 .pw-chart[data-hover="true"] { cursor: crosshair; }
-.pw-tooltip { position: absolute; transform: translate(-50%, -118%); min-width: 84px; padding: 5px 8px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-overlay); color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 1.45; white-space: nowrap; pointer-events: none; z-index: 2; }
-.pw-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.pw-stat { display: flex; flex-direction: column; gap: 2px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
-.pw-stat-label { font-size: 11px; color: var(--dsw-alias-label-secondary); }
-.pw-stat-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.pw-rule-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 4px 0; }
-.pw-linkbtn { padding: 0; border: none; background: none; color: var(--dsw-alias-brand-primary); font-family: inherit; font-size: 12px; cursor: pointer; }
-.pw-linkbtn:hover { text-decoration: underline; }
-.pw-linkbtn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; border-radius: 4px; }
-.pw-detail-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.pw-spacer { flex: 1; }
-@media (max-width: 780px) { .pw-spark { display: none; } .pw-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pw-toolbar { flex-wrap: wrap; } }
-@media (max-width: 520px) { .pw-card { flex-wrap: wrap; } }
 .pw-cal-wrap { position: relative; width: 100%; }
 .pw-cal { display: block; width: 100%; height: auto; cursor: pointer; }
 .pw-cal-bar { transition: opacity 120ms ease; }
-.pw-pin-bar { position: sticky; bottom: 0; z-index: 3; display: flex; align-items: center; gap: 10px; margin-top: 4px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); }
+.pw-tooltip { position: absolute; transform: translate(-50%, -118%); min-width: 84px; padding: 5px 8px; border-radius: var(--dsw-radius-sm, 8px); border: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 1.45; white-space: nowrap; pointer-events: none; z-index: 2; box-shadow: var(--dsw-elevation-prominent, none); }
+.pw-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.pw-stat { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2); }
+.pw-stat-label { font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); }
+.pw-stat-value { font-size: 14px; font-weight: 600; line-height: 20px; font-variant-numeric: tabular-nums; }
+.pw-pin-bar { position: sticky; bottom: 0; z-index: 3; display: flex; align-items: center; gap: 10px; margin-top: 4px; padding: 10px 12px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-elevation-prominent, none); }
+/* tables (flight snapshot) */
 .pw-table-wrap { width: 100%; overflow-x: auto; }
 .pw-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.pw-table th { padding: 6px 8px; text-align: left; font-weight: 500; color: var(--dsw-alias-label-secondary); border-bottom: 1px solid var(--dsw-alias-border-l1); white-space: nowrap; }
-.pw-table td { padding: 7px 8px; border-bottom: 1px solid var(--dsw-alias-border-l1); vertical-align: top; }
+.pw-table th { padding: 8px; text-align: left; font-weight: 500; color: var(--dsw-alias-label-secondary); border-bottom: .5px solid var(--dsw-alias-border-l2); white-space: nowrap; }
+.pw-table td { padding: 8px; border-bottom: .5px solid var(--dsw-alias-border-l2); vertical-align: top; }
 .pw-table tr[data-expanded="true"] td { background: var(--dsw-alias-bg-layer-2); }
 .pw-table tr:last-child td { border-bottom: none; }
 .pw-table .pw-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.pw-pax-card { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
+/* watch detail bits */
+.pw-pax-card { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2); }
 .pw-pax-name { font-size: 13px; font-weight: 500; }
 .pw-pax-price { margin-left: auto; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .pw-tax-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.pw-rule-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 2px 0; }
+.pw-notice { display: flex; align-items: center; gap: 8px; color: var(--dsw-alias-state-success-primary); font-size: 12px; }
+/* city combobox */
 .pw-combo { position: relative; }
-.pw-combo-list { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); max-height: 220px; overflow: auto; padding: 4px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); }
-.pw-combo-item { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 6px 8px; border: none; border-radius: 7px; background: transparent; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 12px; text-align: left; cursor: pointer; }
-.pw-combo-item:hover { background: var(--dsw-alias-bg-layer-2); }
-.pw-combo-item[data-active="true"] { background: var(--dsw-alias-bg-layer-2); }
-.pw-combo-code { color: var(--dsw-alias-label-secondary); font-size: 11px; }
-.pw-mode-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.pw-summary-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.pw-combo-list { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); max-height: 220px; overflow: auto; padding: 4px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-elevation-prominent, none); }
+.pw-combo-item { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 6px 8px; border: none; border-radius: var(--dsw-radius-sm, 8px); background: transparent; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.pw-combo-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.pw-combo-code { color: var(--dsw-alias-label-tertiary); font-size: 11px; }
+/* skeleton, empty, error */
+.pw-skeleton { background: var(--dsw-alias-bg-skeleton, var(--dsw-alias-bg-layer-2)); border-radius: 6px; animation: pw-skeleton-pulse 1600ms ease-in-out infinite; }
+@keyframes pw-skeleton-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+.pw-errbar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent); color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 18px; }
+.pw-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 48px 20px; text-align: center; }
+.pw-empty-icon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: var(--dsw-radius-md, 12px); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-caption); }
+.pw-empty-title { font-size: 14px; font-weight: 500; line-height: 20px; color: var(--dsw-alias-label-primary); }
+.pw-empty-body { max-width: 420px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.pw-strip-sep { color: var(--dsw-alias-border-l2); }
+@media (max-width: 780px) { .pw-spark { display: none; } .pw-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pw-head-row { flex-wrap: wrap; } .pw-head-actions { margin-left: 0; } }
+@media (max-width: 520px) { .pw-card { flex-wrap: wrap; } }
 `;
 		// #endregion
 
@@ -1158,6 +1196,13 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			h('circle', { key: 'b', cx: 7.6, cy: 7.6, r: 1.3 }),
 			h('path', { key: 'c', d: 'M8.4 15.6 11.4 12.6 13.6 14.8 18.2 10.2' }),
 		]);
+		const ChevronDownIcon = (props) => svgIcon((props && props.size) || 14, h('path', { d: 'M6 9.5l6 6 6-6' }));
+		const InfoIcon = (props) =>
+			svgIcon((props && props.size) || 14, [
+				h('circle', { key: 'a', cx: 12, cy: 12, r: 9 }),
+				h('path', { key: 'b', d: 'M12 11v5.5' }),
+				h('circle', { key: 'c', cx: 12, cy: 7.8, r: 0.9, fill: 'currentColor', stroke: 'none' }),
+			]);
 		// #endregion
 
 		// #region atoms
@@ -1296,6 +1341,170 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				)
 			);
 		}
+		/** Page shell: one fixed head (title row plus an optional sub row) over one scrolling column. */
+		function PageShell(props) {
+			return h(
+				'div',
+				{ className: 'pw-view' },
+				h(
+					'header',
+					{ className: 'pw-head' },
+					h(
+						'div',
+						{ className: 'pw-head-row' },
+						props.lead === undefined || props.lead === null ? null : h('div', { className: 'pw-head-lead' }, props.lead),
+						h(
+							'div',
+							{ className: 'pw-head-text' },
+							h('h1', { className: 'pw-title' }, props.title),
+							props.intro === undefined || props.intro === null ? null : h('p', { className: 'pw-intro' }, props.intro),
+							props.meta === undefined || props.meta === null ? null : h('div', { className: 'pw-meta' }, props.meta)
+						),
+						props.actions === undefined || props.actions === null ? null : h('div', { className: 'pw-head-actions' }, props.actions)
+					),
+					props.sub === undefined || props.sub === null ? null : h('div', { className: 'pw-head-sub' }, props.sub)
+				),
+				// Spread the content children as separate arguments so React never sees
+				// one bare array and asks for keys on static view content.
+				h('div', { className: 'pw-scroll' }, h('div', { className: 'pw-content' }, ...(Array.isArray(props.children) ? props.children : [props.children])))
+			);
+		}
+
+		/** A form group: 13/600 title over 10px-spaced controls. */
+		function Group(props) {
+			return h(
+				'section',
+				{ className: 'pw-group' },
+				h(
+					'div',
+					{ className: 'pw-group-head' },
+					h('h2', { className: 'pw-group-title' }, props.title),
+					props.action === undefined || props.action === null ? null : props.action
+				),
+				props.children
+			);
+		}
+
+		/** Inline segmented control: content-width, 30px tall, exactly one selected option. */
+		function SegControl(props) {
+			return h(
+				'div',
+				{ className: 'pw-seg', role: 'tablist', 'aria-label': props.label },
+				props.options.map((option) =>
+					h(
+						'button',
+						{
+							key: option.id,
+							type: 'button',
+							role: 'tab',
+							className: 'pw-seg-btn',
+							'data-active': props.value === option.id ? 'true' : 'false',
+							'aria-selected': props.value === option.id ? 'true' : 'false',
+							onClick: () => props.onChange(option.id),
+						},
+						option.label
+					)
+				)
+			);
+		}
+
+		/**
+		 * Whole-box date input: the container opens the native picker through
+		 * `showPicker()`, and the control keeps `type="date"` so the system calendar
+		 * and keyboard entry still work.
+		 */
+		function DateField(props) {
+			const inputRef = useRef(null);
+			const openPicker = () => {
+				const node = inputRef.current;
+				if (node === null || typeof node.showPicker !== 'function') return;
+				try {
+					node.showPicker();
+				} catch (error) {
+					// Already open, or the browser refuses a programmatic call: the click
+					// on the input itself still opens the native picker.
+				}
+			};
+			return h(
+				'div',
+				{ className: 'pw-date', onClick: openPicker },
+				h('input', {
+					ref: inputRef,
+					className: 'pw-input',
+					type: 'date',
+					value: props.value,
+					min: props.min,
+					disabled: props.disabled === true,
+					onChange: (event) => props.onChange(event.target.value),
+				})
+			);
+		}
+
+		/**
+		 * ⓘ trigger plus a bubble tip. The tip opens on hover and on keyboard focus
+		 * (not just `title`), exposes `role="tooltip"` and is wired with
+		 * `aria-describedby`; Escape and blur close it.
+		 */
+		function InfoTip(props) {
+			const [open, setOpen] = useState(false);
+			const id = useMemo(() => `pw-tip-${Math.random().toString(36).slice(2, 8)}`, []);
+			return h(
+				'span',
+				{ className: 'pw-infowrap', onMouseEnter: () => setOpen(true), onMouseLeave: () => setOpen(false) },
+				h(
+					'button',
+					{
+						type: 'button',
+						className: 'pw-iconbtn',
+						'aria-label': props.text,
+						'aria-describedby': open ? id : undefined,
+						'aria-expanded': open ? 'true' : 'false',
+						onFocus: () => setOpen(true),
+						onBlur: () => setOpen(false),
+						onClick: () => setOpen((value) => !value),
+						onKeyDown: (event) => {
+							if (event.key === 'Escape') setOpen(false);
+						},
+					},
+					h(InfoIcon, { size: 14 })
+				),
+				open ? h('span', { id, role: 'tooltip', className: 'pw-tip', 'data-align': props.align === 'end' ? 'end' : 'start' }, props.text) : null
+			);
+		}
+		/** Centred dialog: mask click and Escape close it, body scrolls, hairline border. */
+		function Modal(props) {
+			const dialogRef = useRef(null);
+			useEffect(() => {
+				// Move focus into the dialog so Escape and Tab act on it, not the page.
+				if (dialogRef.current !== null && typeof dialogRef.current.focus === 'function') dialogRef.current.focus();
+				const onKeyDown = (event) => {
+					if (event.key !== 'Escape') return;
+					props.onClose();
+				};
+				document.addEventListener('keydown', onKeyDown);
+				return () => document.removeEventListener('keydown', onKeyDown);
+			}, [props.onClose]);
+			return h(
+				'div',
+				{
+					className: 'pw-overlay',
+					onMouseDown: (event) => {
+						if (event.target === event.currentTarget) props.onClose();
+					},
+				},
+				h(
+					'div',
+					{ className: 'pw-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': props.title, tabIndex: -1, ref: dialogRef },
+					h(
+						'div',
+						{ className: 'pw-dialog-head' },
+						h('h2', { className: 'pw-dialog-title' }, props.title),
+						h(IconButton, { label: t('common.dismiss'), onClick: props.onClose }, h(CloseIcon, { size: 14 }))
+					),
+					h('div', { className: 'pw-dialog-body' }, props.children)
+				)
+			);
+		}
 		// #endregion
 
 		// #region charts
@@ -1326,7 +1535,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		function Sparkline(props) {
 			const path = useMemo(() => buildSparkPath(props.points), [props.points]);
 			if (path === null) return null;
-			let stroke = 'var(--dsw-alias-brand-primary)';
+			let stroke = 'var(--dsw-alias-state-business-primary)';
 			if (props.tone === 'up') stroke = 'var(--dsw-alias-state-error-primary)';
 			else if (props.tone === 'down') stroke = 'var(--dsw-alias-state-success-primary)';
 			return h(
@@ -1491,8 +1700,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					h(
 						'linearGradient',
 						{ id: gradientId, x1: 0, y1: 0, x2: 0, y2: 1 },
-						h('stop', { offset: '0%', stopColor: 'var(--dsw-alias-brand-primary)', stopOpacity: 0.18 }),
-						h('stop', { offset: '100%', stopColor: 'var(--dsw-alias-brand-primary)', stopOpacity: 0 })
+						h('stop', { offset: '0%', stopColor: 'var(--dsw-alias-state-business-primary)', stopOpacity: 0.18 }),
+						h('stop', { offset: '100%', stopColor: 'var(--dsw-alias-state-business-primary)', stopOpacity: 0 })
 					)
 				),
 				layout.ticks.map((tick, index) =>
@@ -1508,7 +1717,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					h('text', { key: `xlabel-${index}`, x: label.x, y: layout.plotBottom + 16, textAnchor: label.anchor, fontSize: 11, fill: 'var(--dsw-alias-label-secondary)' }, shortDate(new Date(label.time).toISOString()))
 				),
 				h('path', { key: 'area', d: layout.area, fill: `url(#${gradientId})`, stroke: 'none' }),
-				h('path', { key: 'line', d: layout.line, fill: 'none', stroke: 'var(--dsw-alias-brand-primary)', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
+				h('path', { key: 'line', d: layout.line, fill: 'none', stroke: 'var(--dsw-alias-state-business-primary)', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
 			];
 
 			for (const reference of layout.references) {
@@ -1533,7 +1742,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			if (hover !== null) {
 				children.push(
 					h('line', { key: 'crosshair', x1: hover.x, y1: layout.plotTop, x2: hover.x, y2: layout.plotBottom, stroke: 'var(--dsw-alias-border-l2)', strokeWidth: 1, strokeDasharray: '3 3' }),
-					h('circle', { key: 'hover-dot', cx: hover.x, cy: hover.y, r: 3.2, fill: 'var(--dsw-alias-bg-base)', stroke: 'var(--dsw-alias-brand-primary)', strokeWidth: 2 })
+					h('circle', { key: 'hover-dot', cx: hover.x, cy: hover.y, r: 3.2, fill: 'var(--dsw-alias-bg-base)', stroke: 'var(--dsw-alias-state-business-primary)', strokeWidth: 2 })
 				);
 			}
 
@@ -1566,10 +1775,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								role: 'status',
 							},
 							h('div', { style: { fontWeight: 500 } }, formatMoney(hovered.total)),
-							h('div', { className: 'pw-muted' }, formatDateTime(hovered.at)),
-							hovered.bare !== null && Math.round(hovered.bare) !== Math.round(hovered.total)
-								? h('div', { className: 'pw-muted' }, t('chart.bare', { price: formatMoney(hovered.bare) }))
-								: null
+							h('div', { className: 'pw-muted' }, formatDateTime(hovered.at))
 						)
 			);
 		}
@@ -1645,15 +1851,15 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		}
 
 		/**
-		 * The 行情 chart: one bar per calendar day. Hover reports the day and its
-		 * tax-included lowest fare; click picks the day for the pin button. The
-		 * cheapest day is tinted, the picked day is filled with the brand gradient.
+		 * The 行情 chart: one bar per calendar day, every price a tax-included
+		 * `total`. All bars sharing the period low are green; the hovered bar is
+		 * bright with a stroke and the rest dim to 0.55; the picked bar keeps a brand
+		 * outline. Clicking a bar reports the day to the pin bar below.
 		 */
 		function CalendarChart(props) {
 			const layout = useMemo(() => buildCalendarLayout(props.days, props.selectedDate), [props.days, props.selectedDate]);
 			const wrapRef = useRef(null);
 			const [hoverIndex, setHoverIndex] = useState(null);
-			const gradientId = useMemo(() => `pw-cal-${Math.random().toString(36).slice(2, 8)}`, []);
 
 			const pickIndex = (event) => {
 				if (layout === null) return null;
@@ -1671,7 +1877,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			if (layout === null) {
 				return h(
 					'div',
-					{ style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: 150, border: '1px dashed var(--dsw-alias-border-l1)', borderRadius: 12, color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } },
+					{ style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: 150, border: '.5px dashed var(--dsw-alias-border-l1)', borderRadius: 12, color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } },
 					t('calendar.empty')
 				);
 			}
@@ -1680,16 +1886,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const hoverBar = hoverIndex === null ? null : layout.bars[hoverIndex];
 
 			const children = [
-				h(
-					'defs',
-					{ key: 'defs' },
-					h(
-						'linearGradient',
-						{ id: gradientId, x1: 0, y1: 0, x2: 0, y2: 1 },
-						h('stop', { offset: '0%', stopColor: 'var(--dsw-alias-brand-primary)', stopOpacity: 0.95 }),
-						h('stop', { offset: '100%', stopColor: 'var(--dsw-alias-brand-primary)', stopOpacity: 0.4 })
-					)
-				),
 				layout.yTicks.map((tick, index) =>
 					h(
 						'g',
@@ -1700,10 +1896,13 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				),
 				layout.bars.map((bar) => {
 					const selected = props.selectedDate === bar.date;
-					const isMin = bar.index === layout.minIndex;
-					let fill = 'var(--dsw-alias-state-idle-primary)';
-					if (isMin) fill = 'var(--dsw-alias-state-success-primary)';
-					if (selected) fill = `url(#${gradientId})`;
+					const isLowest = bar.total === layout.min;
+					const isHovered = hoverIndex === bar.index;
+					const dimmed = hoverIndex !== null && !isHovered;
+					let opacity = 0.8;
+					if (dimmed) opacity = 0.55;
+					if (isHovered) opacity = 1;
+					const stroke = selected ? 'var(--dsw-alias-state-business-primary)' : isHovered ? 'var(--dsw-alias-label-secondary)' : 'none';
 					return h('rect', {
 						key: bar.date,
 						className: 'pw-cal-bar',
@@ -1712,9 +1911,12 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						width: bar.width,
 						height: bar.height,
 						rx: Math.min(2.5, bar.width / 2),
-						fill,
-						opacity: selected ? 1 : isMin ? 0.95 : 0.55,
+						fill: isLowest ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-idle-primary)',
+						opacity,
+						stroke,
+						strokeWidth: selected ? 1.6 : isHovered ? 1 : 0,
 						'data-selected': selected ? 'true' : 'false',
+						'data-lowest': isLowest ? 'true' : 'false',
 					});
 				}),
 				layout.xTicks.map((tick, index) => h('text', { key: `x-${index}`, x: tick.x, y: layout.plotBottom + 16, textAnchor: 'middle', fontSize: 11, fill: 'var(--dsw-alias-label-secondary)' }, tick.label)),
@@ -1759,8 +1961,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								},
 								role: 'status',
 							},
-							h('div', { style: { fontWeight: 500 } }, t('calendar.dayHint', { date: monthDay(hovered.date), price: formatMoney(hovered.total) })),
-							hovered.bare !== null && Math.round(hovered.bare) !== Math.round(hovered.total) ? h('div', { className: 'pw-muted' }, t('chart.bare', { price: formatMoney(hovered.bare) })) : null
+							h('div', { style: { fontWeight: 500 } }, t('calendar.dayHint', { date: monthDay(hovered.date), price: formatMoney(hovered.total) }))
 						)
 			);
 		}
@@ -1912,83 +2113,102 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const status = props.status;
 			const health = statusHealth(status);
 			const blocked = blockedNotice(status);
-			const filtered = monitors === null ? null : monitors.filter((monitor) => props.filter !== 'flight' || monitor.type === 'flight');
+			// List rows carry `mode` only — there is no `type` field on the Host side.
+			const filter = props.filter === 'calendar' || props.filter === 'watch' ? props.filter : 'all';
+			const filtered = monitors === null ? null : monitors.filter((monitor) => filter === 'all' || monitorMode(monitor) === filter);
 			const filters = [
 				{ id: 'all', label: t('filter.all') },
-				{ id: 'flight', label: t('filter.flight') },
+				{ id: 'calendar', label: t('filter.calendar') },
+				{ id: 'watch', label: t('filter.watch') },
 			];
+			const empty = filtered !== null && filtered.length === 0;
+			const nothingAtAll = monitors !== null && monitors.length === 0;
 
-			return [
-				h(
-					'div',
-					{ className: 'pw-toolbar', key: 'toolbar' },
-					h('h1', { className: 'pw-page-title' }, t('nav')),
-					h('span', { className: 'pw-spacer' }),
-					h(Button, { variant: 'primary', icon: h(PlusIcon, { size: 14 }), onClick: props.onNew }, t('list.new')),
-					h(Button, { icon: h(SettingsIcon, { size: 14 }), onClick: props.onSettings }, t('list.settings')),
-					h(Button, { icon: h(RefreshIcon, { size: 14 }), onClick: props.onRefresh, disabled: props.refreshing === true }, t('list.refresh'))
-				),
-				h(
-					'div',
-					{ className: 'pw-strip', key: 'strip' },
-					h(
-						'div',
-						{ className: 'pw-tabs', role: 'tablist' },
-						filters.map((entry) =>
-							h(
-								'button',
-								{
-									key: entry.id,
-									type: 'button',
-									role: 'tab',
-									className: 'pw-tab',
-									'data-active': props.filter === entry.id ? 'true' : 'false',
-									'aria-selected': props.filter === entry.id ? 'true' : 'false',
-									onClick: () => props.onFilterChange(entry.id),
-								},
-								entry.label
+			return h(
+				PageShell,
+				{
+					title: t('nav'),
+					actions: [
+						h(Button, { key: 'new', variant: 'primary', icon: h(PlusIcon, { size: 14 }), onClick: props.onNew }, t('list.new')),
+						h(Button, { key: 'settings', icon: h(SettingsIcon, { size: 14 }), onClick: props.onSettings }, t('list.settings')),
+						h(Button, { key: 'refresh', icon: h(RefreshIcon, { size: 14 }), onClick: props.onRefresh, disabled: props.refreshing === true }, t('list.refresh')),
+					],
+					sub: h(
+						React.Fragment,
+						null,
+						h(
+							'div',
+							{ className: 'pw-filters', role: 'tablist', 'aria-label': t('nav') },
+							filters.map((entry) =>
+								h(
+									'button',
+									{
+										key: entry.id,
+										type: 'button',
+										role: 'tab',
+										className: 'pw-filter',
+										'data-active': filter === entry.id ? 'true' : 'false',
+										'aria-selected': filter === entry.id ? 'true' : 'false',
+										onClick: () => props.onFilterChange(entry.id),
+									},
+									entry.label
+								)
 							)
+						),
+						h(
+							'div',
+							{ className: 'pw-status' },
+							h(Dot, { key: 'dot', tone: health.tone }),
+							h('span', { key: 'health' }, t(health.labelKey)),
+							status && status.lastCollectAt ? h('span', { key: 'last' }, t('status.last', { time: formatLastCollect(status.lastCollectAt) })) : null,
+							status ? h(AuthChip, { key: 'auth', status, pending: props.loginPending === true, onLogin: props.onLogin }) : null,
+							blocked === null ? null : h(Chip, { key: 'blocked', tone: 'warn' }, blocked)
 						)
 					),
-					h('span', { className: 'pw-strip-sep' }, '·'),
-					h(Dot, { tone: health.tone }),
-					h('span', null, t(health.labelKey)),
-					status && status.lastCollectAt ? h('span', null, t('status.last', { time: formatLastCollect(status.lastCollectAt) })) : null,
-					status ? h(AuthChip, { status, pending: props.loginPending === true, onLogin: props.onLogin }) : null,
-					blocked === null ? null : h(Chip, { tone: 'warn' }, blocked)
-				),
-				h(
-					'div',
-					{ className: 'pw-scroll', key: 'scroll' },
-					h(
-						'div',
-						{ className: 'pw-body' },
-						monitors === null && (props.error === null || props.error === undefined)
-							? [0, 1, 2].map((index) => h('div', { className: 'pw-card', key: `skeleton-${index}` }, h('div', { className: 'pw-col pw-grow' }, h(Skeleton, { height: 16, width: '46%' }), h(Skeleton, { height: 12, width: '68%' })), h(Skeleton, { height: 44, width: 120, radius: 10 })))
-							: null,
-						monitors !== null && filtered.length === 0
-							? h(EmptyState, {
-									title: t('empty.title'),
-									body: t('empty.body'),
-									icon: h(TagIcon, { size: 22 }),
-									action: h(Button, { variant: 'primary', size: 'lg', icon: h(PlusIcon, { size: 15 }), onClick: props.onNew }, t('empty.action')),
-								})
-							: null,
-						filtered === null
-							? null
-							: filtered.map((monitor) =>
-									h(MonitorCard, {
-										key: monitor.id,
-										monitor,
-										busy: props.busyKey === `toggle:${monitor.id}`,
-										onOpen: props.onOpen,
-										onToggle: props.onToggle,
-									})
+				},
+				props.banner,
+				monitors === null
+					? h(
+							'div',
+							{ className: 'pw-list', key: 'skeleton' },
+							[0, 1, 2].map((index) =>
+								h(
+									'div',
+									{ className: 'pw-card', key: `skeleton-${index}` },
+									h('div', { className: 'pw-col pw-grow' }, h(Skeleton, { height: 16, width: '46%' }), h(Skeleton, { height: 12, width: '68%' })),
+									h(Skeleton, { height: 44, width: 120, radius: 10 })
 								)
-					)
-				),
-			];
+							)
+						)
+					: null,
+				nothingAtAll
+					? h(EmptyState, {
+							key: 'empty',
+							title: t('empty.title'),
+							body: t('empty.body'),
+							icon: h(TagIcon, { size: 22 }),
+							action: h(Button, { variant: 'primary', icon: h(PlusIcon, { size: 15 }), onClick: props.onNew }, t('empty.action')),
+						})
+					: null,
+				empty && !nothingAtAll ? h(EmptyState, { key: 'filtered', title: t('empty.filtered') }) : null,
+				filtered === null || filtered.length === 0
+					? null
+					: h(
+							'div',
+							{ className: 'pw-list', key: 'list' },
+							filtered.map((monitor) =>
+								h(MonitorCard, {
+									key: monitor.id,
+									monitor,
+									busy: props.busyKey === `toggle:${monitor.id}`,
+									onOpen: props.onOpen,
+									onToggle: props.onToggle,
+								})
+							)
+						)
+			);
 		}
+
 		// #endregion
 
 		// #region detail view
@@ -2000,17 +2220,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			if (ruleHas(rules, 'new_high')) chips.push({ key: 'new_high', label: t('watch.rules.newHigh') });
 			if (ruleHas(rules, 'digest')) chips.push({ key: 'digest', label: t('watch.rules.digest') });
 			return chips;
-		}
-
-		function DetailHeader(props) {
-			const monitor = props.monitor;
-			return h(
-				'div',
-				{ className: 'pw-row', style: { alignItems: 'flex-start', gap: 10 } },
-				h(IconButton, { label: t('detail.back'), onClick: props.onBack }, h(BackIcon, { size: 16 })),
-				h('div', { className: 'pw-col pw-grow', style: { gap: 4 } }, h('h2', { className: 'pw-page-title' }, monitorTitle(monitor)), h('div', { className: 'pw-detail-meta' }, props.meta)),
-				h('div', { className: 'pw-row', style: { gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', flex: 'none' } }, props.actions)
-			);
 		}
 
 		/** Stats row for one calendar chart (out or back). */
@@ -2027,7 +2236,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 
 		/**
 		 * 行情 mode: two bar calendars (round) and a pin bar that turns the picked
-		 * day (or day pair) into a watch monitor via `POST /monitors`.
+		 * day (or day pair) into a watch monitor via `POST /monitors`. Every number
+		 * here is the tax-included `total`.
 		 */
 		function CalendarDetailView(props) {
 			const monitor = props.monitor;
@@ -2069,56 +2279,51 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			}
 
 			return h(
-				'div',
-				{ className: 'pw-scroll' },
+				PageShell,
+				{
+					lead: h(IconButton, { label: t('detail.back'), onClick: props.onBack }, h(BackIcon, { size: 18 })),
+					title: monitorTitle(monitor),
+					meta,
+					actions: [
+						h(Button, { key: 'refresh', size: 'sm', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: props.busy === true }, t('detail.refresh')),
+						h(
+							Button,
+							{ key: 'pause', size: 'sm', icon: enabled ? h(PauseIcon, { size: 13 }) : h(PlayIcon, { size: 13 }), onClick: () => props.onToggleEnabled(monitor), disabled: props.busy === true },
+							enabled ? t('detail.pause') : t('detail.resume')
+						),
+						h(Button, { key: 'delete', size: 'sm', variant: 'danger', icon: h(TrashIcon, { size: 13 }), onClick: () => props.onDelete(monitor), disabled: props.busy === true }, t('detail.delete')),
+					],
+				},
+				props.banner,
+				props.calendarError ? h(ErrorBar, { key: 'calendar-error', message: props.calendarError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
 				h(
-					'div',
-					{ className: 'pw-body' },
-					h(DetailHeader, {
-						monitor,
-						onBack: props.onBack,
-						meta,
-						actions: [
-							h(Button, { key: 'refresh', size: 'sm', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: props.busy === true }, t('detail.refresh')),
-							h(
-								Button,
-								{ key: 'pause', size: 'sm', icon: enabled ? h(PauseIcon, { size: 13 }) : h(PlayIcon, { size: 13 }), onClick: () => props.onToggleEnabled(monitor), disabled: props.busy === true },
-								enabled ? t('detail.pause') : t('detail.resume')
-							),
-							h(Button, { key: 'delete', size: 'sm', variant: 'danger', icon: h(TrashIcon, { size: 13 }), onClick: () => props.onDelete(monitor), disabled: props.busy === true }, t('detail.delete')),
-						],
-					}),
-					props.calendarError ? h(ErrorBar, { message: props.calendarError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
-					h(
-						Section,
-						{ title: round ? `${t('calendar.title')} · ${t('calendar.out')}` : t('calendar.title'), help: t('calendar.caption') },
-						calendar === null && props.calendarError === null
-							? h(Skeleton, { height: 150, radius: 10 })
-							: h(CalendarChart, { days: outDays, selectedDate: selectedOut, onPick: (day) => setSelectedOut(day.date === selectedOut ? null : day.date) }),
-						outStatsItems.length === 0 ? null : h(Stats, { items: outStatsItems }),
-						fetchedAt === null ? null : h('span', { className: 'pw-hint' }, t('calendar.fetchedAt', { when: relativeTime(fetchedAt) }))
-					),
-					round
-						? h(
-								Section,
-								{ title: `${t('calendar.title')} · ${t('calendar.back')}`, help: t('calendar.caption') },
-								calendar === null && props.calendarError === null
-									? h(Skeleton, { height: 150, radius: 10 })
-									: h(CalendarChart, { days: backDays, selectedDate: selectedBack, onPick: (day) => setSelectedBack(day.date === selectedBack ? null : day.date) }),
-								backStatsItems.length === 0 ? null : h(Stats, { items: backStatsItems })
-							)
-						: null,
-					h('div', { className: 'pw-hint' }, t('calendar.pickHint')),
-					selectedOut === null
-						? null
-						: h(
-								'div',
-								{ className: 'pw-pin-bar' },
-								h('span', { className: 'pw-grow', style: { fontSize: 12 } }, outPick === null ? '' : `${monthDay(outPick.date)}${round && backPick !== null ? ` – ${monthDay(backPick.date)}` : ''}${pinTotal === null ? '' : ` · ${formatMoney(pinTotal)}`}`),
-								h(Button, { size: 'sm', onClick: () => { setSelectedOut(null); setSelectedBack(null); }, disabled: props.busy === true }, t('common.cancel')),
-								h(Button, { variant: 'primary', size: 'sm', onClick: () => props.onPin({ departDate: outPick === null ? null : outPick.date, returnDate: round && backPick !== null ? backPick.date : null }), disabled: !canPin }, pinLabel)
-							)
-				)
+					Section,
+					{ key: 'out', title: round ? `${t('calendar.title')} · ${t('calendar.out')}` : t('calendar.title'), help: t('calendar.caption') },
+					calendar === null && props.calendarError === null
+						? h(Skeleton, { height: 150, radius: 12 })
+						: h(CalendarChart, { days: outDays, selectedDate: selectedOut, onPick: (day) => setSelectedOut(day.date === selectedOut ? null : day.date) }),
+					outStatsItems.length === 0 ? null : h(Stats, { items: outStatsItems }),
+					fetchedAt === null ? null : h('span', { className: 'pw-hint' }, t('calendar.fetchedAt', { when: relativeTime(fetchedAt) }))
+				),
+				round
+					? h(
+							Section,
+							{ key: 'back', title: `${t('calendar.title')} · ${t('calendar.back')}`, help: t('calendar.caption') },
+							calendar === null && props.calendarError === null
+								? h(Skeleton, { height: 150, radius: 12 })
+								: h(CalendarChart, { days: backDays, selectedDate: selectedBack, onPick: (day) => setSelectedBack(day.date === selectedBack ? null : day.date) }),
+							backStatsItems.length === 0 ? null : h(Stats, { items: backStatsItems })
+						)
+					: null,
+				selectedOut === null
+					? null
+					: h(
+							'div',
+							{ className: 'pw-pin-bar', key: 'pin' },
+							h('span', { className: 'pw-grow', style: { fontSize: 12 } }, outPick === null ? '' : `${monthDay(outPick.date)}${round && backPick !== null ? ` – ${monthDay(backPick.date)}` : ''}${pinTotal === null ? '' : ` · ${formatMoney(pinTotal)}`}`),
+							h(Button, { size: 'sm', onClick: () => { setSelectedOut(null); setSelectedBack(null); }, disabled: props.busy === true }, t('common.cancel')),
+							h(Button, { variant: 'primary', size: 'sm', onClick: () => props.onPin({ departDate: outPick === null ? null : outPick.date, returnDate: round && backPick !== null ? backPick.date : null }), disabled: !canPin }, pinLabel)
+						)
 			);
 		}
 
@@ -2285,84 +2490,80 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					);
 
 			return h(
-				'div',
-				{ className: 'pw-scroll' },
+				PageShell,
+				{
+					lead: h(IconButton, { label: t('detail.back'), onClick: props.onBack }, h(BackIcon, { size: 18 })),
+					title: monitorTitle(monitor),
+					meta,
+					actions: [
+						h(Button, { key: 'l2', size: 'sm', variant: 'primary', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefreshL2(monitor.id), disabled: busy }, t('detail.refreshL2')),
+						h(Button, { key: 'refresh', size: 'sm', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: busy }, t('detail.refresh')),
+						h(
+							Button,
+							{ key: 'pause', size: 'sm', icon: enabled ? h(PauseIcon, { size: 13 }) : h(PlayIcon, { size: 13 }), onClick: () => props.onToggleEnabled(monitor), disabled: busy },
+							enabled ? t('detail.pause') : t('detail.resume')
+						),
+						h(Button, { key: 'delete', size: 'sm', variant: 'danger', icon: h(TrashIcon, { size: 13 }), onClick: () => props.onDelete(monitor), disabled: busy }, t('detail.delete')),
+					],
+				},
+				props.banner,
+				props.pricesError ? h(ErrorBar, { key: 'prices-error', message: props.pricesError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
+				props.flightsError ? h(ErrorBar, { key: 'flights-error', message: props.flightsError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
 				h(
-					'div',
-					{ className: 'pw-body' },
-					h(DetailHeader, {
-						monitor,
-						onBack: props.onBack,
-						meta,
-						actions: [
-							h(Button, { key: 'l2', size: 'sm', variant: 'primary', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefreshL2(monitor.id), disabled: busy }, t('detail.refreshL2')),
-							h(Button, { key: 'refresh', size: 'sm', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: busy }, t('detail.refresh')),
-							h(
-								Button,
-								{ key: 'pause', size: 'sm', icon: enabled ? h(PauseIcon, { size: 13 }) : h(PlayIcon, { size: 13 }), onClick: () => props.onToggleEnabled(monitor), disabled: busy },
-								enabled ? t('detail.pause') : t('detail.resume')
-							),
-							h(Button, { key: 'delete', size: 'sm', variant: 'danger', icon: h(TrashIcon, { size: 13 }), onClick: () => props.onDelete(monitor), disabled: busy }, t('detail.delete')),
-						],
-					}),
-					props.pricesError ? h(ErrorBar, { message: props.pricesError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
-					props.flightsError ? h(ErrorBar, { message: props.flightsError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
-					h(
-						Section,
-						{ title: t('watch.realTitle'), help: t('watch.realHint') },
-						passengerIds.length === 0
-							? h('span', { className: 'pw-hint' }, t('watch.emptyPrecise'))
-							: h(
-									'div',
-									{ className: 'pw-col', style: { gap: 8 } },
-									passengerIds.map((id) => {
-										const series = seriesList.find((entry) => entry && entry.passengerId === id) || null;
-										return h(PassengerPriceCard, {
-											key: id,
-											passenger: passengerById(id) || (series && series.passenger) || null,
-											series,
-											fareLabel: fareByPassenger.get(id) || '',
-										});
-									})
-								)
-					),
-					h(
-						Section,
-						{ title: t('watch.reference'), help: t('watch.referenceCaption') },
-						prices === null && props.pricesError === null ? h(Skeleton, { height: 150, radius: 10 }) : h(PriceChart, { points: reference, stats: referenceStats, compact: true, emptyText: t('watch.emptyPrecise') })
-					),
-					seriesList.length === 0
+					Section,
+					{ key: 'real', title: t('watch.realTitle'), help: t('watch.realHint') },
+					passengerIds.length === 0
+						? h('span', { className: 'pw-hint' }, t('watch.emptyPrecise'))
+						: h(
+								'div',
+								{ className: 'pw-col', style: { gap: 8 } },
+								passengerIds.map((id) => {
+									const series = seriesList.find((entry) => entry && entry.passengerId === id) || null;
+									return h(PassengerPriceCard, {
+										key: id,
+										passenger: passengerById(id) || (series && series.passenger) || null,
+										series,
+										fareLabel: fareByPassenger.get(id) || '',
+									});
+								})
+							)
+				),
+				h(
+					Section,
+					{ key: 'reference', title: t('watch.reference'), help: t('watch.referenceCaption') },
+					prices === null && props.pricesError === null ? h(Skeleton, { height: 150, radius: 12 }) : h(PriceChart, { points: reference, stats: referenceStats, compact: true, emptyText: t('watch.emptyPrecise') })
+				),
+				seriesList.length === 0
+					? null
+					: seriesList.map((series) => {
+							const passenger = passengerById(series.passengerId) || (series.passenger && typeof series.passenger === 'object' ? series.passenger : null);
+							const name = passenger && typeof passenger.nickname === 'string' ? passenger.nickname : series.passengerId;
+							const typeLabel = passenger && PASSENGER_TYPES.indexOf(passenger.type) >= 0 ? t(`type.${passenger.type}`) : '';
+							const points = normalizePricePoints(series.points);
+							return h(
+								Section,
+								{ key: series.passengerId, title: t('watch.seriesTitle', { name, type: typeLabel }) },
+								points.length === 0 ? h('span', { className: 'pw-hint' }, t('watch.seriesEmpty')) : h(PriceChart, { points: series.points, compact: true, emptyText: t('watch.seriesEmpty') })
+							);
+						}),
+				h(
+					Section,
+					{ key: 'flights', title: t('watch.flights'), help: flightsFetchedAt === null ? null : t('watch.fetchedAt', { when: relativeTime(flightsFetchedAt) }) },
+					flightsData === null && props.flightsError === null ? h(Skeleton, { height: 120, radius: 12 }) : h(FlightTable, { flights, passengers }),
+					tax === null
 						? null
-						: seriesList.map((series) => {
-								const passenger = passengerById(series.passengerId) || (series.passenger && typeof series.passenger === 'object' ? series.passenger : null);
-								const name = passenger && typeof passenger.nickname === 'string' ? passenger.nickname : series.passengerId;
-								const typeLabel = passenger && PASSENGER_TYPES.indexOf(passenger.type) >= 0 ? t(`type.${passenger.type}`) : '';
-								const points = normalizePricePoints(series.points);
-								return h(
-									Section,
-									{ key: series.passengerId, title: t('watch.seriesTitle', { name, type: typeLabel }) },
-									points.length === 0 ? h('span', { className: 'pw-hint' }, t('watch.seriesEmpty')) : h(PriceChart, { points: series.points, compact: true, emptyText: t('watch.seriesEmpty') })
-								);
-							}),
-					h(
-						Section,
-						{ title: t('watch.flights'), help: flightsFetchedAt === null ? null : t('watch.fetchedAt', { when: relativeTime(flightsFetchedAt) }) },
-						flightsData === null && props.flightsError === null ? h(Skeleton, { height: 120, radius: 10 }) : h(FlightTable, { flights, passengers }),
-						tax === null
-							? null
-							: h(
-									'div',
-									{ className: 'pw-tax-line' },
-									h('span', { style: { fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } }, t('watch.taxTitle')),
-									h('span', null, t('watch.taxAirport', { price: formatMoney(tax.airportFee) })),
-									h('span', { className: 'pw-strip-sep' }, '·'),
-									h('span', null, t('watch.taxFuel', { price: formatMoney(tax.fuel) })),
-									h('span', { className: 'pw-strip-sep' }, '·'),
-									h('span', null, t('watch.taxTotal', { price: formatMoney(tax.total) }))
-								)
-					),
-					ruleSection
-				)
+						: h(
+								'div',
+								{ className: 'pw-tax-line' },
+								h('span', { style: { fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } }, t('watch.taxTitle')),
+								h('span', null, t('watch.taxAirport', { price: formatMoney(tax.airportFee) })),
+								h('span', { className: 'pw-strip-sep' }, '·'),
+								h('span', null, t('watch.taxFuel', { price: formatMoney(tax.fuel) })),
+								h('span', { className: 'pw-strip-sep' }, '·'),
+								h('span', null, t('watch.taxTotal', { price: formatMoney(tax.total) }))
+							)
+				),
+				ruleSection
 			);
 		}
 
@@ -2375,51 +2576,26 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		// #endregion
 
 		// #region settings view
+		/** `/settings` cadence block, tolerant of a missing or partial read. */
+		function settingsCadence(settings) {
+			const source = settings && typeof settings === 'object' ? settings : {};
+			return source.cadence && typeof source.cadence === 'object' ? source.cadence : {};
+		}
+
+		/** Only the two groups the settings page still owns: sign-in/precise, Feishu. */
 		function settingsDraftFrom(settings) {
 			const source = settings && typeof settings === 'object' ? settings : {};
-			const cadence = source.cadence && typeof source.cadence === 'object' ? source.cadence : {};
-			const notify = source.notify && typeof source.notify === 'object' ? source.notify : {};
-			const l1 = source.l1 && typeof source.l1 === 'object' ? source.l1 : {};
 			const l2 = source.l2 && typeof source.l2 === 'object' ? source.l2 : {};
-			const quiet = Array.isArray(notify.quietHours) && notify.quietHours.length === 2 ? notify.quietHours : null;
-			const calendarHours = numberOrNull(cadence.calendarHours);
-			const watchMinutes = numberOrNull(cadence.watchMinutes);
+			const notify = source.notify && typeof source.notify === 'object' ? source.notify : {};
 			const perDay = numberOrNull(l2.perDay);
 			const minInterval = numberOrNull(l2.minIntervalMinutes);
 			return {
-				calendarHours: CALENDAR_HOURS.indexOf(calendarHours) >= 0 ? calendarHours : 6,
-				watchMinutes: WATCH_MINUTES.indexOf(watchMinutes) >= 0 ? watchMinutes : 60,
-				l1PerDay: numberOrNull(l1.perDay) === null ? null : Math.max(0, Math.round(l1.perDay)),
 				l2Enabled: l2.enabled === true,
 				l2PerDay: perDay === null || L2_PER_DAY.indexOf(Math.round(perDay)) < 0 ? 3 : Math.round(perDay),
 				l2MinInterval: minInterval === null || L2_MIN_INTERVALS.indexOf(Math.round(minInterval)) < 0 ? 720 : Math.round(minInterval),
 				feishuWebhook: typeof notify.feishuWebhook === 'string' ? notify.feishuWebhook : '',
-				quietStart: String(quiet === null ? 22 : numberOrNull(quiet[0]) === null ? 22 : quiet[0]),
-				quietEnd: String(quiet === null ? 8 : numberOrNull(quiet[1]) === null ? 8 : quiet[1]),
-				cooldownMinutes: String(numberOrNull(notify.cooldownMinutes) === null ? 360 : notify.cooldownMinutes),
-				digestAt: typeof notify.digestAt === 'string' && /^\d{2}:\d{2}$/.test(notify.digestAt) ? notify.digestAt : '12:00',
-				panelBaseUrl: typeof source.panelBaseUrl === 'string' ? source.panelBaseUrl : '',
+				digestAt: typeof notify.digestAt === 'string' && /^\d{2}:\d{2}$/.test(notify.digestAt) ? notify.digestAt : '09:00',
 			};
-		}
-
-		function hourOptions() {
-			const options = [];
-			for (let hour = 0; hour < 24; hour += 1) options.push({ value: String(hour), label: `${pad2(hour)}:00` });
-			return options;
-		}
-
-		function PassengerRow(props) {
-			const passenger = props.passenger;
-			const typeLabel = PASSENGER_TYPES.indexOf(passenger.type) >= 0 ? t(`type.${passenger.type}`) : passenger.type;
-			return h(
-				'div',
-				{ className: 'pw-passenger-row' },
-				h('span', { className: 'pw-passenger-name pw-ellipsis' }, passenger.nickname),
-				h(Chip, { tone: 'flat' }, typeLabel),
-				typeof passenger.age === 'number' && Number.isFinite(passenger.age) ? h('span', { className: 'pw-hint' }, `${passenger.age} ${t('settings.passengers.ageUnit')}`) : null,
-				h('span', { className: 'pw-spacer' }),
-				h(IconButton, { label: t('settings.passengers.delete'), onClick: () => props.onDelete(passenger), disabled: props.disabled === true }, h(TrashIcon, { size: 14 }))
-			);
 		}
 
 		function SettingsView(props) {
@@ -2427,11 +2603,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [saving, setSaving] = useState(false);
 			const [saved, setSaved] = useState(false);
 			const [settingsError, setSettingsError] = useState(null);
-			const [passengerForm, setPassengerForm] = useState({ nickname: '', type: 'adult', age: '' });
-			const [passengerError, setPassengerError] = useState(null);
-			const [passengerBusy, setPassengerBusy] = useState(false);
-			const hours = useMemo(() => hourOptions(), []);
-			const passengers = Array.isArray(props.passengers) ? props.passengers : null;
 
 			useEffect(() => {
 				if (props.settings === null || props.settings === undefined) return;
@@ -2447,14 +2618,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const update = (patch) => setDraft((current) => ({ ...current, ...patch }));
 
 			const saveSettings = async () => {
-				const quietStart = Number(draft.quietStart);
-				const quietEnd = Number(draft.quietEnd);
-				const cooldown = Number(draft.cooldownMinutes);
+				// Only the fields this page still edits: a partial POST must not clear the
+				// quiet hours, the cooldown or the global cadence the Host keeps.
 				const body = {
-					cadence: {
-						calendarHours: CALENDAR_HOURS.indexOf(Number(draft.calendarHours)) >= 0 ? Number(draft.calendarHours) : 6,
-						watchMinutes: WATCH_MINUTES.indexOf(Number(draft.watchMinutes)) >= 0 ? Number(draft.watchMinutes) : 60,
-					},
 					l2: {
 						enabled: draft.l2Enabled === true,
 						perDay: L2_PER_DAY.indexOf(Number(draft.l2PerDay)) >= 0 ? Number(draft.l2PerDay) : 3,
@@ -2462,15 +2628,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					},
 					notify: {
 						feishuWebhook: draft.feishuWebhook.trim(),
-						quietHours: [Number.isFinite(quietStart) ? Math.min(23, Math.max(0, Math.round(quietStart))) : 22, Number.isFinite(quietEnd) ? Math.min(23, Math.max(0, Math.round(quietEnd))) : 8],
-						cooldownMinutes: Number.isFinite(cooldown) ? Math.max(0, Math.round(cooldown)) : 360,
-						digestAt: /^\d{2}:\d{2}$/.test(draft.digestAt) ? draft.digestAt : '12:00',
+						digestAt: /^\d{2}:\d{2}$/.test(draft.digestAt) ? draft.digestAt : '09:00',
 					},
 				};
-				// Partial POST is allowed, but echoing the untouched L1 budget and the
-				// read-only panel base URL keeps a save from clearing them on the Host.
-				if (draft.l1PerDay !== null) body.l1 = { perDay: draft.l1PerDay };
-				if (draft.panelBaseUrl !== '') body.panelBaseUrl = draft.panelBaseUrl;
 				setSaving(true);
 				setSettingsError(null);
 				try {
@@ -2480,49 +2640,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					setSettingsError(error && error.message ? error.message : String(error));
 				} finally {
 					setSaving(false);
-				}
-			};
-
-			const submitPassenger = async () => {
-				const nickname = passengerForm.nickname.trim();
-				if (nickname === '') {
-					setPassengerError(t('settings.passengers.nicknameRequired'));
-					return;
-				}
-				const type = PASSENGER_TYPES.indexOf(passengerForm.type) >= 0 ? passengerForm.type : 'adult';
-				const body = { nickname, type };
-				const ageRaw = passengerForm.age.trim();
-				if (ageRaw !== '') {
-					const age = Number(ageRaw);
-					if (!Number.isFinite(age) || age < 0 || age > 120) {
-						setPassengerError(t('settings.passengers.ageInvalid'));
-						return;
-					}
-					body.age = Math.round(age);
-				}
-				setPassengerBusy(true);
-				setPassengerError(null);
-				try {
-					await props.onAddPassenger(body);
-					setPassengerForm({ nickname: '', type: 'adult', age: '' });
-				} catch (error) {
-					setPassengerError(error && error.message ? error.message : String(error));
-				} finally {
-					setPassengerBusy(false);
-				}
-			};
-
-			const removePassenger = async (passenger) => {
-				const confirmed = typeof window.confirm === 'function' ? window.confirm(t('settings.passengers.deleteConfirm', { name: passenger.nickname })) : true;
-				if (!confirmed) return;
-				setPassengerBusy(true);
-				setPassengerError(null);
-				try {
-					await props.onDeletePassenger(passenger);
-				} catch (error) {
-					setPassengerError(error && error.message ? error.message : t('settings.passengers.referenced'));
-				} finally {
-					setPassengerBusy(false);
 				}
 			};
 
@@ -2543,116 +2660,81 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			};
 
 			return h(
-				'div',
-				{ className: 'pw-scroll' },
+				PageShell,
+				{
+					lead: h(IconButton, { label: t('settings.back'), onClick: props.onBack }, h(BackIcon, { size: 18 })),
+					title: t('settings.title'),
+					actions: [
+						saved ? h('span', { className: 'pw-notice', key: 'saved' }, h(CheckIcon, { size: 13 }), t('settings.saved')) : null,
+						h(Button, { key: 'save', variant: 'primary', onClick: () => void saveSettings(), disabled: saving || props.loading === true || props.settings === null }, saving ? t('settings.saving') : t('settings.save')),
+					],
+				},
+				props.banner,
+				props.error ? h(ErrorBar, { key: 'reload-error', message: props.error, inline: true, onRetry: props.onReload }) : null,
+				settingsError === null ? null : h(ErrorBar, { key: 'save-error', message: settingsError, inline: true }),
 				h(
-					'div',
-					{ className: 'pw-body' },
+					Section,
+					{ key: 'auth', title: t('settings.l2.auth') },
 					h(
 						'div',
-						{ className: 'pw-row', style: { alignItems: 'center', gap: 10 } },
-						h(IconButton, { label: t('settings.back'), onClick: props.onBack }, h(BackIcon, { size: 16 })),
-						h('h2', { className: 'pw-page-title' }, t('settings.title')),
-						h('span', { className: 'pw-spacer' }),
-						saved ? h('span', { className: 'pw-notice' }, h(CheckIcon, { size: 13 }), t('settings.saved')) : null,
-						h(Button, { variant: 'primary', onClick: saveSettings, disabled: saving || props.loading === true || props.settings === null }, saving ? t('settings.saving') : t('settings.save'))
-					),
-					props.error ? h(ErrorBar, { message: props.error, inline: true, onRetry: props.onReload }) : null,
-					settingsError === null ? null : h(ErrorBar, { message: settingsError, inline: true }),
-					h(
-						Section,
-						{ title: t('settings.cadence.title'), help: t('settings.cadence.help') },
-						h(
-							'div',
-							{ className: 'pw-form-row' },
-							h(
-								Field,
-								{ label: t('settings.cadence.calendar') },
-								h(
-									'select',
-									{
-										className: 'pw-input',
-										value: String(draft.calendarHours),
-										onChange: (event) => update({ calendarHours: Number(event.target.value) }),
-									},
-									CALENDAR_HOURS.map((hours) => h('option', { key: hours, value: String(hours) }, t('settings.cadence.hours', { n: hours })))
-								)
-							),
-							h(
-								Field,
-								{ label: t('settings.cadence.watch') },
-								h(
-									'select',
-									{
-										className: 'pw-input',
-										value: String(draft.watchMinutes),
-										onChange: (event) => update({ watchMinutes: Number(event.target.value) }),
-									},
-									WATCH_MINUTES.map((minutes) => h('option', { key: minutes, value: String(minutes) }, t('settings.cadence.minutes', { n: minutes })))
-								)
-							)
-						)
-					),
-					h(
-						Section,
-						{ title: t('settings.l2.title'), help: t('settings.l2.help') },
-						h(
-							'div',
-							{ className: 'pw-rule-row' },
-							h('span', null, t('settings.l2.enable')),
-							h(Switch, { checked: draft.l2Enabled === true, label: t('settings.l2.enable'), onChange: (next) => update({ l2Enabled: next }) })
-						),
-						h(
-							'div',
-							{ className: 'pw-form-row' },
-							h(
-								Field,
-								{ label: t('settings.l2.perDay') },
-								h(
-									'select',
-									{ className: 'pw-input', value: String(draft.l2PerDay), onChange: (event) => update({ l2PerDay: Number(event.target.value) }) },
-									L2_PER_DAY.map((count) => h('option', { key: count, value: String(count) }, t('settings.l2.times', { n: count })))
-								)
-							),
-							h(
-								Field,
-								{ label: t('settings.l2.minInterval') },
-								h(
-									'select',
-									{ className: 'pw-input', value: String(draft.l2MinInterval), onChange: (event) => update({ l2MinInterval: Number(event.target.value) }) },
-									L2_MIN_INTERVALS.map((minutes) => h('option', { key: minutes, value: String(minutes) }, t('settings.l2.hours', { n: minutes / 60 })))
-								)
-							)
-						),
-						l2Live.used === null || l2Live.perDay === null ? null : h('span', { className: 'pw-hint' }, t('settings.l2.budget', { used: l2Live.used, perDay: l2Live.perDay })),
-						h('div', { className: 'pw-divider' }),
-						h(
-							'div',
-							{ className: 'pw-row', style: { gap: 8, flexWrap: 'wrap' } },
-							h('span', { className: 'pw-label' }, t('settings.l2.auth')),
-							h(AuthChip, { status: statusSnapshot, pending: loginPending, onLogin: signIn }),
-							blocked === null ? null : h(Chip, { tone: 'warn' }, blocked)
-						),
+						{ className: 'pw-row', style: { flexWrap: 'wrap', gap: 8 } },
+						h(AuthChip, { status: statusSnapshot, pending: loginPending, onLogin: signIn }),
+						blocked === null ? null : h(Chip, { tone: 'warn' }, blocked),
 						h(
 							'span',
 							{ className: 'pw-hint' },
 							auth !== null && typeof auth.lastVerifiedAt === 'string' && auth.lastVerifiedAt !== ''
 								? t('settings.l2.lastVerified', { time: relativeTime(auth.lastVerifiedAt) })
 								: t('settings.l2.neverVerified')
-						),
-						h(
-							'div',
-							{ className: 'pw-row', style: { gap: 8, flexWrap: 'wrap' } },
-							h(Button, { onClick: signIn, disabled: loginPending || l2Live.available === false }, loginPending ? t('login.pending') : t('settings.login')),
-							h(Button, { variant: 'danger', onClick: signOut, disabled: loginPending || !signedIn }, t('settings.logout'))
 						)
 					),
 					h(
-						Section,
-						{ title: t('settings.feishu.title'), help: t('settings.feishu.help') },
+						'div',
+						{ className: 'pw-row', style: { gap: 8, flexWrap: 'wrap' } },
+						h(Button, { onClick: () => void signIn(), disabled: loginPending || l2Live.available === false }, loginPending ? t('login.pending') : t('settings.login')),
+						h(Button, { variant: 'danger', onClick: () => void signOut(), disabled: loginPending || !signedIn }, t('settings.logout'))
+					),
+					h('div', { className: 'pw-divider' }),
+					h(
+						'div',
+						{ className: 'pw-rule-row' },
+						h('span', null, t('settings.l2.enable')),
+						h(Switch, { checked: draft.l2Enabled === true, label: t('settings.l2.enable'), onChange: (next) => update({ l2Enabled: next }) })
+					),
+					h(
+						'div',
+						{ className: 'pw-form-row' },
 						h(
 							Field,
-							{ label: 'Webhook URL' },
+							{ label: t('settings.l2.perDay') },
+							h(
+								'select',
+								{ className: 'pw-input', value: String(draft.l2PerDay), onChange: (event) => update({ l2PerDay: Number(event.target.value) }) },
+								L2_PER_DAY.map((count) => h('option', { key: count, value: String(count) }, t('settings.l2.times', { n: count })))
+							)
+						),
+						h(
+							Field,
+							{ label: t('settings.l2.minInterval') },
+							h(
+								'select',
+								{ className: 'pw-input', value: String(draft.l2MinInterval), onChange: (event) => update({ l2MinInterval: Number(event.target.value) }) },
+								L2_MIN_INTERVALS.map((minutes) => h('option', { key: minutes, value: String(minutes) }, t('settings.l2.hours', { n: minutes / 60 })))
+							)
+						)
+					),
+					l2Live.used === null || l2Live.perDay === null ? null : h('span', { className: 'pw-hint' }, t('settings.l2.budget', { used: l2Live.used, perDay: l2Live.perDay }))
+				),
+				h(
+					Section,
+					{ key: 'feishu', title: t('settings.feishu.title') },
+					h(
+						'div',
+						{ className: 'pw-field' },
+						h('label', { className: 'pw-label' }, t('settings.feishu.label')),
+						h(
+							'div',
+							{ className: 'pw-row', style: { gap: 6, alignItems: 'center' } },
 							h('input', {
 								className: 'pw-input',
 								type: 'url',
@@ -2661,95 +2743,21 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								placeholder: t('settings.feishu.placeholder'),
 								value: draft.feishuWebhook,
 								onChange: (event) => update({ feishuWebhook: event.target.value }),
-							})
+							}),
+							h(InfoTip, { text: t('settings.feishu.help'), align: 'end' })
 						)
 					),
 					h(
-						Section,
-						{ title: t('settings.notify.title') },
-						h(
-							'div',
-							{ className: 'pw-form-row' },
-							h(
-								Field,
-								{ label: t('settings.notify.quiet') },
-								h(
-									'div',
-									{ className: 'pw-row', style: { gap: 6 } },
-									h(
-										'select',
-										{ className: 'pw-input', value: draft.quietStart, onChange: (event) => update({ quietStart: event.target.value }) },
-										hours.map((hour) => h('option', { key: hour.value, value: hour.value }, hour.label))
-									),
-									h('span', { className: 'pw-hint' }, '—'),
-									h(
-										'select',
-										{ className: 'pw-input', value: draft.quietEnd, onChange: (event) => update({ quietEnd: event.target.value }) },
-										hours.map((hour) => h('option', { key: hour.value, value: hour.value }, hour.label))
-									)
-								)
-							),
-							h(
-								Field,
-								{ label: t('settings.notify.cooldown') },
-								h('input', {
-									className: 'pw-input',
-									type: 'number',
-									min: 0,
-									inputMode: 'numeric',
-									value: draft.cooldownMinutes,
-									onChange: (event) => update({ cooldownMinutes: event.target.value }),
-								})
-							),
-							h(
-								Field,
-								{ label: t('settings.notify.digestAt') },
-								h('input', { className: 'pw-input', type: 'time', value: draft.digestAt, onChange: (event) => update({ digestAt: event.target.value }) })
-							)
-						)
-					),
-					h(
-						Section,
-						{ title: t('settings.passengers.title'), help: t('settings.passengers.help') },
-						passengers === null
-							? h(Skeleton, { height: 42, radius: 10 })
-							: passengers.length === 0
-								? h('span', { className: 'pw-muted', style: { fontSize: 12 } }, t('settings.passengers.empty'))
-								: h('div', { className: 'pw-col', style: { gap: 6 } }, passengers.map((passenger) => h(PassengerRow, { key: passenger.id, passenger, disabled: passengerBusy, onDelete: removePassenger }))),
-						h('div', { className: 'pw-divider' }),
-						h(
-							'div',
-							{ className: 'pw-form-row' },
-							h(Field, { label: t('settings.passengers.nickname') }, h('input', { className: 'pw-input', value: passengerForm.nickname, placeholder: '—', onChange: (event) => setPassengerForm({ ...passengerForm, nickname: event.target.value }) })),
-							h(
-								Field,
-								{ label: t('settings.passengers.type') },
-								h(
-									'select',
-									{ className: 'pw-input', value: passengerForm.type, onChange: (event) => setPassengerForm({ ...passengerForm, type: event.target.value }) },
-									PASSENGER_TYPES.map((type) => h('option', { key: type, value: type }, t(`type.${type}`)))
-								)
-							),
-							h(
-								Field,
-								{ label: t('settings.passengers.age') },
-								h('input', {
-									className: 'pw-input',
-									type: 'number',
-									min: 0,
-									max: 120,
-									inputMode: 'numeric',
-									value: passengerForm.age,
-									onChange: (event) => setPassengerForm({ ...passengerForm, age: event.target.value }),
-								})
-							),
-							h(Button, { icon: h(PlusIcon, { size: 14 }), onClick: submitPassenger, disabled: passengerBusy }, t('settings.passengers.add'))
-						),
-						passengerError === null ? null : h('div', { className: 'pw-hint', style: { color: 'var(--dsw-alias-state-error-primary)' }, role: 'alert' }, passengerError)
+						'div',
+						{ className: 'pw-field', style: { maxWidth: 240 } },
+						h('label', { className: 'pw-label' }, t('settings.feishu.digestAt')),
+						h('input', { className: 'pw-input', type: 'time', value: draft.digestAt, onChange: (event) => update({ digestAt: event.target.value }) }),
+						h('span', { className: 'pw-hint' }, t('settings.feishu.digestHelp'))
 					)
 				)
 			);
 		}
+
 		// #endregion
 
 		// #region new view
@@ -2804,6 +2812,101 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			);
 		}
 
+		/** Passenger manager dialog: list, add form and delete, with the Host's own errors. */
+		function PassengerDialog(props) {
+			const passengers = Array.isArray(props.passengers) ? props.passengers : [];
+			const [form, setForm] = useState({ nickname: '', type: 'adult', age: '' });
+			const [error, setError] = useState(null);
+			const [busy, setBusy] = useState(false);
+
+			const submit = async () => {
+				const nickname = form.nickname.trim();
+				if (nickname === '') {
+					setError(t('passengers.nicknameRequired'));
+					return;
+				}
+				const type = PASSENGER_TYPES.indexOf(form.type) >= 0 ? form.type : 'adult';
+				const body = { nickname, type };
+				const ageRaw = form.age.trim();
+				if (ageRaw !== '') {
+					const age = Number(ageRaw);
+					if (!Number.isFinite(age) || age < 0 || age > 120) {
+						setError(t('passengers.ageInvalid'));
+						return;
+					}
+					body.age = Math.round(age);
+				}
+				setBusy(true);
+				setError(null);
+				try {
+					await props.onAdd(body);
+					setForm({ nickname: '', type: 'adult', age: '' });
+				} catch (reason) {
+					setError(reason && reason.message ? reason.message : String(reason));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			const remove = async (passenger) => {
+				const confirmed = typeof window.confirm === 'function' ? window.confirm(t('passengers.deleteConfirm', { name: passenger.nickname })) : true;
+				if (!confirmed) return;
+				setBusy(true);
+				setError(null);
+				try {
+					await props.onDelete(passenger);
+				} catch (reason) {
+					setError(reason && reason.message ? reason.message : t('passengers.referenced'));
+				} finally {
+					setBusy(false);
+				}
+			};
+
+			return h(
+				Modal,
+				{ title: t('passengers.title'), onClose: props.onClose },
+				passengers.length === 0
+					? h('p', { className: 'pw-hint', style: { margin: 0 } }, t('passengers.empty'))
+					: h(
+							'div',
+							{ style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+							passengers.map((passenger) =>
+								h(
+									'div',
+									{ className: 'pw-listitem', key: passenger.id },
+									h('span', { className: 'pw-listitem-name pw-ellipsis' }, passenger.nickname),
+									h(Chip, { tone: 'flat' }, PASSENGER_TYPES.indexOf(passenger.type) >= 0 ? t(`type.${passenger.type}`) : passenger.type),
+									typeof passenger.age === 'number' && Number.isFinite(passenger.age) ? h('span', { className: 'pw-hint' }, `${passenger.age} ${t('passengers.ageUnit')}`) : null,
+									h('span', { className: 'pw-spacer' }),
+									h(IconButton, { label: t('passengers.delete'), onClick: () => void remove(passenger), disabled: busy }, h(TrashIcon, { size: 14 }))
+								)
+							)
+						),
+				h('div', { className: 'pw-divider' }),
+				h(
+					'div',
+					{ className: 'pw-form-row' },
+					h(Field, { label: t('passengers.nickname') }, h('input', { className: 'pw-input', value: form.nickname, placeholder: '—', onChange: (event) => setForm({ ...form, nickname: event.target.value }) })),
+					h(
+						Field,
+						{ label: t('passengers.type') },
+						h(
+							'select',
+							{ className: 'pw-input', value: form.type, onChange: (event) => setForm({ ...form, type: event.target.value }) },
+							PASSENGER_TYPES.map((type) => h('option', { key: type, value: type }, t(`type.${type}`)))
+						)
+					),
+					h(
+						Field,
+						{ label: t('passengers.age') },
+						h('input', { className: 'pw-input', type: 'number', min: 0, max: 120, inputMode: 'numeric', value: form.age, onChange: (event) => setForm({ ...form, age: event.target.value }) })
+					),
+					h(Button, { icon: h(PlusIcon, { size: 14 }), onClick: () => void submit(), disabled: busy }, t('passengers.add'))
+				),
+				error === null ? null : h('p', { className: 'pw-hint', style: { margin: 0, color: 'var(--dsw-alias-state-error-primary)' }, role: 'alert' }, error)
+			);
+		}
+
 		function NewView(props) {
 			const [depQuery, setDepQuery] = useState('');
 			const [depCode, setDepCode] = useState('');
@@ -2813,21 +2916,34 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [datesFixed, setDatesFixed] = useState(false);
 			const [departDate, setDepartDate] = useState('');
 			const [returnDate, setReturnDate] = useState('');
-			const [selected, setSelected] = useState(null);
+			// Nothing is selected by default: at least one passenger has to be picked.
+			const [selected, setSelected] = useState([]);
+			const [advancedOpen, setAdvancedOpen] = useState(false);
+			const [cadenceTouched, setCadenceTouched] = useState(false);
+			const [calendarHours, setCalendarHours] = useState(6);
+			const [watchMinutes, setWatchMinutes] = useState(60);
+			const [managerOpen, setManagerOpen] = useState(false);
 			const [error, setError] = useState(null);
 			const [submitting, setSubmitting] = useState(false);
 			const passengers = Array.isArray(props.passengers) ? props.passengers : null;
-			const canSubmit = passengers !== null && passengers.length > 0;
+			const mode = datesFixed ? 'watch' : 'calendar';
+			const ids = Array.isArray(selected) ? selected : [];
+			const canSubmit = submitting === false && ids.length > 0;
 
-			// Every existing passenger is selected by default; a later reload only drops
-			// ids that vanished, so a manual deselect survives.
+			// Keep only ids that still exist; a later reload never re-selects anything.
 			useEffect(() => {
 				if (passengers === null) return;
-				setSelected((current) => {
-					if (current === null) return passengers.map((passenger) => passenger.id);
-					return current.filter((id) => passengers.some((passenger) => passenger.id === id));
-				});
+				setSelected((current) => (Array.isArray(current) ? current.filter((id) => passengers.some((passenger) => passenger.id === id)) : []));
 			}, [passengers]);
+
+			// The advanced cadence select starts on the global defaults from /settings.
+			useEffect(() => {
+				const cadence = settingsCadence(props.settings);
+				const hours = numberOrNull(cadence.calendarHours);
+				const minutes = numberOrNull(cadence.watchMinutes);
+				setCalendarHours(CALENDAR_HOURS.indexOf(hours) >= 0 ? hours : 6);
+				setWatchMinutes(WATCH_MINUTES.indexOf(minutes) >= 0 ? minutes : 60);
+			}, [props.settings]);
 
 			const togglePassenger = (id) => {
 				setSelected((current) => {
@@ -2863,7 +2979,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						}
 					}
 				}
-				const ids = Array.isArray(selected) ? selected : [];
 				if (ids.length === 0) {
 					setError(t('new.passengerRequired'));
 					return;
@@ -2872,6 +2987,10 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				if (datesFixed) {
 					body.departDate = departDate;
 					if (trip === 'round') body.returnDate = returnDate;
+				}
+				// Optional: only an explicit choice overrides the global default.
+				if (cadenceTouched) {
+					body.cadence = mode === 'calendar' ? { hours: Number(calendarHours) } : { minutes: Number(watchMinutes) };
 				}
 				setSubmitting(true);
 				setError(null);
@@ -2884,21 +3003,21 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				}
 			};
 
-			const passengerSection =
+			const passengerBlock =
 				passengers === null
-					? h(Skeleton, { height: 42, radius: 10 })
+					? h(Skeleton, { height: 42, radius: 12 })
 					: passengers.length === 0
 						? h(
 								'div',
-								{ className: 'pw-col', style: { gap: 8, alignItems: 'flex-start' } },
-								h('span', { className: 'pw-muted', style: { fontSize: 12 } }, t('new.passengers.empty')),
-								h(Button, { size: 'sm', onClick: props.onGoSettings }, t('new.passengers.goSettings'))
+								{ className: 'pw-row', style: { gap: 10, flexWrap: 'wrap' } },
+								h('span', { className: 'pw-hint' }, t('new.passengers.empty')),
+								h(Button, { size: 'sm', icon: h(PlusIcon, { size: 13 }), onClick: () => setManagerOpen(true) }, t('passengers.new'))
 							)
 						: h(
 								'div',
-								{ className: 'pw-row', style: { flexWrap: 'wrap', gap: 6 } },
+								{ className: 'pw-row', style: { flexWrap: 'wrap', gap: 8 } },
 								passengers.map((passenger) => {
-									const active = Array.isArray(selected) && selected.indexOf(passenger.id) >= 0;
+									const active = ids.indexOf(passenger.id) >= 0;
 									const typeLabel = PASSENGER_TYPES.indexOf(passenger.type) >= 0 ? t(`type.${passenger.type}`) : passenger.type;
 									return h(
 										'button',
@@ -2918,22 +3037,18 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 							);
 
 			return h(
-				'div',
-				{ className: 'pw-scroll' },
+				PageShell,
+				{
+					lead: h(IconButton, { label: t('new.back'), onClick: props.onBack }, h(BackIcon, { size: 18 })),
+					title: t('new.title'),
+				},
+				props.banner,
 				h(
 					'div',
-					{ className: 'pw-body' },
+					{ className: 'pw-form' },
 					h(
-						'div',
-						{ className: 'pw-row', style: { alignItems: 'center', gap: 10 } },
-						h(IconButton, { label: t('new.back'), onClick: props.onBack }, h(BackIcon, { size: 16 })),
-						h('h2', { className: 'pw-page-title' }, t('new.title')),
-						h('span', { className: 'pw-spacer' }),
-						h(Button, { variant: 'primary', onClick: submit, disabled: submitting || !canSubmit }, submitting ? t('new.submitting') : t(datesFixed ? 'new.submit.watch' : 'new.submit.calendar'))
-					),
-					h(
-						Section,
-						{ title: t('new.route.title'), help: t('new.cityHint') },
+						Group,
+						{ key: 'route', title: t('new.route.title') },
 						h(
 							'div',
 							{ className: 'pw-form-row' },
@@ -2942,60 +3057,106 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						)
 					),
 					h(
-						Section,
-						{ title: t('new.trip.title') },
-						h(
-							'div',
-							{ className: 'pw-tabs', role: 'tablist' },
-							[
+						Group,
+						{ key: 'trip', title: t('new.trip.title') },
+						h(SegControl, {
+							label: t('new.trip.title'),
+							value: trip,
+							onChange: setTrip,
+							options: [
 								{ id: 'oneway', label: t('new.trip.oneway') },
 								{ id: 'round', label: t('new.trip.round') },
-							].map((entry) =>
-								h(
-									'button',
-									{
-										key: entry.id,
-										type: 'button',
-										role: 'tab',
-										className: 'pw-tab',
-										'data-active': trip === entry.id ? 'true' : 'false',
-										'aria-selected': trip === entry.id ? 'true' : 'false',
-										onClick: () => setTrip(entry.id),
-									},
-									entry.label
-								)
-							)
-						)
+							],
+						})
 					),
 					h(
-						Section,
-						{ title: t('new.date.title'), help: datesFixed ? t('new.date.watchHint') : t('new.date.calendarHint') },
+						Group,
+						{ key: 'date', title: t('new.date.title') },
 						h(
 							'div',
-							{ className: 'pw-rule-row' },
-							h('span', null, t('new.date.known')),
-							h(Switch, { checked: datesFixed, label: t('new.date.known'), onChange: (next) => setDatesFixed(next) })
+							{ className: 'pw-row', style: { gap: 8 } },
+							h(Switch, { checked: datesFixed, label: t('new.date.known'), onChange: (next) => setDatesFixed(next) }),
+							h('span', null, t('new.date.known'))
 						),
 						datesFixed
 							? h(
 									'div',
 									{ className: 'pw-form-row' },
-									h(Field, { label: t('new.departDate') }, h('input', { className: 'pw-input', type: 'date', value: departDate, onChange: (event) => setDepartDate(event.target.value) })),
-									trip === 'round' ? h(Field, { label: t('new.returnDate') }, h('input', { className: 'pw-input', type: 'date', value: returnDate, onChange: (event) => setReturnDate(event.target.value) })) : null
+									h(Field, { label: t('new.departDate') }, h(DateField, { value: departDate, onChange: setDepartDate })),
+									trip === 'round' ? h(Field, { label: t('new.returnDate') }, h(DateField, { value: returnDate, min: departDate || undefined, onChange: setReturnDate })) : null
 								)
 							: null
 					),
-					h(Section, { title: t('new.passengers.title'), help: t('new.passengers.help') }, passengerSection),
-					error === null ? null : h(ErrorBar, { message: error, inline: true, onDismiss: () => setError(null) }),
+					h(
+						Group,
+						{
+							key: 'passengers',
+							title: t('new.passengers.title'),
+							action: passengers === null ? null : h('button', { type: 'button', className: 'pw-linkbtn', onClick: () => setManagerOpen(true) }, t('passengers.manage')),
+						},
+						passengerBlock
+					),
 					h(
 						'div',
-						{ className: 'pw-row', style: { justifyContent: 'flex-end', gap: 8 } },
+						{ key: 'advanced', className: 'pw-adv' },
+						h(
+							'button',
+							{
+								type: 'button',
+								className: 'pw-adv-toggle',
+								'aria-expanded': advancedOpen ? 'true' : 'false',
+								onClick: () => setAdvancedOpen(!advancedOpen),
+							},
+							h(ChevronDownIcon, { size: 14 }),
+							h('span', null, t('new.advanced.title'))
+						),
+						advancedOpen
+							? h(
+									'div',
+									{ className: 'pw-adv-body' },
+									h(
+										Field,
+										{ label: t('new.advanced.cadence') },
+										h(
+											'select',
+											{
+												className: 'pw-input',
+												value: String(mode === 'calendar' ? calendarHours : watchMinutes),
+												onChange: (event) => {
+													const value = Number(event.target.value);
+													setCadenceTouched(true);
+													if (mode === 'calendar') setCalendarHours(value);
+													else setWatchMinutes(value);
+												},
+											},
+											mode === 'calendar'
+												? CALENDAR_HOURS.map((hours) => h('option', { key: hours, value: String(hours) }, t('cadence.hours', { n: hours })))
+												: WATCH_MINUTES.map((minutes) => h('option', { key: minutes, value: String(minutes) }, t('cadence.minutes', { n: minutes })))
+										)
+									)
+								)
+							: null
+					),
+					error === null ? null : h(ErrorBar, { key: 'error', message: error, inline: true, onDismiss: () => setError(null) }),
+					h(
+						'div',
+						{ key: 'submit', className: 'pw-row', style: { justifyContent: 'flex-end', gap: 8 } },
 						h(Button, { onClick: props.onBack, disabled: submitting }, t('new.back')),
-						h(Button, { variant: 'primary', onClick: submit, disabled: submitting || !canSubmit }, submitting ? t('new.submitting') : t(datesFixed ? 'new.submit.watch' : 'new.submit.calendar'))
+						h(Button, { variant: 'primary', onClick: () => void submit(), disabled: !canSubmit }, submitting ? t('new.submitting') : t(mode === 'watch' ? 'new.submit.watch' : 'new.submit.calendar'))
 					)
-				)
+				),
+				managerOpen
+					? h(PassengerDialog, {
+							key: 'manager',
+							passengers,
+							onAdd: props.onAddPassenger,
+							onDelete: props.onDeletePassenger,
+							onClose: () => setManagerOpen(false),
+						})
+					: null
 			);
 		}
+
 		// #endregion
 
 		// #region page
@@ -3078,7 +3239,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const detailId = view.kind === 'detail' ? view.monitorId : null;
 			const detailMonitor = detailId === null || monitors === null ? null : monitors.find((monitor) => monitor.id === detailId) || null;
 			const detailMode = detailMonitor === null ? null : monitorMode(detailMonitor);
-			const calendarHours = settings && settings.cadence && numberOrNull(settings.cadence.calendarHours) !== null ? settings.cadence.calendarHours : null;
+			const calendarHours = numberOrNull(settingsCadence(settings).calendarHours);
 
 			useEffect(() => {
 				setPrices(null);
@@ -3362,11 +3523,25 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				setView({ kind: 'list', monitorId: null });
 			}, [view, monitors]);
 
+			// Every view owns the full page shell, so the one shared error bar rides in
+			// each view's content column instead of floating above the fixed head.
+			const banner = h(ErrorBar, {
+				message: error,
+				onRetry: () => void loadCore({ manual: true }),
+				onDismiss: () => setError(null),
+			});
+
 			let content = null;
 			if (view.kind === 'detail') {
 				content =
 					detailMonitor === null
-						? h('div', { className: 'pw-scroll' }, h('div', { className: 'pw-body' }, h(Skeleton, { height: 32, width: '40%' }), h(Skeleton, { height: 180, radius: 12 }), h(Skeleton, { height: 70, radius: 12 })))
+						? h(
+								PageShell,
+								{ title: t('nav') },
+								h(Skeleton, { height: 28, width: '40%' }),
+								h(Skeleton, { height: 180, radius: 16 }),
+								h(Skeleton, { height: 70, radius: 16 })
+							)
 						: h(DetailView, {
 								monitor: detailMonitor,
 								passengers,
@@ -3377,6 +3552,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								pricesError,
 								flights,
 								flightsError,
+								banner,
 								busy: busyKey !== null,
 								onBack: goList,
 								onToggleEnabled: toggleEnabled,
@@ -3393,6 +3569,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					status,
 					loading: dataLoading,
 					error: settingsError,
+					banner,
 					onReload: reloadAux,
 					onBack: goList,
 					onSaveSettings: saveSettings,
@@ -3406,16 +3583,18 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				content = h(NewView, {
 					passengers,
 					settings,
+					banner,
 					onCreate: createMonitor,
+					onAddPassenger: addPassenger,
+					onDeletePassenger: deletePassenger,
 					onBack: goList,
-					onGoSettings: goSettings,
 				});
 			} else {
 				content = h(ListView, {
 					monitors,
 					status,
 					filter,
-					error,
+					banner,
 					refreshing,
 					busyKey,
 					loginPending,
@@ -3429,17 +3608,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				});
 			}
 
-			return h(
-				'div',
-				{ className: 'pw-root' },
-				h(ErrorBar, {
-					message: error,
-					onRetry: () => void loadCore({ manual: true }),
-					onDismiss: () => setError(null),
-				}),
-				content
-			);
+			return h('div', { className: 'pw-root' }, content);
 		}
+
 		// #endregion
 
 		// #region sidebar glyph

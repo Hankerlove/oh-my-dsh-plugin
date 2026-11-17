@@ -148,8 +148,17 @@ function normaliseConfig(raw) {
 }
 
 /** Cadence stored on a monitor only carries the watch interval, in minutes. */
-function normaliseCadence(input, config) {
+/**
+ * Per-monitor cadence. Calendar monitors carry hours, watch monitors minutes;
+ * both fall back to the global default so an old monitor keeps working.
+ */
+function normaliseCadence(input, config, mode = 'watch') {
   const raw = input && typeof input === 'object' ? input : {};
+  if (mode === 'calendar') {
+    const value = raw.hours !== undefined ? raw.hours : raw.calendarHours;
+    const fallback = Number(config?.cadence?.calendarHours) || DEFAULT_CONFIG().cadence.calendarHours;
+    return { hours: clampUp(value, CALENDAR_HOURS, fallback) };
+  }
   const value = raw.minutes !== undefined ? raw.minutes : raw.l1Minutes;
   const fallback = Number(config?.cadence?.watchMinutes) || DEFAULT_CONFIG().cadence.watchMinutes;
   return { minutes: clampUp(value, WATCH_MINUTES, fallback) };
@@ -184,7 +193,7 @@ function normaliseStoredMonitor(monitor, config) {
     enabled: monitor.enabled !== false,
     passengerIds: Array.isArray(monitor.passengerIds) ? monitor.passengerIds.filter((id) => typeof id === 'string') : [],
     rules: mode === 'calendar' ? [] : Array.isArray(monitor.rules) ? monitor.rules : [],
-    cadence: normaliseCadence(monitor.cadence, config),
+    cadence: normaliseCadence(monitor.cadence, config, mode),
   };
   // An empty rules list is a legitimate choice (track the price, stay silent),
   // so an upgrade must not resurrect defaults here.
@@ -476,7 +485,7 @@ export function createStore(rootDir) {
       params,
       passengerIds,
       rules,
-      cadence: normaliseCadence(input.cadence, cache.config),
+      cadence: normaliseCadence(input.cadence, cache.config, mode),
       createdAt: now,
       updatedAt: now,
     };
@@ -510,7 +519,7 @@ export function createStore(rootDir) {
     } else if (current.mode === 'calendar') {
       next.rules = DEFAULT_WATCH_RULES();
     }
-    if (input.cadence !== undefined) next.cadence = normaliseCadence(input.cadence, cache.config);
+    if (input.cadence !== undefined) next.cadence = normaliseCadence(input.cadence, cache.config, next.mode || monitorMode(next.params));
 
     cache.monitors[index] = next;
     await saveMonitors();
