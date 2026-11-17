@@ -126,6 +126,9 @@ export function createRouter({ store, logger, actions }) {
     const item = {
       id: monitor.id,
       title: monitor.title,
+      // `type` is the top-level product kind (flight / hotel). Hotel monitors are
+      // not implemented yet, so every stored monitor reads back as a flight.
+      type: monitor.type === 'hotel' ? 'hotel' : 'flight',
       mode: monitor.mode,
       enabled: monitor.enabled !== false,
       params: monitor.params,

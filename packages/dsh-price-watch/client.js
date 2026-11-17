@@ -235,6 +235,11 @@ window.__ModuleLoader__.load({
 			return monitor && monitor.mode === 'calendar' ? 'calendar' : 'watch';
 		}
 
+		/** First-level type from the Host list (`flight` today, `hotel` later). */
+		function monitorType(monitor) {
+			return monitor && monitor.type === 'hotel' ? 'hotel' : 'flight';
+		}
+
 		function tripLabel(trip) {
 			return trip === 'round' ? t('card.round') : t('card.oneway');
 		}
@@ -494,9 +499,14 @@ window.__ModuleLoader__.load({
 			'list.new': '新建监控',
 			'list.settings': '设置',
 			'list.refresh': '刷新',
+			'list.newHotelHint': '酒店监控即将支持',
 			'filter.all': '全部',
 			'filter.calendar': '行情',
 			'filter.watch': '监控',
+			'filter.type.flight': '机票',
+			'filter.type.hotel': '酒店',
+			'filter.type.label': '监控类型',
+			'filter.mode.label': '监控模式',
 			'status.ok': '采集正常',
 			'status.warn': '采集异常',
 			'status.never': '尚未采集',
@@ -529,6 +539,8 @@ window.__ModuleLoader__.load({
 			'empty.body': '没定日期就创建「行情监控」，看未来 380 天的价格日历；定了日期就创建「监控」，追踪价格走势和登录态实付价。',
 			'empty.action': '新建监控',
 			'empty.filtered': '当前筛选下没有监控。',
+			'empty.hotelTitle': '酒店监控还在开发中',
+			'empty.hotelBody': '上线后这里会列出酒店监控，现在可以先用机票监控。',
 			'error.network': '网络请求失败，请检查连接后重试',
 			'error.http': '请求失败（HTTP {status}）',
 			'common.retry': '重试',
@@ -616,7 +628,7 @@ window.__ModuleLoader__.load({
 			'settings.login': '登录携程',
 			'settings.logout': '退出登录',
 			'settings.logoutConfirm': '退出登录会删除浏览器里的携程登录信息，确认退出？',
-			'settings.l2.auth': '携程登录',
+			'settings.l2.auth': '用户登录',
 			'settings.l2.enable': '精确采集',
 			'settings.l2.lastVerified': '上次校验 {time}',
 			'settings.l2.neverVerified': '尚未校验登录态',
@@ -721,9 +733,14 @@ window.__ModuleLoader__.load({
 			'list.new': 'New watch',
 			'list.settings': 'Settings',
 			'list.refresh': 'Refresh',
+			'list.newHotelHint': 'Hotel monitors are coming soon',
 			'filter.all': 'All',
 			'filter.calendar': 'Calendar',
 			'filter.watch': 'Watch',
+			'filter.type.flight': 'Flights',
+			'filter.type.hotel': 'Hotels',
+			'filter.type.label': 'Monitor type',
+			'filter.mode.label': 'Monitor mode',
 			'status.ok': 'Collector healthy',
 			'status.warn': 'Collector failing',
 			'status.never': 'Never collected',
@@ -756,6 +773,8 @@ window.__ModuleLoader__.load({
 			'empty.body': 'Create a calendar watch when the dates are open: it keeps the next 380 days of lowest fares. Fix the dates for a watch that tracks the price trend and the signed-in real fare.',
 			'empty.action': 'New watch',
 			'empty.filtered': 'Nothing matches this filter.',
+			'empty.hotelTitle': 'Hotel monitors are still in development',
+			'empty.hotelBody': 'Hotel price monitoring will show up here once it ships. Flight monitors work today.',
 			'error.network': 'Network request failed. Check your connection and retry.',
 			'error.http': 'Request failed (HTTP {status})',
 			'common.retry': 'Retry',
@@ -843,7 +862,7 @@ window.__ModuleLoader__.load({
 			'settings.login': 'Sign in to Ctrip',
 			'settings.logout': 'Sign out',
 			'settings.logoutConfirm': 'Signing out deletes the Ctrip session stored in the browser profile. Continue?',
-			'settings.l2.auth': 'Ctrip sign-in',
+			'settings.l2.auth': 'Sign-in',
 			'settings.l2.enable': 'Precise collection',
 			'settings.l2.lastVerified': 'Last checked {time}',
 			'settings.l2.neverVerified': 'Sign-in has not been checked yet',
@@ -953,27 +972,29 @@ window.__ModuleLoader__.load({
 		 * theme token, so dark mode comes from the host variables for free.
 		 */
 		const STYLE_TEXT = `
-.pw-root { --pw-inset: clamp(24px, 4vw, 48px); --pw-max: 880px; box-sizing: border-box; display: flex; flex-direction: column; flex: 1 1 auto; height: 100%; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; line-height: 1.5; }
+.pw-root { --pw-inset: clamp(24px, 4vw, 48px); --pw-max: 960px; box-sizing: border-box; display: flex; flex-direction: column; flex: 1 1 auto; height: 100%; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; line-height: 1.5; }
 .pw-root *, .pw-root *::before, .pw-root *::after { box-sizing: border-box; }
 @media (max-width: 767px) { .pw-root { --pw-inset: 20px; } }
-/* page shell: fixed head (title row + optional sub row) over one scrolling content column */
+/* page shell: the heading sits inside the scrolling column, like the native task list (28px above, 24px below, no rule) */
 .pw-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
-.pw-head { flex: none; padding: 28px var(--pw-inset) 16px; border-bottom: .5px solid var(--dsw-alias-border-l1); }
-.pw-head-row { display: flex; align-items: flex-start; gap: 10px; width: 100%; max-width: var(--pw-max); margin: 0 auto; }
+.pw-head { display: flex; flex-direction: column; padding-top: 28px; }
+.pw-head-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; margin-bottom: 24px; min-width: 0; }
 .pw-head-lead { flex: none; display: flex; align-items: center; }
-.pw-head-text { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.pw-head-text { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; max-width: 100%; min-width: 0; }
 .pw-title { margin: 0; font-size: 20px; font-weight: 500; line-height: 28px; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .pw-intro { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .pw-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
-.pw-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; flex: none; margin-left: auto; }
-.pw-head-sub { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; width: 100%; max-width: var(--pw-max); margin: 14px auto 0; }
+.pw-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 16px; flex-wrap: wrap; flex: none; margin-left: auto; }
+.pw-head-icons { display: flex; align-items: center; gap: 4px; margin-right: -8px; }
+.pw-head-sub { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .pw-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .pw-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--dsw-alias-scrollbar-bg-l2) transparent; }
 .pw-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
 .pw-scroll::-webkit-scrollbar-thumb { background: var(--dsw-alias-scrollbar-bg-l2); border-radius: 999px; }
 .pw-scroll::-webkit-scrollbar-thumb:hover { background: var(--dsw-alias-scrollbar-hover-l2); }
 .pw-scroll::-webkit-scrollbar-track { background: transparent; }
-.pw-content { display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: var(--pw-max); margin: 0 auto; padding: 20px var(--pw-inset) 48px; }
+.pw-content { width: 100%; max-width: var(--pw-max); margin: 0 auto; padding: 0 var(--pw-inset) 48px; }
+.pw-body { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 /* layout helpers */
 .pw-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pw-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -986,25 +1007,27 @@ window.__ModuleLoader__.load({
 /* typography */
 .pw-hint { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .pw-label { font-size: 12px; line-height: 18px; font-weight: 500; color: var(--dsw-alias-label-secondary); }
+.pw-field-head { display: flex; align-items: center; gap: 6px; min-height: 18px; }
 .pw-group-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--dsw-alias-label-primary); }
 .pw-linkbtn { padding: 0; border: none; background: none; color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: 12px; line-height: 20px; cursor: pointer; }
 .pw-linkbtn:hover { color: var(--dsw-alias-label-primary); }
 .pw-linkbtn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; border-radius: 4px; }
 /* buttons */
-.pw-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; line-height: 20px; cursor: pointer; white-space: nowrap; transition: background 120ms ease, border-color 120ms ease, color 120ms ease; }
-.pw-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-border-l2); }
+.pw-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l3); background: transparent; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; line-height: 20px; cursor: pointer; white-space: nowrap; transition: background 120ms ease, border-color 120ms ease, color 120ms ease; }
+.pw-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
 .pw-btn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
-.pw-btn:disabled { opacity: 0.5; cursor: default; }
+.pw-btn:disabled { opacity: 0.4; cursor: default; }
 .pw-btn-lg { height: 36px; padding: 0 16px; font-size: 13px; border-radius: var(--dsw-radius-lg, 16px); }
+.pw-btn-header { border-radius: 16px; }
 .pw-btn-sm { height: 28px; padding: 0 10px; font-size: 12px; border-radius: var(--dsw-radius-sm, 8px); }
-.pw-btn-primary { border-color: var(--dsw-alias-state-business-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent); color: var(--dsw-alias-state-business-primary); font-weight: 500; }
-.pw-btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 16%, transparent); border-color: var(--dsw-alias-state-business-primary); }
-.pw-btn-danger { color: var(--dsw-alias-state-error-primary); }
-.pw-btn-danger:hover:not(:disabled) { border-color: var(--dsw-alias-state-error-primary); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent); }
+.pw-btn-primary { border-color: transparent; background: var(--dsw-alias-button-primary-fill, var(--dsw-alias-label-primary)); color: var(--dsw-alias-label-primary-foreground, var(--dsw-alias-bg-base)); font-weight: 500; }
+.pw-btn-primary:hover:not(:disabled) { background: var(--dsw-alias-button-primary-hover, var(--dsw-alias-label-primary-dimmed)); border-color: transparent; }
+.pw-btn-danger { border-color: transparent; color: var(--dsw-alias-state-error-primary); }
+.pw-btn-danger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-danger); }
 .pw-iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: none; border-radius: var(--dsw-radius-sm, 8px); background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; transition: background 120ms ease, color 120ms ease; }
 .pw-iconbtn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .pw-iconbtn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
-.pw-iconbtn:disabled { opacity: 0.5; cursor: default; }
+.pw-iconbtn:disabled { opacity: 0.4; cursor: default; }
 /* form */
 .pw-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .pw-form-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
@@ -1028,10 +1051,11 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-seg-btn[data-active="true"] { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); font-weight: 500; }
 .pw-seg-btn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
 /* filter pills (list page) */
-.pw-filters { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.pw-filter { height: 28px; padding: 0 10px; border: none; border-radius: 14px; background: transparent; color: var(--dsw-alias-label-tertiary); font-family: inherit; font-size: 13px; line-height: 22px; cursor: pointer; white-space: nowrap; }
-.pw-filter:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
-.pw-filter[data-active="true"] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); font-weight: 500; }
+.pw-filter-rows { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.pw-filters { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.pw-filter { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border: none; border-radius: 14px; background: transparent; color: var(--dsw-alias-label-tertiary); font-family: inherit; font-size: 14px; line-height: 22px; cursor: pointer; white-space: nowrap; }
+.pw-filter:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.pw-filter[data-active="true"] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .pw-filter:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
 /* groups (new-monitor form) */
 .pw-form { display: flex; flex-direction: column; gap: 20px; }
@@ -1094,8 +1118,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-adv-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 /* inline info tip (feishu webhook hint) */
 .pw-infowrap { position: relative; display: inline-flex; flex: none; }
-.pw-tip { position: absolute; z-index: 20; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); width: max-content; max-width: 260px; padding: 6px 10px; border-radius: var(--dsw-radius-sm, 8px); border: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 18px; text-align: left; box-shadow: var(--dsw-elevation-prominent, none); }
-.pw-tip[data-align="end"] { left: auto; right: -4px; transform: none; }
+.pw-tip { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; width: max-content; max-width: 260px; padding: 6px 10px; border-radius: var(--dsw-radius-sm, 8px); border: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 18px; text-align: left; box-shadow: var(--dsw-elevation-prominent, none); }
+.pw-tip[data-align="end"] { left: auto; right: -4px; }
 /* dialog (passenger manager) */
 .pw-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--dsw-alias-bg-mask-1); backdrop-filter: var(--dsw-mask-blur, none); }
 .pw-dialog { display: flex; flex-direction: column; width: min(520px, 100%); max-height: min(640px, 100%); min-height: 0; overflow: hidden; border-radius: var(--dsw-radius-xl, 20px); border: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-elevation-prominent, none); }
@@ -1197,6 +1221,13 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			h('path', { key: 'c', d: 'M8.4 15.6 11.4 12.6 13.6 14.8 18.2 10.2' }),
 		]);
 		const ChevronDownIcon = (props) => svgIcon((props && props.size) || 14, h('path', { d: 'M6 9.5l6 6 6-6' }));
+		const BedIcon = (props) =>
+			svgIcon((props && props.size) || 22, [
+				h('path', { key: 'a', d: 'M3 19v-6h18v6' }),
+				h('path', { key: 'b', d: 'M3 19h18' }),
+				h('path', { key: 'c', d: 'M6 13V8.5A1.5 1.5 0 0 1 7.5 7h9A1.5 1.5 0 0 1 18 8.5V13' }),
+				h('path', { key: 'd', d: 'M9 13v-2.5h4V13' }),
+			]);
 		const InfoIcon = (props) =>
 			svgIcon((props && props.size) || 14, [
 				h('circle', { key: 'a', cx: 12, cy: 12, r: 9 }),
@@ -1343,30 +1374,40 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		}
 		/** Page shell: one fixed head (title row plus an optional sub row) over one scrolling column. */
 		function PageShell(props) {
+			// The heading lives inside the scrolling column, exactly like the native
+			// task list: 28px above the title, 24px below it, no rule under it.
+			// Children are spread as separate arguments so React never sees one bare
+			// array and asks for keys on static view content.
 			return h(
 				'div',
 				{ className: 'pw-view' },
 				h(
-					'header',
-					{ className: 'pw-head' },
+					'div',
+					{ className: 'pw-scroll' },
 					h(
 						'div',
-						{ className: 'pw-head-row' },
-						props.lead === undefined || props.lead === null ? null : h('div', { className: 'pw-head-lead' }, props.lead),
+						{ className: 'pw-content' },
 						h(
-							'div',
-							{ className: 'pw-head-text' },
-							h('h1', { className: 'pw-title' }, props.title),
-							props.intro === undefined || props.intro === null ? null : h('p', { className: 'pw-intro' }, props.intro),
-							props.meta === undefined || props.meta === null ? null : h('div', { className: 'pw-meta' }, props.meta)
+							'header',
+							{ className: 'pw-head' },
+							h(
+								'div',
+								{ className: 'pw-head-row' },
+								props.lead === undefined || props.lead === null ? null : h('div', { className: 'pw-head-lead' }, props.lead),
+								h(
+									'div',
+									{ className: 'pw-head-text' },
+									h('h1', { className: 'pw-title' }, props.title),
+									props.intro === undefined || props.intro === null ? null : h('p', { className: 'pw-intro' }, props.intro),
+									props.meta === undefined || props.meta === null ? null : h('div', { className: 'pw-meta' }, props.meta)
+								),
+								props.actions === undefined || props.actions === null ? null : h('div', { className: 'pw-head-actions' }, props.actions)
+							),
+							props.sub === undefined || props.sub === null ? null : h('div', { className: 'pw-head-sub' }, props.sub)
 						),
-						props.actions === undefined || props.actions === null ? null : h('div', { className: 'pw-head-actions' }, props.actions)
-					),
-					props.sub === undefined || props.sub === null ? null : h('div', { className: 'pw-head-sub' }, props.sub)
-				),
-				// Spread the content children as separate arguments so React never sees
-				// one bare array and asks for keys on static view content.
-				h('div', { className: 'pw-scroll' }, h('div', { className: 'pw-content' }, ...(Array.isArray(props.children) ? props.children : [props.children])))
+						h('div', { className: 'pw-body' }, ...(Array.isArray(props.children) ? props.children : [props.children]))
+					)
+				)
 			);
 		}
 
@@ -2108,52 +2149,136 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			);
 		}
 
+		/** One row of filter pills: `role="group"` + `aria-pressed`, like the native task list. */
+		function FilterTabs(props) {
+			return h(
+				'div',
+				{ className: 'pw-filters', role: 'group', 'aria-label': props.label },
+				props.options.map((option) =>
+					h(
+						'button',
+						{
+							key: option.id,
+							type: 'button',
+							className: 'pw-filter',
+							'data-active': props.value === option.id ? 'true' : 'false',
+							'aria-pressed': props.value === option.id ? 'true' : 'false',
+							onClick: () => props.onChange(option.id),
+						},
+						option.label
+					)
+				)
+			);
+		}
+
 		function ListView(props) {
 			const monitors = Array.isArray(props.monitors) ? props.monitors : null;
 			const status = props.status;
 			const health = statusHealth(status);
 			const blocked = blockedNotice(status);
-			// List rows carry `mode` only — there is no `type` field on the Host side.
-			const filter = props.filter === 'calendar' || props.filter === 'watch' ? props.filter : 'all';
-			const filtered = monitors === null ? null : monitors.filter((monitor) => filter === 'all' || monitorMode(monitor) === filter);
-			const filters = [
+			// Two levels: `type` first (flight / hotel), then `mode` for flight only.
+			const type = props.filterType === 'hotel' ? 'hotel' : 'flight';
+			const mode = props.filterMode === 'calendar' || props.filterMode === 'watch' ? props.filterMode : 'all';
+			const hotel = type === 'hotel';
+			const ofType = monitors === null ? null : monitors.filter((monitor) => monitorType(monitor) === type);
+			const filtered = ofType === null || hotel ? null : ofType.filter((monitor) => mode === 'all' || monitorMode(monitor) === mode);
+			const typeOptions = [
+				{ id: 'flight', label: t('filter.type.flight') },
+				{ id: 'hotel', label: t('filter.type.hotel') },
+			];
+			const modeOptions = [
 				{ id: 'all', label: t('filter.all') },
 				{ id: 'calendar', label: t('filter.calendar') },
 				{ id: 'watch', label: t('filter.watch') },
 			];
 			const empty = filtered !== null && filtered.length === 0;
-			const nothingAtAll = monitors !== null && monitors.length === 0;
+			const nothingAtAll = ofType !== null && ofType.length === 0;
+			const newHint = hotel ? t('list.newHotelHint') : undefined;
+
+			const body = [];
+			if (monitors === null) {
+				body.push(
+					h(
+						'div',
+						{ className: 'pw-list', key: 'skeleton' },
+						[0, 1, 2].map((index) =>
+							h(
+								'div',
+								{ className: 'pw-card', key: `skeleton-${index}` },
+								h('div', { className: 'pw-col pw-grow' }, h(Skeleton, { height: 16, width: '46%' }), h(Skeleton, { height: 12, width: '68%' })),
+								h(Skeleton, { height: 44, width: 120, radius: 10 })
+							)
+						)
+					)
+				);
+			} else if (hotel) {
+				body.push(h(EmptyState, { key: 'hotel', title: t('empty.hotelTitle'), body: t('empty.hotelBody'), icon: h(BedIcon, { size: 24 }) }));
+			} else if (nothingAtAll) {
+				body.push(
+					h(EmptyState, {
+						key: 'empty',
+						title: t('empty.title'),
+						body: t('empty.body'),
+						icon: h(TagIcon, { size: 22 }),
+						action: h(Button, { variant: 'primary', icon: h(PlusIcon, { size: 15 }), onClick: props.onNew }, t('empty.action')),
+					})
+				);
+			} else if (empty) {
+				body.push(h(EmptyState, { key: 'filtered', title: t('empty.filtered') }));
+			} else if (filtered !== null) {
+				body.push(
+					h(
+						'div',
+						{ className: 'pw-list', key: 'list' },
+						filtered.map((monitor) =>
+							h(MonitorCard, {
+								key: monitor.id,
+								monitor,
+								busy: props.busyKey === `toggle:${monitor.id}`,
+								onOpen: props.onOpen,
+								onToggle: props.onToggle,
+							})
+						)
+					)
+				);
+			}
 
 			return h(
 				PageShell,
 				{
 					title: t('nav'),
 					actions: [
-						h(Button, { key: 'new', variant: 'primary', icon: h(PlusIcon, { size: 14 }), onClick: props.onNew }, t('list.new')),
-						h(Button, { key: 'settings', icon: h(SettingsIcon, { size: 14 }), onClick: props.onSettings }, t('list.settings')),
-						h(Button, { key: 'refresh', icon: h(RefreshIcon, { size: 14 }), onClick: props.onRefresh, disabled: props.refreshing === true }, t('list.refresh')),
+						// Native create button: neutral high-contrast fill, 32px tall,
+						// 16px radius, 12px side padding, 13px label, 13px plus icon.
+						h(
+							Button,
+							{
+								key: 'new',
+								variant: 'primary',
+								className: 'pw-btn-header',
+								icon: h(PlusIcon, { size: 13 }),
+								onClick: props.onNew,
+								disabled: hotel,
+								title: newHint,
+								ariaLabel: newHint,
+							},
+							t('list.new')
+						),
+						h(
+							'div',
+							{ className: 'pw-head-icons', key: 'icons' },
+							h(IconButton, { label: t('list.settings'), onClick: props.onSettings }, h(SettingsIcon, { size: 15 })),
+							h(IconButton, { label: t('list.refresh'), onClick: props.onRefresh, disabled: props.refreshing === true }, h(RefreshIcon, { size: 15 }))
+						),
 					],
 					sub: h(
 						React.Fragment,
 						null,
 						h(
 							'div',
-							{ className: 'pw-filters', role: 'tablist', 'aria-label': t('nav') },
-							filters.map((entry) =>
-								h(
-									'button',
-									{
-										key: entry.id,
-										type: 'button',
-										role: 'tab',
-										className: 'pw-filter',
-										'data-active': filter === entry.id ? 'true' : 'false',
-										'aria-selected': filter === entry.id ? 'true' : 'false',
-										onClick: () => props.onFilterChange(entry.id),
-									},
-									entry.label
-								)
-							)
+							{ className: 'pw-filter-rows' },
+							h(FilterTabs, { label: t('filter.type.label'), options: typeOptions, value: type, onChange: props.onTypeChange }),
+							hotel ? null : h(FilterTabs, { label: t('filter.mode.label'), options: modeOptions, value: mode, onChange: props.onModeChange })
 						),
 						h(
 							'div',
@@ -2167,45 +2292,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					),
 				},
 				props.banner,
-				monitors === null
-					? h(
-							'div',
-							{ className: 'pw-list', key: 'skeleton' },
-							[0, 1, 2].map((index) =>
-								h(
-									'div',
-									{ className: 'pw-card', key: `skeleton-${index}` },
-									h('div', { className: 'pw-col pw-grow' }, h(Skeleton, { height: 16, width: '46%' }), h(Skeleton, { height: 12, width: '68%' })),
-									h(Skeleton, { height: 44, width: 120, radius: 10 })
-								)
-							)
-						)
-					: null,
-				nothingAtAll
-					? h(EmptyState, {
-							key: 'empty',
-							title: t('empty.title'),
-							body: t('empty.body'),
-							icon: h(TagIcon, { size: 22 }),
-							action: h(Button, { variant: 'primary', icon: h(PlusIcon, { size: 15 }), onClick: props.onNew }, t('empty.action')),
-						})
-					: null,
-				empty && !nothingAtAll ? h(EmptyState, { key: 'filtered', title: t('empty.filtered') }) : null,
-				filtered === null || filtered.length === 0
-					? null
-					: h(
-							'div',
-							{ className: 'pw-list', key: 'list' },
-							filtered.map((monitor) =>
-								h(MonitorCard, {
-									key: monitor.id,
-									monitor,
-									busy: props.busyKey === `toggle:${monitor.id}`,
-									onOpen: props.onOpen,
-									onToggle: props.onToggle,
-								})
-							)
-						)
+				...body
 			);
 		}
 
@@ -2750,9 +2837,13 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					h(
 						'div',
 						{ className: 'pw-field', style: { maxWidth: 240 } },
-						h('label', { className: 'pw-label' }, t('settings.feishu.digestAt')),
-						h('input', { className: 'pw-input', type: 'time', value: draft.digestAt, onChange: (event) => update({ digestAt: event.target.value }) }),
-						h('span', { className: 'pw-hint' }, t('settings.feishu.digestHelp'))
+						h(
+							'div',
+							{ className: 'pw-field-head' },
+							h('label', { className: 'pw-label' }, t('settings.feishu.digestAt')),
+							h(InfoTip, { text: t('settings.feishu.digestHelp') })
+						),
+						h('input', { className: 'pw-input', type: 'time', value: draft.digestAt, onChange: (event) => update({ digestAt: event.target.value }) })
 					)
 				)
 			);
@@ -3180,7 +3271,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [calendar, setCalendar] = useState(null);
 			const [calendarError, setCalendarError] = useState(null);
 			const [busyKey, setBusyKey] = useState(null);
-			const [filter, setFilter] = useState('all');
+			// Two filter levels: type is sticky, mode is only meaningful for flights.
+			const [filterType, setFilterType] = useState('flight');
+			const [filterMode, setFilterMode] = useState('all');
 			const [refreshing, setRefreshing] = useState(false);
 			const [dataLoading, setDataLoading] = useState(false);
 			const [tick, setTick] = useState(0);
@@ -3593,13 +3686,19 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				content = h(ListView, {
 					monitors,
 					status,
-					filter,
+					filterType,
+					filterMode,
 					banner,
 					refreshing,
 					busyKey,
 					loginPending,
 					onLogin: startLogin,
-					onFilterChange: setFilter,
+					onTypeChange: (next) => {
+						setFilterType(next);
+						// A type switch always drops back to the full mode list.
+						setFilterMode('all');
+					},
+					onModeChange: setFilterMode,
 					onOpen: openDetail,
 					onToggle: toggleEnabled,
 					onNew: goNew,

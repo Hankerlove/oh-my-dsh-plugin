@@ -646,7 +646,7 @@ export function apply(ctx) {
       const monitors = store.listMonitors();
       const failures = Object.values(state.failures || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
       return {
-        version: '0.1.0',
+        version: '0.2.0',
         auth: { ...(state.auth || { status: 'unknown' }), available, blockedUntil },
         lastCollectAt: state.lastCollectAt,
         monitorCount: monitors.length,
