@@ -972,28 +972,29 @@ window.__ModuleLoader__.load({
 		 * theme token, so dark mode comes from the host variables for free.
 		 */
 		const STYLE_TEXT = `
-.pw-root { --pw-inset: clamp(24px, 4vw, 48px); --pw-max: 960px; box-sizing: border-box; display: flex; flex-direction: column; flex: 1 1 auto; height: 100%; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; line-height: 1.5; }
+.pw-root { --pw-inset: clamp(24px, 4vw, 48px); --pw-max: 864px; box-sizing: border-box; display: flex; flex-direction: column; flex: 1 1 auto; height: 100%; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; line-height: 1.5; }
 .pw-root *, .pw-root *::before, .pw-root *::after { box-sizing: border-box; }
 @media (max-width: 767px) { .pw-root { --pw-inset: 20px; } }
 /* page shell: the heading sits inside the scrolling column, like the native task list (28px above, 24px below, no rule) */
 .pw-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
-.pw-head { display: flex; flex-direction: column; padding-top: 28px; }
+.pw-head { display: flex; flex-direction: column; padding-top: calc(28px + var(--dsh-frame-top-clearance, 0px)); }
 .pw-head-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; margin-bottom: 24px; min-width: 0; }
 .pw-head-lead { flex: none; display: flex; align-items: center; }
 .pw-head-text { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; max-width: 100%; min-width: 0; }
-.pw-title { margin: 0; font-size: 20px; font-weight: 500; line-height: 28px; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.pw-title { margin: 0; font-size: 20px; font-weight: 500; line-height: 28px; letter-spacing: -0.01em; color: var(--dsw-alias-label-primary); overflow-wrap: anywhere; }
 .pw-intro { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .pw-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .pw-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 16px; flex-wrap: wrap; flex: none; margin-left: auto; }
 .pw-head-icons { display: flex; align-items: center; gap: 4px; margin-right: -8px; }
-.pw-head-sub { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.pw-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.pw-head-sub { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin-bottom: 14px; }
+.pw-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.pw-status-warn { color: var(--dsw-alias-state-warn-primary); }
 .pw-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--dsw-alias-scrollbar-bg-l2) transparent; }
 .pw-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
 .pw-scroll::-webkit-scrollbar-thumb { background: var(--dsw-alias-scrollbar-bg-l2); border-radius: 999px; }
 .pw-scroll::-webkit-scrollbar-thumb:hover { background: var(--dsw-alias-scrollbar-hover-l2); }
 .pw-scroll::-webkit-scrollbar-track { background: transparent; }
-.pw-content { width: 100%; max-width: var(--pw-max); margin: 0 auto; padding: 0 var(--pw-inset) 48px; }
+.pw-content { width: 100%; max-width: calc(var(--pw-max) + 2 * var(--pw-inset)); margin: 0 auto; padding: 0 var(--pw-inset) 48px; }
 .pw-body { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 /* layout helpers */
 .pw-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -1050,9 +1051,14 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-seg-btn:hover { color: var(--dsw-alias-label-primary); }
 .pw-seg-btn[data-active="true"] { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); font-weight: 500; }
 .pw-seg-btn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
+.pw-seg-sm { height: 26px; padding: 2px; gap: 2px; border: .5px solid var(--dsw-alias-border-l1); background: transparent; }
+.pw-seg-sm .pw-seg-btn { height: 20px; padding: 0 8px; border-radius: 6px; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+.pw-seg-sm .pw-seg-btn:hover { color: var(--dsw-alias-label-primary); }
+.pw-seg-sm .pw-seg-btn[data-active="true"] { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); font-weight: 500; }
 /* filter pills (list page) */
-.pw-filter-rows { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
 .pw-filters { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.pw-filter-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; width: 100%; min-width: 0; }
+.pw-filter-meta-end { display: flex; align-items: center; gap: 8px; margin-left: auto; min-width: 0; }
 .pw-filter { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border: none; border-radius: 14px; background: transparent; color: var(--dsw-alias-label-tertiary); font-family: inherit; font-size: 14px; line-height: 22px; cursor: pointer; white-space: nowrap; }
 .pw-filter:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .pw-filter[data-active="true"] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
@@ -1083,12 +1089,12 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-chip[data-tone="warn"] { color: var(--dsw-alias-state-warn-primary); }
 .pw-chip[data-tone="flat"] { color: var(--dsw-alias-label-secondary); }
 .pw-chip[data-tone="brand"] { color: var(--dsw-alias-state-business-primary); }
-.pw-authchip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; border: .5px solid transparent; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: 11px; font-weight: 500; line-height: 1; white-space: nowrap; }
+.pw-authchip { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: none; background: transparent; color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: 12px; font-weight: 400; line-height: 20px; white-space: nowrap; }
 .pw-authchip[data-tone="ok"] { color: var(--dsw-alias-state-success-primary); }
 .pw-authchip[data-tone="warn"] { color: var(--dsw-alias-state-warn-primary); }
 .pw-authchip[data-tone="idle"] { color: var(--dsw-alias-label-secondary); }
-.pw-authchip[data-clickable="true"] { cursor: pointer; border-color: var(--dsw-alias-border-l1); }
-.pw-authchip[data-clickable="true"]:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.pw-authchip[data-clickable="true"] { cursor: pointer; }
+.pw-authchip[data-clickable="true"]:hover { color: var(--dsw-alias-label-primary); }
 .pw-authchip[data-clickable="true"]:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
 .pw-authchip[data-busy="true"] { color: var(--dsw-alias-label-secondary); }
 .pw-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-state-idle-primary); flex: none; }
@@ -1427,20 +1433,26 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		}
 
 		/** Inline segmented control: content-width, 30px tall, exactly one selected option. */
+		/**
+		 * Inline segmented control: content-width, exactly one selected option.
+		 * `role="group"` + `aria-pressed` when it acts as a filter, tabs otherwise;
+		 * `className` lets a caller ask for the smaller (`pw-seg-sm`) variant.
+		 */
 		function SegControl(props) {
+			const asGroup = props.role === 'group';
 			return h(
 				'div',
-				{ className: 'pw-seg', role: 'tablist', 'aria-label': props.label },
+				{ className: ['pw-seg', props.className || null].filter(Boolean).join(' '), role: asGroup ? 'group' : 'tablist', 'aria-label': props.label },
 				props.options.map((option) =>
 					h(
 						'button',
 						{
 							key: option.id,
 							type: 'button',
-							role: 'tab',
+							role: asGroup ? undefined : 'tab',
 							className: 'pw-seg-btn',
 							'data-active': props.value === option.id ? 'true' : 'false',
-							'aria-selected': props.value === option.id ? 'true' : 'false',
+							...(asGroup ? { 'aria-pressed': props.value === option.id ? 'true' : 'false' } : { 'aria-selected': props.value === option.id ? 'true' : 'false' }),
 							onClick: () => props.onChange(option.id),
 						},
 						option.label
@@ -2243,13 +2255,20 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				);
 			}
 
+			const statusChips = [
+				h(Dot, { key: 'dot', tone: health.tone }),
+				h('span', { key: 'health' }, t(health.labelKey)),
+				status && status.lastCollectAt ? h('span', { key: 'last' }, t('status.last', { time: formatLastCollect(status.lastCollectAt) })) : null,
+				status ? h(AuthChip, { key: 'auth', status, pending: props.loginPending === true, onLogin: props.onLogin }) : null,
+				blocked === null ? null : h('span', { key: 'blocked', className: 'pw-status-warn' }, blocked),
+			];
+
 			return h(
 				PageShell,
 				{
 					title: t('nav'),
+					// The header keeps only the native-style create button.
 					actions: [
-						// Native create button: neutral high-contrast fill, 32px tall,
-						// 16px radius, 12px side padding, 13px label, 13px plus icon.
 						h(
 							Button,
 							{
@@ -2264,30 +2283,38 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 							},
 							t('list.new')
 						),
-						h(
-							'div',
-							{ className: 'pw-head-icons', key: 'icons' },
-							h(IconButton, { label: t('list.settings'), onClick: props.onSettings }, h(SettingsIcon, { size: 15 })),
-							h(IconButton, { label: t('list.refresh'), onClick: props.onRefresh, disabled: props.refreshing === true }, h(RefreshIcon, { size: 15 }))
-						),
 					],
 					sub: h(
 						React.Fragment,
 						null,
+						// Level 1: product type, native filter pills on a transparent row.
+						h(FilterTabs, { label: t('filter.type.label'), options: typeOptions, value: type, onChange: props.onTypeChange }),
+						// Level 2: the current type's conditions, a smaller segmented
+						// control; status chips and the icon actions sit on its right edge.
 						h(
 							'div',
-							{ className: 'pw-filter-rows' },
-							h(FilterTabs, { label: t('filter.type.label'), options: typeOptions, value: type, onChange: props.onTypeChange }),
-							hotel ? null : h(FilterTabs, { label: t('filter.mode.label'), options: modeOptions, value: mode, onChange: props.onModeChange })
-						),
-						h(
-							'div',
-							{ className: 'pw-status' },
-							h(Dot, { key: 'dot', tone: health.tone }),
-							h('span', { key: 'health' }, t(health.labelKey)),
-							status && status.lastCollectAt ? h('span', { key: 'last' }, t('status.last', { time: formatLastCollect(status.lastCollectAt) })) : null,
-							status ? h(AuthChip, { key: 'auth', status, pending: props.loginPending === true, onLogin: props.onLogin }) : null,
-							blocked === null ? null : h(Chip, { key: 'blocked', tone: 'warn' }, blocked)
+							{ className: 'pw-filter-meta' },
+							hotel
+								? null
+								: h(SegControl, {
+										className: 'pw-seg-sm',
+										role: 'group',
+										label: t('filter.mode.label'),
+										options: modeOptions,
+										value: mode,
+										onChange: props.onModeChange,
+									}),
+							h(
+								'div',
+								{ className: 'pw-filter-meta-end' },
+								h('div', { className: 'pw-status' }, statusChips),
+								h(
+									'div',
+									{ className: 'pw-head-icons' },
+									h(IconButton, { label: t('list.settings'), onClick: props.onSettings }, h(SettingsIcon, { size: 15 })),
+									h(IconButton, { label: t('list.refresh'), onClick: props.onRefresh, disabled: props.refreshing === true }, h(RefreshIcon, { size: 15 }))
+								)
+							)
 						)
 					),
 				},
