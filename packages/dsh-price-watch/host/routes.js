@@ -5,6 +5,11 @@
  * serves the standalone read-only page. Handlers never throw: a failure becomes
  * `{ ok: false, error }` with a sensible status.
  *
+ * The list view is deliberately light (contract §9): it never reads a whole
+ * series, just the last points needed for `latest` / `spark`, plus the calendar
+ * summary for date-less monitors. The detail endpoints (`/calendar`, `/flights`,
+ * `/prices`) carry the heavy payloads.
+ *
  * Write requests pass a same-origin check because plugin routes are not behind
  * the Host web token. Bodies are capped and destroyed when oversized.
  */
@@ -12,6 +17,10 @@ import { MAX_BODY_BYTES } from './util.js';
 import { renderPage } from './page.js';
 
 const API = '/api';
+/** Detail charts keep 90 days, capped at 2000 points (contract §9). */
+const DETAIL_POINTS_MAX = 2000;
+/** How many series points the light list view returns. */
+const SPARK_POINTS = 60;
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -72,26 +81,97 @@ function sameOrigin(req) {
   }
 }
 
+/** Ascending, validated `out` rows of a calendar snapshot. */
+function calendarRows(doc) {
+  return (Array.isArray(doc?.out) ? doc.out : [])
+    .filter((row) => row && /^\d{4}-\d{2}-\d{2}$/.test(row.date) && Number(row.total) > 0)
+    .map((row) => ({ date: row.date, total: Number(row.total), bare: Number(row.bare) || Number(row.total) }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** The light summary the list view renders for a calendar monitor (contract §9). */
+function calendarSummary(doc) {
+  const rows = calendarRows(doc);
+  if (rows.length === 0) return null;
+  const byTotal = rows.slice().sort((a, b) => a.total - b.total);
+  const cheapest = byTotal.slice(0, 3).sort((a, b) => a.date.localeCompare(b.date)).map((row) => ({ date: row.date, total: row.total }));
+  const min = byTotal[0];
+  const max = byTotal[byTotal.length - 1];
+  return {
+    fetchedAt: doc?.fetchedAt || null,
+    count: rows.length,
+    min: { date: min.date, total: min.total },
+    max: { date: max.date, total: max.total },
+    cheapest,
+  };
+}
+
 /**
  * @param {object} deps
  * @param {ReturnType<import('./store.js').createStore>} deps.store
  * @param {object} deps.logger
- * @param {{ refreshMonitor:(id:string)=>Promise<object>, refreshAll:()=>Promise<object>, status:()=>Promise<object>, panelUrl:()=>string }} deps.actions
+ * @param {{ refreshMonitor:(id:string, options?:object)=>Promise<object>, refreshAll:()=>Promise<object>, status:()=>Promise<object>, panelUrl:()=>string }} deps.actions
  */
 export function createRouter({ store, logger, actions }) {
-  async function collectMonitorView(monitor, limit = 60) {
-    const points = await store.readPoints(monitor.id, { limit: 500 });
-    const latest = points.length ? points[points.length - 1] : null;
-    return {
-      ...monitor,
-      latest: latest ? { total: latest.price?.total ?? 0, at: latest.at } : null,
-      points: points.slice(-limit).map((point) => [point.at, point.price?.total ?? 0]),
+  /** `l2: { lastAt, ok }` for the list item; `null` until the monitor ran L2. */
+  function l2Summary(monitor) {
+    const state = store.getState();
+    const lastAt = state.l2LastRunBy?.[monitor.id] || null;
+    if (!lastAt) return null;
+    return { lastAt, ok: state.l2LastOk?.[monitor.id] !== false };
+  }
+
+  /** One list item, exactly the fields contract §9 promises. */
+  async function monitorListItem(monitor) {
+    const item = {
+      id: monitor.id,
+      title: monitor.title,
+      mode: monitor.mode,
+      enabled: monitor.enabled !== false,
+      params: monitor.params,
+      passengerIds: monitor.passengerIds || [],
+      rules: monitor.rules || [],
+      cadence: monitor.cadence || {},
+      updatedAt: monitor.updatedAt,
+      latest: null,
+      spark: [],
+      calendarSummary: null,
+      hasFlights: false,
+      l2: null,
     };
+
+    if (monitor.mode === 'calendar') {
+      const summary = calendarSummary(await store.readCalendarSnapshot(monitor.id));
+      item.calendarSummary = summary;
+      if (summary) item.latest = { total: summary.min.total, at: summary.fetchedAt, note: '380天最低' };
+      return item;
+    }
+
+    const points = await store.readPoints(monitor.id, { limit: SPARK_POINTS });
+    const latest = points.length ? points[points.length - 1] : null;
+    if (latest) item.latest = { total: latest.price?.total ?? 0, at: latest.at };
+    item.spark = points.map((point) => [point.at, point.price?.total ?? 0]);
+    const flights = await store.readFlightsSnapshot(monitor.id);
+    item.hasFlights = Boolean(flights && Array.isArray(flights.flights) && flights.flights.length > 0);
+    item.l2 = l2Summary(monitor);
+    return item;
   }
 
   async function listMonitors() {
-    const monitors = store.listMonitors();
-    return Promise.all(monitors.map((monitor) => collectMonitorView(monitor)));
+    return Promise.all(store.listMonitors().map((monitor) => monitorListItem(monitor)));
+  }
+
+  /** Detail points: last 90 days, at most 2000, flattened as contract §9 asks. */
+  async function detailPoints(monitor) {
+    const since = new Date(Date.now() - 90 * 86400000).toISOString();
+    const points = await store.readPoints(monitor.id, { since, limit: 5000 });
+    return points.slice(-DETAIL_POINTS_MAX).map((point) => ({
+      at: point.at,
+      total: point.price?.total ?? 0,
+      bare: point.price?.bare ?? 0,
+      src: point.src,
+      passengerId: point.key?.passengerId || null,
+    }));
   }
 
   async function handleApi(req, res, method, segments, searchParams) {
@@ -108,8 +188,9 @@ export function createRouter({ store, logger, actions }) {
           const body = await readBody(req);
           const monitor = await store.createMonitor(body);
           logger.info(`新建监控 ${monitor.id} ${monitor.title}`);
+          // 创建后立即异步触发一次采集，首次数据不用等心跳。
           void actions.refreshMonitor(monitor.id, { immediate: true });
-          return sendJson(res, 201, { ok: true, data: { monitor: await collectMonitorView(monitor) } });
+          return sendJson(res, 201, { ok: true, data: { monitor: await monitorListItem(monitor) } });
         }
         return sendJson(res, 405, { ok: false, error: '方法不支持' });
       }
@@ -120,21 +201,87 @@ export function createRouter({ store, logger, actions }) {
       if (!monitor) return sendJson(res, 404, { ok: false, error: '监控不存在' });
 
       if (segments[2] === 'refresh' && method === 'POST') {
-        const result = await actions.refreshMonitor(id);
+        const body = await readBody(req);
+        const result = await actions.refreshMonitor(id, { l2: Boolean(body?.l2) });
         return sendJson(res, 200, { ok: true, data: result });
+      }
+
+      if (segments[2] === 'calendar' && method === 'GET') {
+        const today = store.today();
+        if (monitor.mode !== 'calendar') {
+          return sendJson(res, 200, { ok: true, data: { fetchedAt: null, today, out: [], back: null } });
+        }
+        const doc = await store.readCalendarSnapshot(id);
+        return sendJson(res, 200, {
+          ok: true,
+          data: {
+            fetchedAt: doc?.fetchedAt || null,
+            today,
+            out: calendarRows(doc),
+            back: Array.isArray(doc?.back) ? calendarRows({ out: doc.back }) : null,
+          },
+        });
+      }
+
+      if (segments[2] === 'flights' && method === 'GET') {
+        const doc = await store.readFlightsSnapshot(id);
+        return sendJson(res, 200, {
+          ok: true,
+          data: {
+            fetchedAt: doc?.fetchedAt || null,
+            flights: Array.isArray(doc?.flights) ? doc.flights : [],
+            tax: doc?.tax && typeof doc.tax === 'object' ? doc.tax : null,
+          },
+        });
       }
 
       if (segments[2] === 'prices' && method === 'GET') {
         const days = Math.max(1, Math.min(3650, Number(searchParams.get('days') || 90)));
         const since = new Date(Date.now() - days * 86400000).toISOString();
         const points = await store.readPoints(id, { since, limit: 5000 });
+
+        // L1 points carry no passenger and form the shared reference line;
+        // L2 points are grouped per passenger.
+        const reference = [];
+        const grouped = new Map();
+        for (const point of points) {
+          const total = Number(point.price?.total);
+          if (!Number.isFinite(total) || total <= 0) continue;
+          const passengerId = point.key?.passengerId;
+          if (!passengerId) {
+            reference.push({ at: point.at, total });
+            continue;
+          }
+          if (!grouped.has(passengerId)) grouped.set(passengerId, []);
+          grouped.get(passengerId).push({
+            at: point.at,
+            total,
+            bare: Number(point.price?.bare) || 0,
+            taxSource: point.taxSource || 'estimate',
+          });
+        }
+        const series = [...grouped.entries()].map(([passengerId, groupPoints]) => {
+          const passenger = store.findPassenger(passengerId);
+          return {
+            passengerId,
+            passenger: passenger
+              ? { nickname: passenger.nickname, type: passenger.type }
+              : { nickname: '乘客', type: 'adult' },
+            points: groupPoints,
+          };
+        });
+
         const totals = points.map((point) => Number(point.price?.total)).filter((value) => Number.isFinite(value) && value > 0);
+        const last7 = points
+          .filter((point) => Date.parse(point.at) > Date.now() - 7 * 86400000)
+          .map((point) => Number(point.price?.total))
+          .filter(Number.isFinite);
         const target = (monitor.rules || []).find((rule) => rule.kind === 'target');
-        const last7 = points.filter((point) => Date.parse(point.at) > Date.now() - 7 * 86400000).map((point) => Number(point.price?.total)).filter(Number.isFinite);
         return sendJson(res, 200, {
           ok: true,
           data: {
-            points: points.map((point) => ({ at: point.at, total: point.price?.total ?? 0, bare: point.price?.bare ?? 0, src: point.src })),
+            reference,
+            series,
             stats: {
               min: totals.length ? Math.min(...totals) : null,
               max: totals.length ? Math.max(...totals) : null,
@@ -149,14 +296,20 @@ export function createRouter({ store, logger, actions }) {
         if (method === 'PATCH') {
           const body = await readBody(req);
           const next = await store.updateMonitor(id, body);
-          return sendJson(res, 200, { ok: true, data: { monitor: await collectMonitorView(next) } });
+          if (!next) return sendJson(res, 404, { ok: false, error: '监控不存在' });
+          return sendJson(res, 200, { ok: true, data: { monitor: await monitorListItem(next) } });
         }
         if (method === 'DELETE') {
           await store.removeMonitor(id);
           logger.info(`删除监控 ${id}`);
           return sendJson(res, 200, { ok: true });
         }
-        if (method === 'GET') return sendJson(res, 200, { ok: true, data: { monitor: await collectMonitorView(monitor) } });
+        if (method === 'GET') {
+          return sendJson(res, 200, {
+            ok: true,
+            data: { ...(await monitorListItem(monitor)), points: await detailPoints(monitor) },
+          });
+        }
       }
       return sendJson(res, 405, { ok: false, error: '方法不支持' });
     }
@@ -207,20 +360,22 @@ export function createRouter({ store, logger, actions }) {
         const config = store.getConfig();
         return sendJson(res, 200, {
           ok: true,
-          data: { cadence: config.cadence, l2: config.l2, notify: config.notify, panelBaseUrl: config.panelBaseUrl },
+          data: { cadence: config.cadence, l1: config.l1, l2: config.l2, notify: config.notify, panelBaseUrl: config.panelBaseUrl },
         });
       }
       if (method === 'POST') {
         const body = await readBody(req);
+        // A partial body must only touch the fields it actually carries.
         const next = await store.saveConfig({
           cadence: body.cadence,
+          l1: body.l1,
           l2: body.l2,
           notify: body.notify,
           panelBaseUrl: typeof body.panelBaseUrl === 'string' ? body.panelBaseUrl : undefined,
         });
         return sendJson(res, 200, {
           ok: true,
-          data: { cadence: next.cadence, l2: next.l2, notify: next.notify, panelBaseUrl: next.panelBaseUrl },
+          data: { cadence: next.cadence, l1: next.l1, l2: next.l2, notify: next.notify, panelBaseUrl: next.panelBaseUrl },
         });
       }
       return sendJson(res, 405, { ok: false, error: '方法不支持' });
@@ -258,6 +413,9 @@ export function createRouter({ store, logger, actions }) {
       }
 
       if (!rest.startsWith(API)) return sendJson(res, 404, { ok: false, error: '接口不存在' });
+      // Every API call touches the cache: load (and migrate) the store first so
+      // an early settings write cannot overwrite a config that was never read.
+      await store.init();
       const segments = rest.slice(API.length).split('/').filter(Boolean);
       return await handleApi(req, res, method, segments, url.searchParams);
     } catch (error) {

@@ -1,7 +1,7 @@
 {
   "name": "@ultraslow/dsh-price-watch",
-  "version": "0.1.0",
-  "description": "Flight price watch for the DeepSeek Harness Web UI: pick a route and a date, let the plugin poll Ctrip's public lowest-price calendar, keep a price history, draw it in a sidebar panel, and push Feishu cards when the price hits a target or makes a new high or low.",
+  "version": "0.2.0",
+  "description": "Flight price watch for the DeepSeek Harness Web UI: with no date it tracks the next year's lowest fare day by day from Ctrip's public calendar; with a fixed date it also reads the real flight list and each passenger's payable price from your logged-in browser, keeps the history, and pushes Feishu cards on new highs and lows.",
   "license": "MIT",
   "dependencies": {
     "playwright-core": "^1.65.0"

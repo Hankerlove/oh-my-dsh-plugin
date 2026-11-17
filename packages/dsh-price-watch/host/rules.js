@@ -1,6 +1,10 @@
 /**
  * Alert rules.
  *
+ * Only watch monitors reach this module: a calendar monitor has no price series
+ * and must never notify (contract §1/§10). The `mode` guard below is defensive
+ * so a future caller cannot accidentally fire an alert for a date-less monitor.
+ *
  * Evaluation is a pure function of (monitor, its price history, the scheduler
  * state). Two anti-noise mechanisms are mandatory per the design:
  *
@@ -12,7 +16,7 @@
  *
  * A third, time-based cooldown applies to every rule.
  */
-import { isoDate, isoNow } from './util.js';
+import { isoDate, isoNow, monitorMode } from './util.js';
 
 const RULE_LEVEL = {
   target: 'alert',
@@ -47,6 +51,8 @@ export function evaluate(monitor, points, { state, config, now = new Date() }) {
   });
   if (!Array.isArray(points) || points.length === 0) return unchanged();
   if (monitor.enabled === false) return unchanged();
+  // Calendar monitors have no date and therefore no rule set: never alert.
+  if ((monitor.mode || monitorMode(monitor.params)) !== 'watch') return unchanged();
 
   const latest = points[points.length - 1];
   const total = Number(latest?.price?.total);

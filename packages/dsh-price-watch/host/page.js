@@ -95,7 +95,8 @@ export function renderPage({ title = '价格监控', origin = '' } = {}) {
       return;
     }
     el.innerHTML = state.monitors.map(function (m) {
-      var latest = m.latest, pts = m.points || [];
+      var latest = m.latest, pts = m.spark || [];
+      if (m.mode === 'calendar') return calendarCard(m);
       var prev = pts.length > 1 ? Number(pts[pts.length - 2][1]) : null;
       var delta = latest && isFinite(prev) && prev > 0 ? ((latest.total - prev) / prev) * 100 : null;
       var cls = delta == null ? '' : delta > 0 ? 'up' : 'down';
@@ -109,8 +110,24 @@ export function renderPage({ title = '价格监控', origin = '' } = {}) {
         '</div>';
     }).join('');
   }
+  function calendarCard(m) {
+    var s = m.calendarSummary;
+    if (!s) {
+      return '<div class="card"><div class="row"><span class="title">' + esc(m.title) + '</span>' +
+        '<span class="price">—</span></div><div class="row"><span class="muted">日期待定 · 还没采到日历</span></div></div>';
+    }
+    var chips = (s.cheapest || []).map(function (row) {
+      return esc(String(row.date).slice(5)) + ' ' + money(row.total);
+    }).join('　');
+    return '<div class="card">' +
+      '<div class="row"><span class="title">' + esc(m.title) + '</span><span class="price">' + money(s.min.total) + '</span></div>' +
+      '<div class="row"><span class="muted">380天最低 · 更新于 ' + ago(s.fetchedAt) + '</span><span class="muted">' + s.count + ' 天有价</span></div>' +
+      '<div class="muted" style="margin-top:6px">最便宜：' + chips + '</div>' +
+      '</div>';
+  }
   function dateLabel(m) {
     var p = m.params || {};
+    if (m.mode === 'calendar') return p.trip === 'round' ? '往返 · 日期待定' : '单程 · 日期待定';
     return p.trip === 'round' ? (p.departDate + ' → ' + p.returnDate) : p.departDate;
   }
 

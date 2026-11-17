@@ -80,11 +80,54 @@ function mint(length) {
   return out;
 }
 
-/** Human title for a monitor, computed on the Host so both halves agree. */
-export function monitorTitle(params) {
+/**
+ * Which collection model a monitor uses: a real `departDate` means the user has
+ * picked a date (watch), anything else means "date not decided yet" (calendar).
+ */
+export function monitorMode(params) {
+  return isDateString(params?.departDate) ? 'watch' : 'calendar';
+}
+
+/** Local 01:00–06:00 quiet window. */
+export function isNightQuiet(now = new Date()) {
+  const hour = now.getHours();
+  return hour >= 1 && hour < 6;
+}
+
+/**
+ * The moment a calendar monitor may run again after the quiet window: 06:00
+ * local time plus a small stagger so several monitors do not fire together.
+ */
+export function quietWakeIso(now = new Date()) {
+  const wake = new Date(now.getTime());
+  wake.setHours(6, Math.floor(Math.random() * 10), 0, 0);
+  if (wake.getTime() <= now.getTime()) wake.setDate(wake.getDate() + 1);
+  return wake.toISOString();
+}
+
+/** `12月03日` — the compact date the title uses. */
+function monthDay(dateString) {
+  const parts = String(dateString || '').split('-');
+  if (parts.length !== 3) return '';
+  return `${Number(parts[1])}月${parts[2]}日`;
+}
+
+/**
+ * Human title for a monitor, computed on the Host so both halves agree.
+ * The mode is derived from `departDate`, exactly like the model itself.
+ */
+export function monitorTitle(options) {
+  const params = options?.params && typeof options.params === 'object' ? options.params : options || {};
   const name = (code) => CITY_NAMES[code] || code;
-  if (params.trip === 'round') return `${name(params.dep)} ⇄ ${name(params.arr)} 往返`;
-  return `${name(params.dep)} → ${name(params.arr)} 单程`;
+  const round = params.trip === 'round';
+  const route = round ? `${name(params.dep)} ⇄ ${name(params.arr)}` : `${name(params.dep)} → ${name(params.arr)}`;
+  if (monitorMode(params) === 'calendar') {
+    return round ? `${route} · 往返 · 日期待定` : `${route} · 日期待定`;
+  }
+  const depart = monthDay(params.departDate);
+  if (!round) return `${route} · ${depart}`;
+  const back = monthDay(params.returnDate);
+  return back ? `${route} · ${depart}–${back}` : `${route} · ${depart}`;
 }
 
 /** A tiny display-name table; unknown codes fall back to the raw code. */

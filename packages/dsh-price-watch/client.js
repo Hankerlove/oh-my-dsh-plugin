@@ -9,14 +9,21 @@
  *  - `main` renders the whole page: a toolbar, a health strip, and four internal
  *    views (list / detail / settings / new) switched with component state.
  *
+ * A monitor is either a `calendar` watch (no date: only the L1 lowest-price
+ * calendar, drawn as a bar chart of the next ~380 days) or a `watch` (a fixed
+ * date: L1 trend plus L2 `{points, flights, tax}` from the logged-in browser).
+ * The panel branches on `monitor.mode` and never mixes the two price scales.
+ *
  * Data comes from this bundle's Host half over same-origin JSON:
- *   GET   /price-watch/api/status
- *   GET   /price-watch/api/monitors                     latest + sparkline points
- *   POST  /price-watch/api/monitors
- *   PATCH /price-watch/api/monitors/:id                 enabled / rules / passengers / params / cadence
+ *   GET   /price-watch/api/status                       health, auth, budgets, L2 state
+ *   GET   /price-watch/api/monitors                     mode/latest/spark/calendarSummary
+ *   POST  /price-watch/api/monitors                     flat body; no date ⇒ calendar mode
+ *   PATCH /price-watch/api/monitors/:id                 enabled / rules / passengers / params
  *   DELETE /price-watch/api/monitors/:id
- *   POST  /price-watch/api/monitors/:id/refresh
- *   GET   /price-watch/api/monitors/:id/prices?days=90
+ *   GET   /price-watch/api/monitors/:id/calendar        the ~380-day snapshot (calendar mode)
+ *   GET   /price-watch/api/monitors/:id/flights         last L2 snapshot + tax split
+ *   GET   /price-watch/api/monitors/:id/prices?days=90   reference (L1) + per-passenger series (L2)
+ *   POST  /price-watch/api/monitors/:id/refresh          body `{ l2: true }` asks for a real check
  *   GET/POST /price-watch/api/passengers, PATCH/DELETE /price-watch/api/passengers/:id
  *   GET/POST /price-watch/api/settings
  * Every response is `{ ok: true, data }` or `{ ok: false, error }`. The request
@@ -44,17 +51,31 @@ window.__ModuleLoader__.load({
 		const PANEL_ID = 'price-watch';
 		/** How often the list and status strip re-read the Host. */
 		const POLL_MS = 30000;
-		/** Cadence choices offered in settings, in minutes. */
-		const CADENCE_CHOICES = [15, 30, 60, 360];
-		/** Fallback cadence when settings are not loaded yet. */
-		const DEFAULT_CADENCE = 60;
-		/** How much history the detail chart asks for. */
+		/** Calendar (行情) refresh rhythm, in hours. */
+		const CALENDAR_HOURS = [3, 6, 12, 24];
+		/** Watch (监控) refresh rhythm, in minutes. */
+		const WATCH_MINUTES = [30, 60, 120, 240];
+		/** Minimum gap between precise (L2) runs, in minutes: 6h / 12h / 24h. */
+		const L2_MIN_INTERVALS = [360, 720, 1440];
+		/** Precise (L2) runs allowed per day. */
+		const L2_PER_DAY = [1, 2, 3];
+		/** How much history the watch charts ask for. */
 		const PRICE_DAYS = 90;
 		const SPARK_WIDTH = 120;
 		const SPARK_HEIGHT = 32;
 		const CHART_WIDTH = 800;
 		const CHART_HEIGHT = 220;
+		const CHART_COMPACT_HEIGHT = 150;
+		const CALENDAR_HEIGHT = 190;
 		const PASSENGER_TYPES = ['adult', 'student', 'child'];
+		/** Chinese airports offered by the city search; the dictionary owns their names. */
+		const CITY_CODES = [
+			'BJS', 'PEK', 'PKX', 'SHA', 'PVG', 'CAN', 'SZX', 'CTU', 'TFU', 'CKG',
+			'XIY', 'HGH', 'NKG', 'WUH', 'CSX', 'TAO', 'XMN', 'TSN', 'CGO', 'SYX',
+			'HAK', 'HRB', 'SHE', 'DLC', 'KMG', 'KWE', 'NNG', 'URC', 'FOC', 'TNA',
+			'WNZ', 'NGB', 'HFE', 'ZUH', 'LHW', 'TYN', 'HET', 'SJW', 'INC', 'XNN',
+			'CGQ', 'LXA',
+		];
 		// #endregion
 
 		// #region locale bridge
@@ -192,6 +213,11 @@ window.__ModuleLoader__.load({
 			return monitor && Array.isArray(monitor.rules) ? monitor.rules.filter((rule) => rule && typeof rule === 'object') : [];
 		}
 
+		function ruleHas(rules, kind) {
+			return (Array.isArray(rules) ? rules : []).some((rule) => rule && rule.kind === kind);
+		}
+
+		/** Legacy rules may still carry a target price; it is only displayed, never edited. */
 		function ruleTarget(rules) {
 			for (const rule of Array.isArray(rules) ? rules : []) {
 				if (!rule || rule.kind !== 'target') continue;
@@ -200,12 +226,17 @@ window.__ModuleLoader__.load({
 			return null;
 		}
 
-		function ruleHas(rules, kind) {
-			return (Array.isArray(rules) ? rules : []).some((rule) => rule && rule.kind === kind);
-		}
-
 		function monitorTrip(monitor) {
 			return monitorParams(monitor).trip === 'round' ? 'round' : 'oneway';
+		}
+
+		/** `calendar` = no date picked (L1 calendar only); `watch` = dates fixed. */
+		function monitorMode(monitor) {
+			return monitor && monitor.mode === 'calendar' ? 'calendar' : 'watch';
+		}
+
+		function tripLabel(trip) {
+			return trip === 'round' ? t('card.round') : t('card.oneway');
 		}
 
 		/** `上海 → 北京`, using `⇄` for round trips. */
@@ -215,16 +246,29 @@ window.__ModuleLoader__.load({
 			return `${cityLabel(params.dep)} ${arrow} ${cityLabel(params.arr)}`;
 		}
 
-		/** `单程 · 12/24` or `往返 · 12/24 – 12/27`. */
+		/** Card / detail subtitle: `日期待定` or the fixed departure (and return) date. */
 		function monitorDates(monitor) {
 			const params = monitorParams(monitor);
 			const trip = monitorTrip(monitor);
+			if (monitorMode(monitor) === 'calendar') return `${tripLabel(trip)} · ${t('card.dateTbd')}`;
 			const depart = shortDate(params.departDate);
-			if (trip !== 'round') return `${t('card.oneway')} · ${depart}`;
-			return `${t('card.round')} · ${depart} – ${shortDate(params.returnDate)}`;
+			if (trip !== 'round') return `${tripLabel('oneway')} · ${depart}`;
+			return `${tripLabel('round')} · ${depart} – ${shortDate(params.returnDate)}`;
 		}
 
-		/** API list points are `[[atISO, total], ...]`, oldest first. */
+		/** Host-computed title when present, otherwise the same shape rebuilt locally. */
+		function monitorTitle(monitor) {
+			if (monitor && typeof monitor.title === 'string' && monitor.title.trim() !== '') return monitor.title;
+			const route = monitorRoute(monitor);
+			if (monitorMode(monitor) === 'calendar') {
+				return monitorTrip(monitor) === 'round' ? `${route} · ${t('card.round')} · ${t('card.dateTbd')}` : `${route} · ${t('card.dateTbd')}`;
+			}
+			const depart = shortDate(monitorParams(monitor).departDate);
+			if (monitorTrip(monitor) !== 'round') return `${route} · ${depart}`;
+			return `${route} · ${depart}–${shortDate(monitorParams(monitor).returnDate)}`;
+		}
+
+		/** API list `spark` is `[[atISO, total], ...]`, oldest first. */
 		function normalizeSeries(points) {
 			if (!Array.isArray(points)) return [];
 			const out = [];
@@ -237,7 +281,7 @@ window.__ModuleLoader__.load({
 			return out;
 		}
 
-		/** Price endpoint points are `{ at, total, bare, src }`, oldest first. */
+		/** Chart points: `{ at, total, bare?, src?, taxSource? }`, oldest first. */
 		function normalizePricePoints(points) {
 			if (!Array.isArray(points)) return [];
 			const out = [];
@@ -251,21 +295,63 @@ window.__ModuleLoader__.load({
 					total: point.total,
 					bare: typeof point.bare === 'number' && Number.isFinite(point.bare) ? point.bare : null,
 					src: typeof point.src === 'string' ? point.src : '',
+					taxSource: typeof point.taxSource === 'string' ? point.taxSource : '',
 				});
 			}
 			out.sort((left, right) => left.at - right.at);
 			return out;
 		}
 
+		/** `GET /monitors/:id/calendar` rows are `{ date, total, bare }`, ascending. */
+		function normalizeCalendarDays(rows) {
+			if (!Array.isArray(rows)) return [];
+			const out = [];
+			for (const row of rows) {
+				if (!row || typeof row !== 'object') continue;
+				if (typeof row.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.date)) continue;
+				if (typeof row.total !== 'number' || !Number.isFinite(row.total)) continue;
+				out.push({ date: row.date, total: row.total, bare: typeof row.bare === 'number' && Number.isFinite(row.bare) ? row.bare : null });
+			}
+			out.sort((left, right) => (left.date < right.date ? -1 : left.date > right.date ? 1 : 0));
+			return out;
+		}
+
+		/** Lowest / highest / average over the calendar, plus the cheapest day. */
+		function calendarStats(days) {
+			const points = Array.isArray(days) ? days : [];
+			if (points.length === 0) return null;
+			let min = points[0];
+			let max = points[0];
+			let sum = 0;
+			for (const point of points) {
+				if (point.total < min.total) min = point;
+				if (point.total > max.total) max = point;
+				sum += point.total;
+			}
+			return { min, max, avg: Math.round(sum / points.length), count: points.length };
+		}
+
 		function latestTotal(monitor) {
 			const latest = monitor && monitor.latest && typeof monitor.latest === 'object' ? monitor.latest : null;
 			if (latest !== null && typeof latest.total === 'number' && Number.isFinite(latest.total)) {
-				return { total: latest.total, at: typeof latest.at === 'string' ? latest.at : null };
+				return { total: latest.total, at: typeof latest.at === 'string' ? latest.at : null, note: typeof latest.note === 'string' ? latest.note : '' };
 			}
-			const series = normalizeSeries(monitor && monitor.points);
+			const series = normalizeSeries(monitor && monitor.spark);
 			if (series.length === 0) return null;
 			const last = series[series.length - 1];
-			return { total: last.total, at: typeof last.at === 'number' ? new Date(last.at).toISOString() : null };
+			return { total: last.total, at: typeof last.at === 'number' ? new Date(last.at).toISOString() : null, note: '' };
+		}
+
+		/** Cheapest day from the lightweight list summary, when the Host sent one. */
+		function calendarSummaryOf(monitor) {
+			const summary = monitor && monitor.calendarSummary && typeof monitor.calendarSummary === 'object' ? monitor.calendarSummary : null;
+			if (summary === null) return null;
+			const min = summary.min && typeof summary.min === 'object' && typeof summary.min.date === 'string' ? summary.min : null;
+			return {
+				fetchedAt: typeof summary.fetchedAt === 'string' ? summary.fetchedAt : null,
+				count: numberOrNull(summary.count),
+				min: min === null || typeof min.total !== 'number' || !Number.isFinite(min.total) ? null : { date: min.date, total: min.total },
+			};
 		}
 
 		/** Percent change against the previous collection point, or null. */
@@ -293,13 +379,69 @@ window.__ModuleLoader__.load({
 			return lowest;
 		}
 
-		function highestTotal(series) {
-			let highest = null;
-			for (const point of Array.isArray(series) ? series : []) {
-				if (!Number.isFinite(point.total)) continue;
-				if (highest === null || point.total > highest) highest = point.total;
+		/** `12-03` for the calendar axis and the pin button. */
+		function monthDay(date) {
+			const parsed = toDate(date);
+			if (parsed === null || !Number.isFinite(parsed.getTime())) return '—';
+			return `${pad2(parsed.getMonth() + 1)}-${pad2(parsed.getDate())}`;
+		}
+
+		/** Watch monitors store their own rhythm; calendar monitors use the global one. */
+		function monitorCadence(monitor) {
+			const cadence = monitor && monitor.cadence && typeof monitor.cadence === 'object' ? monitor.cadence : {};
+			return numberOrNull(cadence.minutes);
+		}
+
+		/** Match a typed query against IATA codes and localized city names. */
+		function cityMatches(query) {
+			const raw = typeof query === 'string' ? query.trim() : '';
+			if (raw === '') return [];
+			const lower = raw.toLowerCase();
+			const matches = [];
+			for (const code of CITY_CODES) {
+				const name = cityLabel(code);
+				if (code.toLowerCase().indexOf(lower) === 0 || (name !== code && name.toLowerCase().indexOf(lower) >= 0)) {
+					matches.push({ code, name });
+					if (matches.length >= 8) break;
+				}
 			}
-			return highest;
+			return matches;
+		}
+
+		/** Resolve typed text to a three-letter city code (code or localized name). */
+		function resolveCity(query) {
+			const raw = typeof query === 'string' ? query.trim() : '';
+			if (/^[A-Za-z]{3}$/.test(raw)) return raw.toUpperCase();
+			if (raw === '') return null;
+			const lower = raw.toLowerCase();
+			for (const code of CITY_CODES) {
+				if (cityLabel(code).toLowerCase() === lower) return code;
+			}
+			return null;
+		}
+
+		/**
+		 * L2 (precise collection) state, tolerant of both the V2 `status.l2` block and
+		 * the older flags that used to live on `status.auth`.
+		 */
+		function l2State(status) {
+			const source = status && typeof status === 'object' ? status : {};
+			const l2 = source.l2 && typeof source.l2 === 'object' ? source.l2 : {};
+			const auth = source.auth && typeof source.auth === 'object' ? source.auth : {};
+			const budgets = source.budgets && typeof source.budgets === 'object' ? source.budgets : {};
+			const budgetL2 = budgets.l2 && typeof budgets.l2 === 'object' ? budgets.l2 : {};
+			const blockedUntil = typeof l2.blockedUntil === 'string' ? l2.blockedUntil : typeof auth.blockedUntil === 'string' ? auth.blockedUntil : null;
+			return {
+				available: typeof l2.available === 'boolean' ? l2.available : auth.available !== false,
+				enabled: l2.enabled === true,
+				blockedUntil,
+				used: numberOrNull(l2.used) === null ? numberOrNull(budgetL2.used) : numberOrNull(l2.used),
+				perDay: numberOrNull(l2.perDay) === null ? numberOrNull(budgetL2.perDay) : numberOrNull(l2.perDay),
+				minIntervalMinutes: numberOrNull(l2.minIntervalMinutes),
+				disabledForDay: l2.disabledForDay === true,
+				level: numberOrNull(l2.level),
+				lastError: typeof l2.lastError === 'string' ? l2.lastError : null,
+			};
 		}
 		// #endregion
 
@@ -348,7 +490,7 @@ window.__ModuleLoader__.load({
 
 		// #region dictionaries
 		const ZH = {
-			nav: '价格监控',
+			'nav': '价格监控',
 			'list.new': '新建监控',
 			'list.settings': '设置',
 			'list.refresh': '刷新',
@@ -361,7 +503,6 @@ window.__ModuleLoader__.load({
 			'status.auth.unknown': '未登录',
 			'status.auth.valid': '已登录',
 			'status.auth.expired': '登录已过期',
-			'status.auth.checking': '校验中',
 			'status.auth.validAccount': '已登录 {account}',
 			'status.auth.unavailable': '精确采集不可用',
 			'status.auth.loggingIn': '请在弹出的窗口里登录…',
@@ -372,49 +513,94 @@ window.__ModuleLoader__.load({
 			'login.pending': '登录中…',
 			'card.oneway': '单程',
 			'card.round': '往返',
+			'card.mode.calendar': '行情',
+			'card.mode.watch': '监控',
+			'card.dateTbd': '日期待定',
 			'card.waiting': '等待首次采集',
-			'card.min': '历史最低 {price}',
-			'card.target': '目标 {price}',
 			'card.paused': '已暂停',
 			'card.enable': '启用监控',
 			'card.disable': '停用监控',
+			'card.latest': '最新 {price}',
+			'card.lowestDay': '最低 {date}',
+			'card.calendarNote': '380 天最低',
+			'card.updated': '更新于 {when}',
 			'empty.title': '还没有价格监控',
-			'empty.body': '新建一个监控后，插件会按设定频率自动采集机票最低价，留存历史曲线，并在跌破目标价或创新低、新高时提醒你。',
+			'empty.body': '没定日期就创建「行情监控」，看未来 380 天的价格日历；定了日期就创建「监控」，追踪价格走势和登录态实付价。',
 			'empty.action': '新建监控',
 			'error.network': '网络请求失败，请检查连接后重试',
 			'error.http': '请求失败（HTTP {status}）',
 			'common.retry': '重试',
 			'common.dismiss': '关闭',
 			'common.saving': '保存中…',
-			'common.listSeparator': '、',
+			'common.cancel': '取消',
+			'time.justNow': '刚刚',
+			'time.minutes': '{n} 分钟前',
+			'time.hours': '{n} 小时前',
+			'time.days': '{n} 天前',
+			'time.never': '从未',
+			'type.adult': '成人',
+			'type.student': '学生',
+			'type.child': '儿童',
 			'detail.back': '返回',
-			'detail.editRules': '编辑规则',
 			'detail.pause': '暂停',
 			'detail.resume': '启用',
 			'detail.refresh': '立即刷新',
+			'detail.refreshL2': '查一次真实价',
 			'detail.delete': '删除',
-			'detail.deleteConfirm': '删除这个监控？历史价格也会一并移除。',
-			'detail.waiting': '还没有价格数据，稍后会按频率自动采集，也可以点「立即刷新」。',
-			'detail.chart.title': '价格走势',
-			'detail.chart.caption': '含税 · 日历最低价',
-			'detail.stat.min': '最低',
-			'detail.stat.max': '最高',
-			'detail.stat.avg7': '7 日均价',
-			'detail.stat.target': '目标价',
-			'detail.rules.title': '提醒规则',
-			'detail.rules.target': '目标价',
-			'detail.rules.targetPlaceholder': '留空表示不设目标价',
-			'detail.rules.newLow': '创新低',
-			'detail.rules.newHigh': '创新高',
-			'detail.rules.digest': '每日汇总',
-			'detail.rules.empty': '还没有规则',
-			'detail.rules.invalid': '目标价必须是正数。',
-			'detail.rules.save': '保存规则',
-			'detail.rules.cancel': '取消',
-			'detail.passengers': '乘客',
+			'detail.deleteConfirm': '删除这个监控？历史数据也会一并移除。',
 			'detail.passengersCount': '{n} 位乘客',
-			'detail.passengersPrefix': '乘客：{names}',
 			'detail.cadence': '每 {n} 分钟采集',
+			'detail.cadenceCalendar': '每 {n} 小时刷新行情',
+			'calendar.title': '未来价格日历',
+			'calendar.caption': '未来 380 天每天最低含税价',
+			'calendar.out': '去程',
+			'calendar.back': '回程',
+			'calendar.empty': '还没有日历数据，稍后会自动刷新',
+			'calendar.fetchedAt': '更新于 {when}',
+			'calendar.pickHint': '点柱子挑日子，再点下方按钮把它钉成监控',
+			'calendar.pin': '钉住 {date} · {price}',
+			'calendar.pinRound': '钉住 {depart} – {return} · {price}',
+			'calendar.pinNeedReturn': '再选一个回程日期',
+			'calendar.stat.min': '最低',
+			'calendar.stat.max': '最高',
+			'calendar.stat.avg': '平均',
+			'calendar.stat.minDay': '最低日',
+			'calendar.dayHint': '{date} · {price}',
+			'watch.realTitle': '乘客实付价',
+			'watch.realHint': '登录态真实航班 · 含机建燃油',
+			'watch.waitingPrecise': '待精确采集',
+			'watch.fareLabel': '票价 {label}',
+			'watch.taxSource.order': '订单页含税',
+			'watch.taxSource.estimate': '估算含税',
+			'watch.reference': '参考行情',
+			'watch.referenceCaption': '日历估算 · 含税最低价',
+			'watch.seriesTitle': '{name} · {type}',
+			'watch.seriesEmpty': '还没有这个乘客的精确价数据',
+			'watch.flights': '航班快照',
+			'watch.flightsEmpty': '还没有航班快照，点右上角「查一次真实价」试试',
+			'watch.flightNo': '航班号',
+			'watch.airline': '航司',
+			'watch.time': '时刻',
+			'watch.craft': '机型',
+			'watch.airport': '机场',
+			'watch.listPrice': '列表价',
+			'watch.yourPrice': '你的价格',
+			'watch.expanded': '展开行',
+			'watch.fetchedAt': '采集于 {when}',
+			'watch.taxTitle': '税费拆分',
+			'watch.taxAirport': '机建 {price}',
+			'watch.taxFuel': '燃油 {price}',
+			'watch.taxTotal': '合计 {price}',
+			'watch.rules': '提醒规则',
+			'watch.rulesEmpty': '还没有规则',
+			'watch.rules.newLow': '创新低',
+			'watch.rules.newHigh': '创新高',
+			'watch.rules.digest': '每日汇总',
+			'watch.rules.save': '保存规则',
+			'watch.rules.cancel': '取消',
+			'watch.rules.failed': '规则保存失败，请重试',
+			'watch.emptyPrecise': '还没有精确价，登录携程后点「查一次真实价」。',
+			'chart.title': '价格走势',
 			'chart.ref.min': '历史最低',
 			'chart.ref.target': '目标价',
 			'chart.ref.avg7': '7 日均价',
@@ -438,16 +624,23 @@ window.__ModuleLoader__.load({
 			'settings.feishu.title': '飞书通知',
 			'settings.feishu.help': '在飞书单人群里添加自定义机器人，粘贴 webhook 地址。',
 			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
-			'settings.cadence.title': '采集频率',
-			'settings.cadence.help': '越频繁越容易触发风控，默认 60 分钟。',
+			'settings.cadence.title': '采集节奏',
+			'settings.cadence.calendar': '行情刷新（日历）',
+			'settings.cadence.watch': '监控刷新（走势）',
+			'settings.cadence.help': '行情模式按小时刷新未来日历；监控模式按分钟刷新该日期的价格。',
+			'settings.cadence.hours': '{n} 小时',
+			'settings.cadence.minutes': '{n} 分钟',
 			'settings.l2.title': '精确采集',
 			'settings.l2.enable': '启用精确采集（需登录携程）',
 			'settings.l2.perDay': '每天最多精确采集次数',
 			'settings.l2.times': '{n} 次',
-			'settings.l2.help': '精确采集会用真实浏览器读取票价产品与含机建燃油总价；每天次数越多，被携程风控的概率越高。',
+			'settings.l2.minInterval': '最短间隔',
+			'settings.l2.hours': '{n} 小时',
+			'settings.l2.help': '精确采集会用真实浏览器读取航班列表、票价产品与含机建燃油总价；每天次数越多、间隔越短，被携程风控的概率越高。',
 			'settings.l2.auth': '携程登录',
 			'settings.l2.lastVerified': '上次校验 {time}',
 			'settings.l2.neverVerified': '尚未校验登录态',
+			'settings.l2.budget': '今日已用 {used}/{perDay} 次',
 			'settings.login': '登录携程',
 			'settings.logout': '退出登录',
 			'settings.logoutConfirm': '退出登录会删除浏览器里的携程登录信息，确认退出？',
@@ -463,39 +656,31 @@ window.__ModuleLoader__.load({
 			'new.route.title': '航线',
 			'new.from': '出发地',
 			'new.to': '目的地',
-			'new.routeHint': '三字码：北京填 BJS、上海填 SHA。',
+			'new.cityPlaceholder': '三字码或城市名，如 BJS / 北京',
+			'new.cityHint': '支持三字码（BJS）或城市名（北京）。',
+			'new.cityEmpty': '没有匹配的城市',
 			'new.trip.title': '行程',
 			'new.trip.oneway': '单程',
 			'new.trip.round': '往返',
+			'new.date.title': '日期',
+			'new.date.known': '已确定日期',
+			'new.date.calendarHint': '关掉时只追踪未来 380 天行情，从日历里挑日子。',
+			'new.date.watchHint': '开的时候按这个日期监控价格走势与登录态实付价。',
 			'new.departDate': '出发日',
 			'new.returnDate': '返回日',
 			'new.passengers.title': '乘客',
-			'new.passengers.help': '至少选 1 位乘客。',
+			'new.passengers.help': '至少选 1 位乘客，默认全选。',
 			'new.passengers.empty': '还没有乘客，先去设置里添加乘客。',
 			'new.passengers.goSettings': '去设置添加乘客',
-			'new.target.title': '目标价（可选）',
-			'new.target.help': '低于目标价时推送提醒。',
-			'new.submit': '创建监控',
+			'new.submit.calendar': '创建行情监控',
+			'new.submit.watch': '创建监控',
 			'new.submitting': '创建中…',
-			'new.required': '请填写必填项。',
-			'new.invalidCode': '三字码必须是 3 个字母。',
+			'new.invalidCode': '请填三字码（如 BJS）或城市名（如北京）。',
 			'new.sameCode': '出发地和目的地不能相同。',
 			'new.passengerRequired': '至少选择 1 位乘客。',
 			'new.returnRequired': '往返需要填写返回日。',
 			'new.returnOrder': '返回日必须晚于出发日。',
-			'type.adult': '成人',
-			'type.student': '学生',
-			'type.child': '儿童',
-			'cadence.minutes': '{n} 分钟',
-			'time.justNow': '刚刚',
-			'time.minutes': '{n} 分钟前',
-			'time.hours': '{n} 小时前',
-			'time.days': '{n} 天前',
-			'time.never': '从未',
-			'rule.target': '目标价',
-			'rule.new_low': '创新低',
-			'rule.new_high': '创新高',
-			'rule.digest': '每日汇总',
+			'new.departRequired': '请选择出发日。',
 			'city.BJS': '北京',
 			'city.PEK': '北京首都',
 			'city.PKX': '北京大兴',
@@ -541,7 +726,7 @@ window.__ModuleLoader__.load({
 		};
 
 		const EN = {
-			nav: 'Price watch',
+			'nav': 'Price watch',
 			'list.new': 'New watch',
 			'list.settings': 'Settings',
 			'list.refresh': 'Refresh',
@@ -554,7 +739,6 @@ window.__ModuleLoader__.load({
 			'status.auth.unknown': 'Not signed in',
 			'status.auth.valid': 'Signed in',
 			'status.auth.expired': 'Sign-in expired',
-			'status.auth.checking': 'Checking sign-in',
 			'status.auth.validAccount': 'Signed in {account}',
 			'status.auth.unavailable': 'Precise collection unavailable',
 			'status.auth.loggingIn': 'Finish signing in in the opened window…',
@@ -565,49 +749,94 @@ window.__ModuleLoader__.load({
 			'login.pending': 'Signing in…',
 			'card.oneway': 'One way',
 			'card.round': 'Round trip',
+			'card.mode.calendar': 'Calendar',
+			'card.mode.watch': 'Watch',
+			'card.dateTbd': 'dates not fixed',
 			'card.waiting': 'Waiting for the first crawl',
-			'card.min': 'Low {price}',
-			'card.target': 'Target {price}',
 			'card.paused': 'Paused',
 			'card.enable': 'Enable watch',
 			'card.disable': 'Disable watch',
+			'card.latest': 'Latest {price}',
+			'card.lowestDay': 'Low {date}',
+			'card.calendarNote': '380-day low',
+			'card.updated': 'Updated {when}',
 			'empty.title': 'No price watches yet',
-			'empty.body': 'Create a watch and this plugin polls the lowest fare on schedule, keeps a price history, and alerts you when the fare hits your target or sets a new low or high.',
+			'empty.body': 'Create a calendar watch when the dates are open: it keeps the next 380 days of lowest fares. Fix the dates for a watch that tracks the price trend and the signed-in real fare.',
 			'empty.action': 'New watch',
 			'error.network': 'Network request failed. Check your connection and retry.',
 			'error.http': 'Request failed (HTTP {status})',
 			'common.retry': 'Retry',
 			'common.dismiss': 'Dismiss',
 			'common.saving': 'Saving…',
-			'common.listSeparator': ', ',
+			'common.cancel': 'Cancel',
+			'time.justNow': 'just now',
+			'time.minutes': '{n} min ago',
+			'time.hours': '{n} h ago',
+			'time.days': '{n} d ago',
+			'time.never': 'never',
+			'type.adult': 'Adult',
+			'type.student': 'Student',
+			'type.child': 'Child',
 			'detail.back': 'Back',
-			'detail.editRules': 'Edit rules',
 			'detail.pause': 'Pause',
 			'detail.resume': 'Resume',
 			'detail.refresh': 'Refresh now',
+			'detail.refreshL2': 'Fetch real prices',
 			'detail.delete': 'Delete',
-			'detail.deleteConfirm': 'Delete this watch? Its price history is removed too.',
-			'detail.waiting': 'No prices yet. Collection runs on schedule, or press Refresh now.',
-			'detail.chart.title': 'Price history',
-			'detail.chart.caption': 'Tax included · calendar lowest fare',
-			'detail.stat.min': 'Low',
-			'detail.stat.max': 'High',
-			'detail.stat.avg7': '7-day avg',
-			'detail.stat.target': 'Target',
-			'detail.rules.title': 'Alert rules',
-			'detail.rules.target': 'Target price',
-			'detail.rules.targetPlaceholder': 'Leave empty for no target',
-			'detail.rules.newLow': 'New low',
-			'detail.rules.newHigh': 'New high',
-			'detail.rules.digest': 'Daily digest',
-			'detail.rules.empty': 'No rules yet',
-			'detail.rules.invalid': 'Target must be a positive number.',
-			'detail.rules.save': 'Save rules',
-			'detail.rules.cancel': 'Cancel',
-			'detail.passengers': 'Passengers',
+			'detail.deleteConfirm': 'Delete this watch? Its history is removed too.',
 			'detail.passengersCount': '{n} passengers',
-			'detail.passengersPrefix': 'Passengers: {names}',
 			'detail.cadence': 'Collects every {n} min',
+			'detail.cadenceCalendar': 'Calendar refresh every {n} h',
+			'calendar.title': 'Upcoming price calendar',
+			'calendar.caption': 'Lowest tax-included fare for each of the next 380 days',
+			'calendar.out': 'Outbound',
+			'calendar.back': 'Return',
+			'calendar.empty': 'No calendar data yet. It refreshes on schedule.',
+			'calendar.fetchedAt': 'Updated {when}',
+			'calendar.pickHint': 'Pick a bar to choose the day, then pin it as a watch below',
+			'calendar.pin': 'Pin {date} · {price}',
+			'calendar.pinRound': 'Pin {depart} – {return} · {price}',
+			'calendar.pinNeedReturn': 'Pick a return day too',
+			'calendar.stat.min': 'Low',
+			'calendar.stat.max': 'High',
+			'calendar.stat.avg': 'Average',
+			'calendar.stat.minDay': 'Cheapest day',
+			'calendar.dayHint': '{date} · {price}',
+			'watch.realTitle': 'Passenger fares',
+			'watch.realHint': 'Signed-in real flights · taxes included',
+			'watch.waitingPrecise': 'Waiting for precise collection',
+			'watch.fareLabel': 'Fare {label}',
+			'watch.taxSource.order': 'Tax included (order page)',
+			'watch.taxSource.estimate': 'Tax estimated',
+			'watch.reference': 'Reference calendar',
+			'watch.referenceCaption': 'Calendar estimate · tax-included low',
+			'watch.seriesTitle': '{name} · {type}',
+			'watch.seriesEmpty': 'No precise fares for this passenger yet',
+			'watch.flights': 'Flight snapshot',
+			'watch.flightsEmpty': 'No flight snapshot yet. Try "Fetch real prices" above.',
+			'watch.flightNo': 'Flight',
+			'watch.airline': 'Airline',
+			'watch.time': 'Time',
+			'watch.craft': 'Aircraft',
+			'watch.airport': 'Airports',
+			'watch.listPrice': 'List price',
+			'watch.yourPrice': 'Your price',
+			'watch.expanded': 'Expanded',
+			'watch.fetchedAt': 'Collected {when}',
+			'watch.taxTitle': 'Tax breakdown',
+			'watch.taxAirport': 'Airport fee {price}',
+			'watch.taxFuel': 'Fuel {price}',
+			'watch.taxTotal': 'Total {price}',
+			'watch.rules': 'Alert rules',
+			'watch.rulesEmpty': 'No rules yet',
+			'watch.rules.newLow': 'New low',
+			'watch.rules.newHigh': 'New high',
+			'watch.rules.digest': 'Daily digest',
+			'watch.rules.save': 'Save rules',
+			'watch.rules.cancel': 'Cancel',
+			'watch.rules.failed': 'Failed to save rules, try again',
+			'watch.emptyPrecise': 'No precise fares yet. Sign in to Ctrip and use "Fetch real prices".',
+			'chart.title': 'Price history',
 			'chart.ref.min': 'Historical low',
 			'chart.ref.target': 'Target',
 			'chart.ref.avg7': '7-day avg',
@@ -631,16 +860,23 @@ window.__ModuleLoader__.load({
 			'settings.feishu.title': 'Feishu notifications',
 			'settings.feishu.help': 'Add a custom bot to a Feishu group, then paste its webhook URL here.',
 			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
-			'settings.cadence.title': 'Collection cadence',
-			'settings.cadence.help': 'Frequent polling risks rate limiting. 60 minutes by default.',
+			'settings.cadence.title': 'Collection rhythm',
+			'settings.cadence.calendar': 'Calendar refresh (hours)',
+			'settings.cadence.watch': 'Watch refresh (minutes)',
+			'settings.cadence.help': 'Calendar watches refresh the 380-day calendar on an hourly rhythm; watch monitors refresh their fixed date on a minute rhythm.',
+			'settings.cadence.hours': '{n} hours',
+			'settings.cadence.minutes': '{n} minutes',
 			'settings.l2.title': 'Precise collection',
 			'settings.l2.enable': 'Enable precise collection (Ctrip sign-in required)',
 			'settings.l2.perDay': 'Precise collections per day',
 			'settings.l2.times': '{n}×',
-			'settings.l2.help': 'Precise collection drives a real browser to read fare products and the tax-included total. More runs per day raises the chance of Ctrip rate limiting.',
+			'settings.l2.minInterval': 'Minimum interval',
+			'settings.l2.hours': '{n} hours',
+			'settings.l2.help': 'Precise collection drives a real browser to read the flight list, fare products and the tax-included total. More runs per day or a shorter interval raises the chance of Ctrip rate limiting.',
 			'settings.l2.auth': 'Ctrip sign-in',
 			'settings.l2.lastVerified': 'Last checked {time}',
 			'settings.l2.neverVerified': 'Sign-in has not been checked yet',
+			'settings.l2.budget': 'Used {used}/{perDay} today',
 			'settings.login': 'Sign in to Ctrip',
 			'settings.logout': 'Sign out',
 			'settings.logoutConfirm': 'Signing out deletes the Ctrip session stored in the browser profile. Continue?',
@@ -656,39 +892,31 @@ window.__ModuleLoader__.load({
 			'new.route.title': 'Route',
 			'new.from': 'From',
 			'new.to': 'To',
-			'new.routeHint': 'IATA codes: Beijing is BJS, Shanghai is SHA.',
+			'new.cityPlaceholder': 'IATA code or city name, e.g. BJS / Beijing',
+			'new.cityHint': 'Type an IATA code (BJS) or a city name (Beijing).',
+			'new.cityEmpty': 'No matching city',
 			'new.trip.title': 'Trip',
 			'new.trip.oneway': 'One way',
 			'new.trip.round': 'Round trip',
+			'new.date.title': 'Dates',
+			'new.date.known': 'Dates fixed',
+			'new.date.calendarHint': 'Off: only track the next 380 days of fares, then pick a day from the calendar.',
+			'new.date.watchHint': 'On: watch this date for its price trend and signed-in real fares.',
 			'new.departDate': 'Departure',
 			'new.returnDate': 'Return',
 			'new.passengers.title': 'Passengers',
-			'new.passengers.help': 'Pick at least one passenger.',
+			'new.passengers.help': 'Pick at least one passenger; all are selected by default.',
 			'new.passengers.empty': 'No passengers yet. Add one in Settings first.',
 			'new.passengers.goSettings': 'Add passengers in Settings',
-			'new.target.title': 'Target price (optional)',
-			'new.target.help': 'Get notified when the fare drops below this.',
-			'new.submit': 'Create watch',
+			'new.submit.calendar': 'Create calendar watch',
+			'new.submit.watch': 'Create watch',
 			'new.submitting': 'Creating…',
-			'new.required': 'Fill in the required fields.',
-			'new.invalidCode': 'Airport codes must be 3 letters.',
+			'new.invalidCode': 'Type an IATA code (e.g. BJS) or a city name (e.g. Beijing).',
 			'new.sameCode': 'Origin and destination must differ.',
 			'new.passengerRequired': 'Pick at least one passenger.',
 			'new.returnRequired': 'Round trips need a return date.',
 			'new.returnOrder': 'Return must be after departure.',
-			'type.adult': 'Adult',
-			'type.student': 'Student',
-			'type.child': 'Child',
-			'cadence.minutes': '{n} min',
-			'time.justNow': 'just now',
-			'time.minutes': '{n} min ago',
-			'time.hours': '{n} h ago',
-			'time.days': '{n} d ago',
-			'time.never': 'never',
-			'rule.target': 'Target price',
-			'rule.new_low': 'New low',
-			'rule.new_high': 'New high',
-			'rule.digest': 'Daily digest',
+			'new.departRequired': 'Pick a departure date.',
 			'city.BJS': 'Beijing',
 			'city.PEK': 'Beijing Capital',
 			'city.PKX': 'Beijing Daxing',
@@ -699,7 +927,7 @@ window.__ModuleLoader__.load({
 			'city.CTU': 'Chengdu',
 			'city.TFU': 'Chengdu Tianfu',
 			'city.CKG': 'Chongqing',
-			'city.XIY': "Xi'an",
+			'city.XIY': 'Xi\'an',
 			'city.HGH': 'Hangzhou',
 			'city.NKG': 'Nanjing',
 			'city.WUH': 'Wuhan',
@@ -861,6 +1089,29 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-spacer { flex: 1; }
 @media (max-width: 780px) { .pw-spark { display: none; } .pw-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pw-toolbar { flex-wrap: wrap; } }
 @media (max-width: 520px) { .pw-card { flex-wrap: wrap; } }
+.pw-cal-wrap { position: relative; width: 100%; }
+.pw-cal { display: block; width: 100%; height: auto; cursor: pointer; }
+.pw-cal-bar { transition: opacity 120ms ease; }
+.pw-pin-bar { position: sticky; bottom: 0; z-index: 3; display: flex; align-items: center; gap: 10px; margin-top: 4px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); }
+.pw-table-wrap { width: 100%; overflow-x: auto; }
+.pw-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.pw-table th { padding: 6px 8px; text-align: left; font-weight: 500; color: var(--dsw-alias-label-secondary); border-bottom: 1px solid var(--dsw-alias-border-l1); white-space: nowrap; }
+.pw-table td { padding: 7px 8px; border-bottom: 1px solid var(--dsw-alias-border-l1); vertical-align: top; }
+.pw-table tr[data-expanded="true"] td { background: var(--dsw-alias-bg-layer-2); }
+.pw-table tr:last-child td { border-bottom: none; }
+.pw-table .pw-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pw-pax-card { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
+.pw-pax-name { font-size: 13px; font-weight: 500; }
+.pw-pax-price { margin-left: auto; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pw-tax-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.pw-combo { position: relative; }
+.pw-combo-list { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); max-height: 220px; overflow: auto; padding: 4px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); }
+.pw-combo-item { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 6px 8px; border: none; border-radius: 7px; background: transparent; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.pw-combo-item:hover { background: var(--dsw-alias-bg-layer-2); }
+.pw-combo-item[data-active="true"] { background: var(--dsw-alias-bg-layer-2); }
+.pw-combo-code { color: var(--dsw-alias-label-secondary); font-size: 11px; }
+.pw-mode-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pw-summary-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 `;
 		// #endregion
 
@@ -899,11 +1150,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		const TrashIcon = (props) => svgIcon((props && props.size) || 16, [h('path', { key: 'a', d: 'M4 7h16M9.5 7V4.8h5V7M6.5 7l1 13h9l1-13' }), h('path', { key: 'b', d: 'M10 11v5M14 11v5' })]);
 		const PauseIcon = (props) => svgIcon((props && props.size) || 16, [h('path', { key: 'a', d: 'M9 5v14' }), h('path', { key: 'b', d: 'M15 5v14' })]);
 		const PlayIcon = (props) => svgIcon((props && props.size) || 16, h('path', { d: 'M8 5l11 7-11 7V5Z' }));
-		const TargetIcon = (props) => svgIcon((props && props.size) || 16, [
-			h('circle', { key: 'a', cx: 12, cy: 12, r: 8.5 }),
-			h('circle', { key: 'b', cx: 12, cy: 12, r: 4.2 }),
-			h('circle', { key: 'c', cx: 12, cy: 12, r: 0.6, fill: 'currentColor', stroke: 'none' }),
-		]);
 		const CheckIcon = (props) => svgIcon((props && props.size) || 14, h('path', { d: 'M20 6 9 17l-5-5' }));
 		const CloseIcon = (props) => svgIcon((props && props.size) || 14, h('path', { d: 'M6 6l12 12M18 6 6 18' }));
 		const AlertIcon = (props) => svgIcon((props && props.size) || 16, [h('circle', { key: 'a', cx: 12, cy: 12, r: 9 }), h('path', { key: 'b', d: 'M12 7.5v5.5' }), h('circle', { key: 'c', cx: 12, cy: 16.5, r: 0.7, fill: 'currentColor', stroke: 'none' })]);
@@ -1120,9 +1366,10 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		 * fill, three dashed reference lines and 4–5 y ticks. Pure — the hover
 		 * state only indexes into `points`.
 		 */
-		function buildChart(points, stats) {
+		function buildChart(points, stats, height) {
 			const series = normalizePricePoints(points);
 			if (series.length === 0) return null;
+			const chartHeight = Number.isFinite(height) ? height : CHART_HEIGHT;
 			const padLeft = 52;
 			// Room on the right for the reference-line captions, including English ones.
 			const padRight = 96;
@@ -1131,7 +1378,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const plotLeft = padLeft;
 			const plotRight = CHART_WIDTH - padRight;
 			const plotTop = padTop;
-			const plotBottom = CHART_HEIGHT - padBottom;
+			const plotBottom = chartHeight - padBottom;
 			let minTime = series[0].at;
 			let maxTime = series[series.length - 1].at;
 			if (maxTime === minTime) {
@@ -1193,7 +1440,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		}
 
 		function PriceChart(props) {
-			const layout = useMemo(() => buildChart(props.points, props.stats), [props.points, props.stats]);
+			const chartHeight = props.compact === true ? CHART_COMPACT_HEIGHT : CHART_HEIGHT;
+			const layout = useMemo(() => buildChart(props.points, props.stats, chartHeight), [props.points, props.stats, chartHeight]);
 			const wrapRef = useRef(null);
 			const [hoverIndex, setHoverIndex] = useState(null);
 			const gradientId = useMemo(() => `pw-area-${Math.random().toString(36).slice(2, 8)}`, []);
@@ -1233,7 +1481,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 
 			const hover = hoverIndex !== null && hoverIndex >= 0 && hoverIndex < layout.coords.length ? layout.coords[hoverIndex] : null;
 			const tooltipLeft = hover === null ? 0 : (hover.x / CHART_WIDTH) * 100;
-			const tooltipTop = hover === null ? 0 : (hover.y / CHART_HEIGHT) * 100;
+			const tooltipTop = hover === null ? 0 : (hover.y / chartHeight) * 100;
 			const hovered = hover === null ? null : layout.series[hoverIndex];
 
 			const children = [
@@ -1301,9 +1549,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					'svg',
 					{
 						className: 'pw-chart',
-						viewBox: `0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`,
+						viewBox: `0 0 ${CHART_WIDTH} ${chartHeight}`,
 						role: 'img',
-						'aria-label': t('detail.chart.title'),
+						'aria-label': t('chart.title'),
 						'data-hover': hover === null ? 'false' : 'true',
 					},
 					children
@@ -1325,37 +1573,236 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						)
 			);
 		}
+		/** Bars for the 380-day calendar; y is the tax-included lowest fare. */
+		function buildCalendarLayout(days, selectedDate) {
+			const points = Array.isArray(days) ? days : [];
+			if (points.length === 0) return null;
+			const padLeft = 48;
+			const padRight = 10;
+			const padTop = 14;
+			const padBottom = 24;
+			const plotLeft = padLeft;
+			const plotRight = CHART_WIDTH - padRight;
+			const plotTop = padTop;
+			const plotBottom = CALENDAR_HEIGHT - padBottom;
+			let min = Infinity;
+			let max = -Infinity;
+			let minIndex = 0;
+			for (let index = 0; index < points.length; index += 1) {
+				const value = points[index].total;
+				if (value < min) {
+					min = value;
+					minIndex = index;
+				}
+				if (value > max) max = value;
+			}
+			const spread = max - min;
+			const breathing = spread > 0 ? spread * 0.18 : Math.max(20, Math.abs(max) * 0.08);
+			const domainMin = Math.max(0, min - breathing);
+			const domainMax = max + breathing;
+			const yOf = (value) => plotBottom - ((value - domainMin) / (domainMax - domainMin)) * (plotBottom - plotTop);
+			const step = niceStep(domainMax - domainMin, 4);
+			const yTicks = [];
+			for (let value = Math.ceil(domainMin / step) * step; value <= domainMax + step * 0.001 && yTicks.length < 8; value += step) {
+				yTicks.push({ value, y: yOf(value) });
+			}
+			const slot = (plotRight - plotLeft) / points.length;
+			const barWidth = Math.max(0.9, slot * 0.68);
+			const bars = points.map((point, index) => {
+				const y = yOf(point.total);
+				return {
+					date: point.date,
+					total: point.total,
+					bare: point.bare,
+					index,
+					x: plotLeft + index * slot + (slot - barWidth) / 2,
+					y,
+					width: barWidth,
+					height: Math.max(1, plotBottom - y),
+				};
+			});
+			const monthTicks = [];
+			for (let index = 0; index < points.length; index += 1) {
+				const date = toDate(points[index].date);
+				if (date === null || date.getDate() !== 1) continue;
+				monthTicks.push({ x: plotLeft + index * slot + slot / 2, label: `${date.getMonth() + 1}/${date.getDate()}` });
+			}
+			const stride = Math.max(1, Math.ceil(monthTicks.length / 7));
+			return {
+				points,
+				bars,
+				yTicks,
+				xTicks: monthTicks.filter((tick, index) => index % stride === 0),
+				plotLeft,
+				plotRight,
+				plotTop,
+				plotBottom,
+				slot,
+				min,
+				max,
+				minIndex,
+			};
+		}
+
+		/**
+		 * The 行情 chart: one bar per calendar day. Hover reports the day and its
+		 * tax-included lowest fare; click picks the day for the pin button. The
+		 * cheapest day is tinted, the picked day is filled with the brand gradient.
+		 */
+		function CalendarChart(props) {
+			const layout = useMemo(() => buildCalendarLayout(props.days, props.selectedDate), [props.days, props.selectedDate]);
+			const wrapRef = useRef(null);
+			const [hoverIndex, setHoverIndex] = useState(null);
+			const gradientId = useMemo(() => `pw-cal-${Math.random().toString(36).slice(2, 8)}`, []);
+
+			const pickIndex = (event) => {
+				if (layout === null) return null;
+				const node = wrapRef.current;
+				if (node === null) return null;
+				const rect = node.getBoundingClientRect();
+				if (rect.width <= 0) return null;
+				const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+				const svgX = ratio * CHART_WIDTH;
+				if (svgX < layout.plotLeft || svgX > layout.plotRight) return null;
+				const index = Math.floor((svgX - layout.plotLeft) / layout.slot);
+				return Math.min(layout.points.length - 1, Math.max(0, index));
+			};
+
+			if (layout === null) {
+				return h(
+					'div',
+					{ style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: 150, border: '1px dashed var(--dsw-alias-border-l1)', borderRadius: 12, color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } },
+					t('calendar.empty')
+				);
+			}
+
+			const hovered = hoverIndex === null ? null : layout.points[hoverIndex];
+			const hoverBar = hoverIndex === null ? null : layout.bars[hoverIndex];
+
+			const children = [
+				h(
+					'defs',
+					{ key: 'defs' },
+					h(
+						'linearGradient',
+						{ id: gradientId, x1: 0, y1: 0, x2: 0, y2: 1 },
+						h('stop', { offset: '0%', stopColor: 'var(--dsw-alias-brand-primary)', stopOpacity: 0.95 }),
+						h('stop', { offset: '100%', stopColor: 'var(--dsw-alias-brand-primary)', stopOpacity: 0.4 })
+					)
+				),
+				layout.yTicks.map((tick, index) =>
+					h(
+						'g',
+						{ key: `y-${index}` },
+						h('line', { x1: layout.plotLeft, y1: tick.y, x2: layout.plotRight, y2: tick.y, stroke: 'var(--dsw-alias-border-l1)', strokeWidth: 1 }),
+						h('text', { x: layout.plotLeft - 8, y: tick.y, dy: '0.32em', textAnchor: 'end', fontSize: 11, fill: 'var(--dsw-alias-label-secondary)' }, formatMoney(tick.value))
+					)
+				),
+				layout.bars.map((bar) => {
+					const selected = props.selectedDate === bar.date;
+					const isMin = bar.index === layout.minIndex;
+					let fill = 'var(--dsw-alias-state-idle-primary)';
+					if (isMin) fill = 'var(--dsw-alias-state-success-primary)';
+					if (selected) fill = `url(#${gradientId})`;
+					return h('rect', {
+						key: bar.date,
+						className: 'pw-cal-bar',
+						x: bar.x,
+						y: bar.y,
+						width: bar.width,
+						height: bar.height,
+						rx: Math.min(2.5, bar.width / 2),
+						fill,
+						opacity: selected ? 1 : isMin ? 0.95 : 0.55,
+						'data-selected': selected ? 'true' : 'false',
+					});
+				}),
+				layout.xTicks.map((tick, index) => h('text', { key: `x-${index}`, x: tick.x, y: layout.plotBottom + 16, textAnchor: 'middle', fontSize: 11, fill: 'var(--dsw-alias-label-secondary)' }, tick.label)),
+				hoverBar === null
+					? null
+					: h('line', {
+							key: 'hover',
+							x1: hoverBar.x + hoverBar.width / 2,
+							y1: layout.plotTop,
+							x2: hoverBar.x + hoverBar.width / 2,
+							y2: layout.plotBottom,
+							stroke: 'var(--dsw-alias-border-l2)',
+							strokeWidth: 1,
+							strokeDasharray: '3 3',
+						}),
+			];
+
+			return h(
+				'div',
+				{
+					className: 'pw-cal-wrap',
+					ref: wrapRef,
+					onMouseMove: (event) => setHoverIndex(pickIndex(event)),
+					onMouseLeave: () => setHoverIndex(null),
+					onClick: (event) => {
+						const index = pickIndex(event);
+						if (index === null || typeof props.onPick !== 'function') return;
+						props.onPick(layout.points[index]);
+					},
+				},
+				h('svg', { className: 'pw-cal', viewBox: `0 0 ${CHART_WIDTH} ${CALENDAR_HEIGHT}`, role: 'img', 'aria-label': props.title || t('calendar.title') }, children),
+				hovered === null || hoverBar === null
+					? null
+					: h(
+							'div',
+							{
+								className: 'pw-tooltip',
+								style: {
+									left: `${((hoverBar.x + hoverBar.width / 2) / CHART_WIDTH) * 100}%`,
+									top: `${(hoverBar.y / CALENDAR_HEIGHT) * 100}%`,
+									transform: hoverBar.y < 60 ? 'translate(-50%, 14px)' : 'translate(-50%, -118%)',
+								},
+								role: 'status',
+							},
+							h('div', { style: { fontWeight: 500 } }, t('calendar.dayHint', { date: monthDay(hovered.date), price: formatMoney(hovered.total) })),
+							hovered.bare !== null && Math.round(hovered.bare) !== Math.round(hovered.total) ? h('div', { className: 'pw-muted' }, t('chart.bare', { price: formatMoney(hovered.bare) })) : null
+						)
+			);
+		}
+
 		// #endregion
 
 		// #region list view
 		function statusHealth(status) {
 			if (!status || typeof status !== 'object') return { tone: 'idle', labelKey: 'status.never' };
+			const l1 = status.l1 && typeof status.l1 === 'object' ? status.l1 : null;
+			if (l1 !== null && typeof l1.ok === 'boolean') {
+				if (l1.ok !== true) return { tone: 'error', labelKey: 'status.warn' };
+				return status.lastCollectAt ? { tone: 'ok', labelKey: 'status.ok' } : { tone: 'idle', labelKey: 'status.never' };
+			}
+			// Older Hosts only sent `collectors`; the L2 row is red when it is merely
+			// disabled or unavailable, so it never decides the health dot.
 			const collectors = Array.isArray(status.collectors) ? status.collectors : [];
-			// The L2 collector reports `ok: false` whenever it is disabled, blocked or
-			// unavailable, which is a normal state; only L1 decides the health dot.
 			if (collectors.some((collector) => collector && collector.ok === false && collector.id !== 'l2')) return { tone: 'error', labelKey: 'status.warn' };
 			if (!status.lastCollectAt) return { tone: 'idle', labelKey: 'status.never' };
 			return { tone: 'ok', labelKey: 'status.ok' };
 		}
 
-		/** Login chip content for the current auth snapshot (`status.auth`). */
-		function authInfo(auth) {
-			const source = auth && typeof auth === 'object' ? auth : {};
-			if (source.available === false) return { tone: 'idle', label: t('status.auth.unavailable'), clickable: false };
-			if (source.status === 'valid') {
-				const account = typeof source.accountHint === 'string' ? source.accountHint.trim() : '';
+		/** Login chip content for the current snapshot (`auth` + `l2` blocks). */
+		function authInfo(status) {
+			const source = status && typeof status === 'object' ? status : {};
+			const auth = source.auth && typeof source.auth === 'object' ? source.auth : {};
+			const l2 = l2State(source);
+			if (l2.available === false) return { tone: 'idle', label: t('status.auth.unavailable'), clickable: false };
+			if (auth.status === 'valid') {
+				const account = typeof auth.accountHint === 'string' ? auth.accountHint.trim() : '';
 				return { tone: 'ok', label: account === '' ? t('status.auth.valid') : t('status.auth.validAccount', { account }), clickable: false };
 			}
-			if (source.status === 'expired') return { tone: 'warn', label: t('status.auth.expired'), clickable: true };
+			if (auth.status === 'expired') return { tone: 'warn', label: t('status.auth.expired'), clickable: true };
 			return { tone: 'idle', label: t('status.auth.unknown'), clickable: true };
 		}
 
 		/** `风控暂停至 13:20` while the L2 backoff is still running, else null. */
-		function blockedNotice(auth) {
-			const source = auth && typeof auth === 'object' ? auth : {};
-			const until = typeof source.blockedUntil === 'string' ? Date.parse(source.blockedUntil) : NaN;
+		function blockedNotice(status) {
+			const l2 = l2State(status);
+			const until = typeof l2.blockedUntil === 'string' ? Date.parse(l2.blockedUntil) : NaN;
 			if (!Number.isFinite(until) || until <= Date.now()) return null;
-			const time = formatLastCollect(source.blockedUntil);
+			const time = formatLastCollect(l2.blockedUntil);
 			return time === null ? null : t('status.auth.blocked', { time });
 		}
 
@@ -1368,7 +1815,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			if (props.pending === true) {
 				return h('span', { className: 'pw-authchip', 'data-tone': 'idle', 'data-busy': 'true', role: 'status' }, h(Dot, { tone: 'idle' }), h('span', null, t('status.auth.loggingIn')));
 			}
-			const info = authInfo(props.auth);
+			const info = authInfo(props.status);
 			const content = [h(Dot, { key: 'dot', tone: info.tone }), h('span', { key: 'label' }, info.label)];
 			if (info.clickable !== true || typeof props.onLogin !== 'function') {
 				return h('span', { className: 'pw-authchip', 'data-tone': info.tone }, content);
@@ -1380,34 +1827,47 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			);
 		}
 
+		function ModeChip(props) {
+			const calendar = props.mode === 'calendar';
+			return h(Chip, { tone: calendar ? 'flat' : 'brand', title: calendar ? t('card.mode.calendar') : t('card.mode.watch') }, calendar ? t('card.mode.calendar') : t('card.mode.watch'));
+		}
+
 		function MonitorCard(props) {
 			const monitor = props.monitor;
-			const series = normalizeSeries(monitor.points);
+			const calendar = monitorMode(monitor) === 'calendar';
 			const latest = latestTotal(monitor);
-			const delta = trendPercent(series);
+			const summary = calendarSummaryOf(monitor);
+			const spark = normalizeSeries(monitor.spark);
+			const delta = calendar ? null : trendPercent(spark);
 			const chip = trendChip(delta);
-			const lowest = lowestTotal(series);
-			const target = ruleTarget(monitor.rules);
 			const disabled = monitor.enabled === false;
-			const segments = [];
-			if (latest === null) {
-				segments.push(t('card.waiting'));
+			const segments = [monitorDates(monitor)];
+			if (calendar) {
+				if (summary !== null && summary.min !== null) segments.push('' + t('card.lowestDay', { date: monthDay(summary.min.date) }) + ' ' + formatMoney(summary.min.total));
+				segments.push(latest === null ? t('card.waiting') : t('card.updated', { when: relativeTime(latest.at) }));
 			} else {
-				if (lowest !== null) segments.push(t('card.min', { price: formatMoney(lowest) }));
-				if (target !== null) segments.push(t('card.target', { price: formatMoney(target) }));
-				segments.push(relativeTime(latest.at));
+				segments.push(latest === null ? t('card.waiting') : t('card.latest', { price: formatMoney(latest.total) }));
+				if (latest !== null) segments.push(relativeTime(latest.at));
 			}
 			const metaChildren = [];
 			segments.forEach((segment, index) => {
 				if (index > 0) metaChildren.push(h('span', { className: 'pw-strip-sep', key: `sep-${index}` }, '·'));
 				metaChildren.push(h('span', { key: `seg-${index}` }, segment));
 			});
-			const titleChildren = [
-				h(PlaneIcon, { key: 'plane', size: 14 }),
-				h('span', { key: 'route', className: 'pw-ellipsis' }, monitorRoute(monitor)),
-				h('span', { key: 'dates', className: 'pw-page-sub' }, monitorDates(monitor)),
-			];
+			const titleChildren = [h(PlaneIcon, { key: 'plane', size: 14 }), h('span', { key: 'route', className: 'pw-ellipsis' }, monitorRoute(monitor)), h(ModeChip, { key: 'mode', mode: calendar ? 'calendar' : 'watch' })];
 			if (disabled) titleChildren.push(h(Chip, { key: 'paused', tone: 'flat' }, t('card.paused')));
+
+			const priceCell =
+				latest === null
+					? h('span', { className: 'pw-price pw-muted' }, '—')
+					: h(
+							'div',
+							{ className: 'pw-row', style: { gap: 6, justifyContent: 'flex-end' } },
+							h('span', { className: 'pw-price' }, formatMoney(latest.total)),
+							calendar
+								? h(Chip, { tone: 'flat', title: latest.note || '' }, t('card.calendarNote'))
+								: h(Chip, { tone: chip.tone }, chip.text)
+						);
 
 			return h(
 				'div',
@@ -1416,7 +1876,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					role: 'button',
 					tabIndex: 0,
 					'data-disabled': disabled ? 'true' : 'false',
-					'aria-label': `${monitorRoute(monitor)} ${monitorDates(monitor)}`,
+					'data-mode': calendar ? 'calendar' : 'watch',
+					'aria-label': `${monitorTitle(monitor)} ${monitorDates(monitor)}`,
 					onClick: () => props.onOpen(monitor.id),
 					onKeyDown: (event) => {
 						if (event.target !== event.currentTarget) return;
@@ -1431,7 +1892,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					h('div', { className: 'pw-card-title' }, titleChildren),
 					h('div', { className: 'pw-card-meta' }, metaChildren)
 				),
-				h(Sparkline, { points: monitor.points, tone: chip.tone }),
+				calendar ? null : h(Sparkline, { points: monitor.spark, tone: chip.tone }),
 				h(
 					'div',
 					{ className: 'pw-col', style: { alignItems: 'flex-end', gap: 7, flex: 'none' } },
@@ -1441,9 +1902,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						disabled: props.busy === true,
 						onChange: () => props.onToggle(monitor),
 					}),
-					latest === null
-						? h('span', { className: 'pw-price pw-muted' }, '—')
-						: h('div', { className: 'pw-row', style: { gap: 6 } }, h('span', { className: 'pw-price' }, formatMoney(latest.total)), h(Chip, { tone: chip.tone }, chip.text))
+					priceCell
 				)
 			);
 		}
@@ -1452,7 +1911,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const monitors = Array.isArray(props.monitors) ? props.monitors : null;
 			const status = props.status;
 			const health = statusHealth(status);
-			const blockedAuth = blockedNotice(status && status.auth);
+			const blocked = blockedNotice(status);
 			const filtered = monitors === null ? null : monitors.filter((monitor) => props.filter !== 'flight' || monitor.type === 'flight');
 			const filters = [
 				{ id: 'all', label: t('filter.all') },
@@ -1495,8 +1954,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					h(Dot, { tone: health.tone }),
 					h('span', null, t(health.labelKey)),
 					status && status.lastCollectAt ? h('span', null, t('status.last', { time: formatLastCollect(status.lastCollectAt) })) : null,
-					status ? h(AuthChip, { auth: status.auth, pending: props.loginPending === true, onLogin: props.onLogin }) : null,
-					blockedAuth === null ? null : h(Chip, { tone: 'warn' }, blockedAuth)
+					status ? h(AuthChip, { status, pending: props.loginPending === true, onLogin: props.onLogin }) : null,
+					blocked === null ? null : h(Chip, { tone: 'warn' }, blocked)
 				),
 				h(
 					'div',
@@ -1504,7 +1963,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					h(
 						'div',
 						{ className: 'pw-body' },
-						monitors === null && props.error === null
+						monitors === null && (props.error === null || props.error === undefined)
 							? [0, 1, 2].map((index) => h('div', { className: 'pw-card', key: `skeleton-${index}` }, h('div', { className: 'pw-col pw-grow' }, h(Skeleton, { height: 16, width: '46%' }), h(Skeleton, { height: 12, width: '68%' })), h(Skeleton, { height: 44, width: 120, radius: 10 })))
 							: null,
 						monitors !== null && filtered.length === 0
@@ -1536,149 +1995,293 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		function ruleSummary(rules) {
 			const chips = [];
 			const target = ruleTarget(rules);
-			if (target !== null) chips.push({ key: 'target', label: `${t('rule.target')} ${formatMoney(target)}` });
-			if (ruleHas(rules, 'new_low')) chips.push({ key: 'new_low', label: t('rule.new_low') });
-			if (ruleHas(rules, 'new_high')) chips.push({ key: 'new_high', label: t('rule.new_high') });
-			if (ruleHas(rules, 'digest')) chips.push({ key: 'digest', label: t('rule.digest') });
+			if (target !== null) chips.push({ key: 'target', label: `${t('chart.ref.target')} ${formatMoney(target)}` });
+			if (ruleHas(rules, 'new_low')) chips.push({ key: 'new_low', label: t('watch.rules.newLow') });
+			if (ruleHas(rules, 'new_high')) chips.push({ key: 'new_high', label: t('watch.rules.newHigh') });
+			if (ruleHas(rules, 'digest')) chips.push({ key: 'digest', label: t('watch.rules.digest') });
 			return chips;
 		}
 
-		function DetailView(props) {
+		function DetailHeader(props) {
 			const monitor = props.monitor;
-			const [editing, setEditing] = useState(false);
-			const [draft, setDraft] = useState({ target: '', newLow: false, newHigh: false, digest: false });
-			const [saving, setSaving] = useState(false);
-			const [ruleError, setRuleError] = useState(null);
+			return h(
+				'div',
+				{ className: 'pw-row', style: { alignItems: 'flex-start', gap: 10 } },
+				h(IconButton, { label: t('detail.back'), onClick: props.onBack }, h(BackIcon, { size: 16 })),
+				h('div', { className: 'pw-col pw-grow', style: { gap: 4 } }, h('h2', { className: 'pw-page-title' }, monitorTitle(monitor)), h('div', { className: 'pw-detail-meta' }, props.meta)),
+				h('div', { className: 'pw-row', style: { gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', flex: 'none' } }, props.actions)
+			);
+		}
 
-			const prices = props.prices;
-			const pricePoints = prices && Array.isArray(prices.points) ? prices.points : null;
-			const priceStats = prices && prices.stats && typeof prices.stats === 'object' ? prices.stats : null;
-			const series = normalizePricePoints(pricePoints);
-			const passengerNames = (Array.isArray(props.passengers) ? props.passengers : [])
-				.filter((passenger) => passenger && Array.isArray(monitor.passengerIds) && monitor.passengerIds.indexOf(passenger.id) >= 0)
-				.map((passenger) => passenger.nickname)
-				.filter((name) => typeof name === 'string' && name !== '');
-			const cadence = monitor.cadence && typeof monitor.cadence === 'object' && typeof monitor.cadence.l1Minutes === 'number' ? monitor.cadence.l1Minutes : DEFAULT_CADENCE;
-			const rules = monitorRules(monitor);
-			const chips = ruleSummary(rules);
+		/** Stats row for one calendar chart (out or back). */
+		function calendarStatsItems(days) {
+			const stats = calendarStats(days);
+			if (stats === null) return [];
+			return [
+				{ key: 'min', label: t('calendar.stat.min'), value: formatMoney(stats.min.total) },
+				{ key: 'max', label: t('calendar.stat.max'), value: formatMoney(stats.max.total) },
+				{ key: 'avg', label: t('calendar.stat.avg'), value: formatMoney(stats.avg) },
+				{ key: 'minDay', label: t('calendar.stat.minDay'), value: monthDay(stats.min.date) },
+			];
+		}
+
+		/**
+		 * 行情 mode: two bar calendars (round) and a pin bar that turns the picked
+		 * day (or day pair) into a watch monitor via `POST /monitors`.
+		 */
+		function CalendarDetailView(props) {
+			const monitor = props.monitor;
+			const round = monitorTrip(monitor) === 'round';
+			const calendar = props.calendar;
+			const outDays = useMemo(() => normalizeCalendarDays(calendar && calendar.out), [calendar]);
+			const backDays = useMemo(() => normalizeCalendarDays(calendar && calendar.back), [calendar]);
+			const outStatsItems = useMemo(() => calendarStatsItems(outDays), [outDays, runtime.revision.get()]);
+			const backStatsItems = useMemo(() => calendarStatsItems(backDays), [backDays, runtime.revision.get()]);
+			const [selectedOut, setSelectedOut] = useState(null);
+			const [selectedBack, setSelectedBack] = useState(null);
+			useLocaleRevision();
+
+			const outPick = outDays.find((day) => day.date === selectedOut) || null;
+			const backPick = backDays.find((day) => day.date === selectedBack) || null;
+			const pinTotal = outPick === null ? null : round ? (backPick === null ? null : outPick.total + backPick.total) : outPick.total;
+			const canPin = outPick !== null && pinTotal !== null && !props.busy;
 			const enabled = monitor.enabled !== false;
-			const busy = props.busy === true;
+			const fetchedAt = calendar && typeof calendar.fetchedAt === 'string' ? calendar.fetchedAt : null;
+			const passengerCount = Array.isArray(monitor.passengerIds) ? monitor.passengerIds.length : 0;
+			const cadenceHours = props.calendarHours;
 
-			const beginEdit = () => {
-				const target = ruleTarget(rules);
-				setDraft({
-					target: target === null ? '' : String(Math.round(target)),
-					newLow: ruleHas(rules, 'new_low'),
-					newHigh: ruleHas(rules, 'new_high'),
-					digest: ruleHas(rules, 'digest'),
-				});
-				setRuleError(null);
-				setEditing(true);
+			const meta = [monitorDates(monitor)];
+			meta.push(h('span', { key: 'sep-0', className: 'pw-strip-sep' }, '·'));
+			meta.push(h('span', { key: 'passengers' }, t('detail.passengersCount', { n: passengerCount })));
+			if (typeof cadenceHours === 'number' && Number.isFinite(cadenceHours)) {
+				meta.push(h('span', { key: 'sep-1', className: 'pw-strip-sep' }, '·'));
+				meta.push(h('span', { key: 'cadence' }, t('detail.cadenceCalendar', { n: cadenceHours })));
+			}
+			if (!enabled) meta.push(h(Chip, { key: 'paused', tone: 'flat' }, t('card.paused')));
+
+			let pinLabel = t('calendar.pinNeedReturn');
+			if (outPick !== null) {
+				pinLabel = round
+					? backPick === null
+						? t('calendar.pinNeedReturn')
+						: t('calendar.pinRound', { depart: monthDay(outPick.date), return: monthDay(backPick.date), price: formatMoney(outPick.total + backPick.total) })
+					: t('calendar.pin', { date: monthDay(outPick.date), price: formatMoney(outPick.total) });
+			}
+
+			return h(
+				'div',
+				{ className: 'pw-scroll' },
+				h(
+					'div',
+					{ className: 'pw-body' },
+					h(DetailHeader, {
+						monitor,
+						onBack: props.onBack,
+						meta,
+						actions: [
+							h(Button, { key: 'refresh', size: 'sm', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: props.busy === true }, t('detail.refresh')),
+							h(
+								Button,
+								{ key: 'pause', size: 'sm', icon: enabled ? h(PauseIcon, { size: 13 }) : h(PlayIcon, { size: 13 }), onClick: () => props.onToggleEnabled(monitor), disabled: props.busy === true },
+								enabled ? t('detail.pause') : t('detail.resume')
+							),
+							h(Button, { key: 'delete', size: 'sm', variant: 'danger', icon: h(TrashIcon, { size: 13 }), onClick: () => props.onDelete(monitor), disabled: props.busy === true }, t('detail.delete')),
+						],
+					}),
+					props.calendarError ? h(ErrorBar, { message: props.calendarError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
+					h(
+						Section,
+						{ title: round ? `${t('calendar.title')} · ${t('calendar.out')}` : t('calendar.title'), help: t('calendar.caption') },
+						calendar === null && props.calendarError === null
+							? h(Skeleton, { height: 150, radius: 10 })
+							: h(CalendarChart, { days: outDays, selectedDate: selectedOut, onPick: (day) => setSelectedOut(day.date === selectedOut ? null : day.date) }),
+						outStatsItems.length === 0 ? null : h(Stats, { items: outStatsItems }),
+						fetchedAt === null ? null : h('span', { className: 'pw-hint' }, t('calendar.fetchedAt', { when: relativeTime(fetchedAt) }))
+					),
+					round
+						? h(
+								Section,
+								{ title: `${t('calendar.title')} · ${t('calendar.back')}`, help: t('calendar.caption') },
+								calendar === null && props.calendarError === null
+									? h(Skeleton, { height: 150, radius: 10 })
+									: h(CalendarChart, { days: backDays, selectedDate: selectedBack, onPick: (day) => setSelectedBack(day.date === selectedBack ? null : day.date) }),
+								backStatsItems.length === 0 ? null : h(Stats, { items: backStatsItems })
+							)
+						: null,
+					h('div', { className: 'pw-hint' }, t('calendar.pickHint')),
+					selectedOut === null
+						? null
+						: h(
+								'div',
+								{ className: 'pw-pin-bar' },
+								h('span', { className: 'pw-grow', style: { fontSize: 12 } }, outPick === null ? '' : `${monthDay(outPick.date)}${round && backPick !== null ? ` – ${monthDay(backPick.date)}` : ''}${pinTotal === null ? '' : ` · ${formatMoney(pinTotal)}`}`),
+								h(Button, { size: 'sm', onClick: () => { setSelectedOut(null); setSelectedBack(null); }, disabled: props.busy === true }, t('common.cancel')),
+								h(Button, { variant: 'primary', size: 'sm', onClick: () => props.onPin({ departDate: outPick === null ? null : outPick.date, returnDate: round && backPick !== null ? backPick.date : null }), disabled: !canPin }, pinLabel)
+							)
+				)
+			);
+		}
+
+		/** One row per passenger: latest precise fare, change and the fare product label. */
+		function PassengerPriceCard(props) {
+			const passenger = props.passenger;
+			const points = useMemo(() => (props.series ? normalizePricePoints(props.series.points) : []), [props.series]);
+			const latest = points.length === 0 ? null : points[points.length - 1];
+			const delta = trendPercent(points);
+			const chip = trendChip(delta);
+			const typeLabel = passenger && PASSENGER_TYPES.indexOf(passenger.type) >= 0 ? t(`type.${passenger.type}`) : passenger && passenger.type ? passenger.type : '';
+			const fareLabel = props.fareLabel;
+			return h(
+				'div',
+				{ className: 'pw-pax-card' },
+				h('div', { className: 'pw-col', style: { gap: 2 } }, h('span', { className: 'pw-pax-name' }, passenger ? passenger.nickname : '—'), typeLabel === '' ? null : h('span', { className: 'pw-hint' }, typeLabel)),
+				fareLabel ? h(Chip, { tone: 'flat' }, t('watch.fareLabel', { label: fareLabel })) : null,
+				latest === null
+					? h('span', { className: 'pw-hint', style: { marginLeft: 'auto' } }, t('watch.waitingPrecise'))
+					: h(
+							'div',
+							{ className: 'pw-row', style: { marginLeft: 'auto', gap: 6 } },
+							h('span', { className: 'pw-pax-price' }, formatMoney(latest.total)),
+							h(Chip, { tone: chip.tone }, chip.text)
+						),
+				latest !== null && latest.taxSource !== '' ? h('span', { className: 'pw-hint' }, latest.taxSource === 'order' ? t('watch.taxSource.order') : t('watch.taxSource.estimate')) : null
+			);
+		}
+
+		/** The signed-in flight list; only the expanded row carries per-passenger prices. */
+		function FlightTable(props) {
+			const flights = Array.isArray(props.flights) ? props.flights : [];
+			const passengers = Array.isArray(props.passengers) ? props.passengers : [];
+			if (flights.length === 0) return h('div', { className: 'pw-hint' }, t('watch.flightsEmpty'));
+			const nameOf = (id) => {
+				const found = passengers.find((passenger) => passenger.id === id);
+				return found ? found.nickname : '';
 			};
+			const headers = [t('watch.flightNo'), t('watch.airline'), t('watch.time'), t('watch.craft'), t('watch.airport'), t('watch.listPrice'), t('watch.yourPrice')];
+			return h(
+				'div',
+				{ className: 'pw-table-wrap' },
+				h(
+					'table',
+					{ className: 'pw-table' },
+					h('thead', null, h('tr', null, headers.map((label, index) => h('th', { key: index, className: index >= 5 ? 'pw-num' : undefined }, label)))),
+					h(
+						'tbody',
+						null,
+						flights.map((flight, index) => {
+							const prices = Array.isArray(flight.prices) ? flight.prices : [];
+							const priceText =
+								prices.length === 0
+									? '—'
+									: prices
+											.map((item) => {
+												const name = nameOf(item.passengerId);
+												return name === '' ? formatMoney(item.total) : `${name} ${formatMoney(item.total)}`;
+											})
+											.join(' · ');
+							return h(
+								'tr',
+								{ key: `${flight.no || 'flight'}-${index}`, 'data-expanded': flight.expanded === true ? 'true' : 'false' },
+								h('td', null, h('div', { className: 'pw-row', style: { gap: 5 } }, h('span', null, flight.no || '—'), flight.expanded === true ? h(Chip, { tone: 'brand' }, t('watch.expanded')) : null)),
+								h('td', null, flight.airline || '—'),
+								h('td', { className: 'pw-num' }, `${flight.depTime || '—'} – ${flight.arrTime || '—'}`),
+								h('td', null, flight.craft || '—'),
+								h('td', null, `${flight.depAirport || '—'} → ${flight.arrAirport || '—'}`),
+								h('td', { className: 'pw-num' }, formatMoney(flight.listPrice)),
+								h('td', { className: 'pw-num' }, priceText)
+							);
+						})
+					)
+				)
+			);
+		}
 
-			const cancelEdit = () => {
-				setEditing(false);
+		/** 监控 mode: passenger fares, reference chart, per-passenger series, flight snapshot. */
+		function WatchDetailView(props) {
+			useLocaleRevision();
+			const monitor = props.monitor;
+			const passengers = Array.isArray(props.passengers) ? props.passengers : [];
+			const prices = props.prices;
+			const flightsData = props.flights;
+			const reference = useMemo(() => normalizePricePoints(prices && prices.reference), [prices]);
+			const seriesList = Array.isArray(prices && prices.series) ? prices.series : [];
+			const flights = Array.isArray(flightsData && flightsData.flights) ? flightsData.flights : [];
+			const tax = flightsData && flightsData.tax && typeof flightsData.tax === 'object' ? flightsData.tax : null;
+			const flightsFetchedAt = flightsData && typeof flightsData.fetchedAt === 'string' ? flightsData.fetchedAt : null;
+			const stats = prices && prices.stats && typeof prices.stats === 'object' ? prices.stats : null;
+			const referenceStats = stats === null ? null : { min: numberOrNull(stats.min), max: numberOrNull(stats.max), avg7: numberOrNull(stats.avg7), target: numberOrNull(stats.target) };
+			const enabled = monitor.enabled !== false;
+			const rules = monitorRules(monitor);
+			const ruleChips = ruleSummary(rules);
+			const [editingRules, setEditingRules] = useState(false);
+			const [ruleDraft, setRuleDraft] = useState({ newLow: false, newHigh: false, digest: false });
+			const [savingRules, setSavingRules] = useState(false);
+			const [ruleError, setRuleError] = useState(null);
+			const busy = props.busy === true;
+			const cadence = monitorCadence(monitor);
+			const passengerIds = Array.isArray(monitor.passengerIds) ? monitor.passengerIds : [];
+			const passengerById = (id) => passengers.find((passenger) => passenger.id === id) || null;
+			const fareByPassenger = new Map();
+			for (const flight of flights) {
+				if (!Array.isArray(flight.prices)) continue;
+				for (const item of flight.prices) {
+					if (item && typeof item.passengerId === 'string' && !fareByPassenger.has(item.passengerId)) fareByPassenger.set(item.passengerId, typeof item.fareLabel === 'string' ? item.fareLabel : '');
+				}
+			}
+
+			const meta = [monitorDates(monitor)];
+			meta.push(h('span', { key: 'sep-0', className: 'pw-strip-sep' }, '·'));
+			meta.push(h('span', { key: 'passengers' }, t('detail.passengersCount', { n: passengerIds.length })));
+			if (cadence !== null) {
+				meta.push(h('span', { key: 'sep-1', className: 'pw-strip-sep' }, '·'));
+				meta.push(h('span', { key: 'cadence' }, t('detail.cadence', { n: cadence })));
+			}
+			if (!enabled) meta.push(h(Chip, { key: 'paused', tone: 'flat' }, t('card.paused')));
+
+			const beginEditRules = () => {
+				setRuleDraft({ newLow: ruleHas(rules, 'new_low'), newHigh: ruleHas(rules, 'new_high'), digest: ruleHas(rules, 'digest') });
 				setRuleError(null);
+				setEditingRules(true);
 			};
 
 			const submitRules = async () => {
 				const next = [];
-				const raw = draft.target.trim();
-				if (raw !== '') {
-					const value = Number(raw);
-					if (!Number.isFinite(value) || value <= 0) {
-						setRuleError(t('detail.rules.invalid'));
-						return;
-					}
-					next.push({ kind: 'target', value });
-				}
-				if (draft.newLow) next.push({ kind: 'new_low' });
-				if (draft.newHigh) next.push({ kind: 'new_high' });
-				if (draft.digest) next.push({ kind: 'digest' });
-				setSaving(true);
+				if (ruleDraft.newLow) next.push({ kind: 'new_low' });
+				if (ruleDraft.newHigh) next.push({ kind: 'new_high' });
+				if (ruleDraft.digest) next.push({ kind: 'digest' });
+				setSavingRules(true);
 				setRuleError(null);
 				try {
 					await props.onSaveRules(monitor.id, next);
-					setEditing(false);
+					setEditingRules(false);
 				} catch (error) {
-					setRuleError(error && error.message ? error.message : String(error));
+					setRuleError(error && error.message ? error.message : t('watch.rules.failed'));
 				} finally {
-					setSaving(false);
+					setSavingRules(false);
 				}
 			};
 
-			const targetValue = numberOrNull(priceStats && priceStats.target) === null ? ruleTarget(rules) : numberOrNull(priceStats && priceStats.target);
-			// Pass the rule target down even when /prices returned no `stats.target`, so the
-			// dashed target line still shows for a monitor that has a target rule.
-			const chartStats = priceStats === null ? (targetValue === null ? null : { target: targetValue }) : { ...priceStats, target: targetValue };
-			const statsItems = [
-				{ key: 'min', label: t('detail.stat.min'), value: formatMoney(numberOrNull(priceStats && priceStats.min) === null ? lowestTotal(series) : priceStats.min) },
-				{ key: 'max', label: t('detail.stat.max'), value: formatMoney(numberOrNull(priceStats && priceStats.max) === null ? highestTotal(series) : priceStats.max) },
-				{ key: 'avg7', label: t('detail.stat.avg7'), value: formatMoney(priceStats && priceStats.avg7) },
-				{ key: 'target', label: t('detail.stat.target'), value: formatMoney(targetValue) },
-			];
-
-			const meta = [];
-			meta.push(h('span', { key: 'dates' }, monitorDates(monitor)));
-			meta.push(h('span', { key: 'sep-0', className: 'pw-strip-sep' }, '·'));
-			meta.push(h('span', { key: 'passengers' }, passengerNames.length > 0 ? t('detail.passengersPrefix', { names: passengerNames.join(t('common.listSeparator')) }) : t('detail.passengersCount', { n: Array.isArray(monitor.passengerIds) ? monitor.passengerIds.length : 0 })));
-			meta.push(h('span', { key: 'sep-1', className: 'pw-strip-sep' }, '·'));
-			meta.push(h('span', { key: 'cadence' }, t('detail.cadence', { n: cadence })));
-			if (!enabled) meta.push(h(Chip, { key: 'paused', tone: 'flat' }, t('card.paused')));
-
-			const ruleSection = editing
+			const ruleSection = editingRules
 				? h(
 						Section,
-						{ title: t('detail.rules.title') },
-						h(
-							Field,
-							{ label: t('detail.rules.target'), hint: t('detail.rules.targetPlaceholder') },
-							h('input', {
-								className: 'pw-input',
-								type: 'number',
-								inputMode: 'numeric',
-								min: 0,
-								placeholder: '¥',
-								value: draft.target,
-								onChange: (event) => setDraft({ ...draft, target: event.target.value }),
-							})
-						),
+						{ title: t('watch.rules') },
 						['newLow', 'newHigh', 'digest'].map((key) => {
-							const label = key === 'newLow' ? t('detail.rules.newLow') : key === 'newHigh' ? t('detail.rules.newHigh') : t('detail.rules.digest');
-							return h(
-								'div',
-								{ className: 'pw-rule-row', key },
-								h('span', null, label),
-								h(Switch, {
-									checked: draft[key] === true,
-									label,
-									onChange: (next) => setDraft({ ...draft, [key]: next }),
-								})
-							);
+							const label = key === 'newLow' ? t('watch.rules.newLow') : key === 'newHigh' ? t('watch.rules.newHigh') : t('watch.rules.digest');
+							return h('div', { className: 'pw-rule-row', key }, h('span', null, label), h(Switch, { checked: ruleDraft[key] === true, label, onChange: (next) => setRuleDraft({ ...ruleDraft, [key]: next }) }));
 						}),
 						ruleError === null ? null : h('div', { className: 'pw-hint', style: { color: 'var(--dsw-alias-state-error-primary)' }, role: 'alert' }, ruleError),
 						h(
 							'div',
 							{ className: 'pw-row', style: { justifyContent: 'flex-end', gap: 8 } },
-							h(Button, { size: 'sm', onClick: cancelEdit, disabled: saving }, t('detail.rules.cancel')),
-							h(Button, { size: 'sm', variant: 'primary', onClick: submitRules, disabled: saving }, saving ? t('common.saving') : t('detail.rules.save'))
+							h(Button, { size: 'sm', onClick: () => setEditingRules(false), disabled: savingRules }, t('watch.rules.cancel')),
+							h(Button, { size: 'sm', variant: 'primary', onClick: submitRules, disabled: savingRules }, savingRules ? t('common.saving') : t('watch.rules.save'))
 						)
 					)
 				: h(
 						Section,
-						{ title: t('detail.rules.title') },
-						chips.length === 0
-							? h('span', { className: 'pw-muted', style: { fontSize: 12 } }, t('detail.rules.empty'))
-							: h(
-									'div',
-									{ className: 'pw-row', style: { flexWrap: 'wrap', gap: 6 } },
-									chips.map((chip) => h(Chip, { key: chip.key, tone: chip.key === 'target' ? 'warn' : 'flat' }, chip.label))
-								),
-						h(
-							'div',
-							{ className: 'pw-row', style: { justifyContent: 'flex-end' } },
-							h(Button, { size: 'sm', icon: h(TargetIcon, { size: 13 }), onClick: beginEdit, disabled: busy }, t('detail.editRules'))
-						)
+						{ title: t('watch.rules') },
+						ruleChips.length === 0 ? h('span', { className: 'pw-muted', style: { fontSize: 12 } }, t('watch.rulesEmpty')) : h('div', { className: 'pw-row', style: { flexWrap: 'wrap', gap: 6 } }, ruleChips.map((chip) => h(Chip, { key: chip.key, tone: 'flat' }, chip.label))),
+						h('div', { className: 'pw-row', style: { justifyContent: 'flex-end' } }, h(Button, { size: 'sm', onClick: beginEditRules, disabled: busy }, t('watch.rules'))),
 					);
 
 			return h(
@@ -1687,41 +2290,87 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				h(
 					'div',
 					{ className: 'pw-body' },
-					h(
-						'div',
-						{ className: 'pw-row', style: { alignItems: 'flex-start', gap: 10 } },
-						h(IconButton, { label: t('detail.back'), onClick: props.onBack }, h(BackIcon, { size: 16 })),
-						h('div', { className: 'pw-col pw-grow', style: { gap: 4 } }, h('h2', { className: 'pw-page-title' }, monitorRoute(monitor)), h('div', { className: 'pw-detail-meta' }, meta)),
-						h(
-							'div',
-							{ className: 'pw-row', style: { gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', flex: 'none' } },
-							h(Button, { size: 'sm', icon: h(TargetIcon, { size: 13 }), onClick: beginEdit, disabled: busy }, t('detail.editRules')),
+					h(DetailHeader, {
+						monitor,
+						onBack: props.onBack,
+						meta,
+						actions: [
+							h(Button, { key: 'l2', size: 'sm', variant: 'primary', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefreshL2(monitor.id), disabled: busy }, t('detail.refreshL2')),
+							h(Button, { key: 'refresh', size: 'sm', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: busy }, t('detail.refresh')),
 							h(
 								Button,
-								{
-									size: 'sm',
-									icon: enabled ? h(PauseIcon, { size: 13 }) : h(PlayIcon, { size: 13 }),
-									onClick: () => props.onToggleEnabled(monitor),
-									disabled: busy,
-								},
+								{ key: 'pause', size: 'sm', icon: enabled ? h(PauseIcon, { size: 13 }) : h(PlayIcon, { size: 13 }), onClick: () => props.onToggleEnabled(monitor), disabled: busy },
 								enabled ? t('detail.pause') : t('detail.resume')
 							),
-							h(Button, { size: 'sm', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: busy }, t('detail.refresh')),
-							h(Button, { size: 'sm', variant: 'danger', icon: h(TrashIcon, { size: 13 }), onClick: () => props.onDelete(monitor), disabled: busy }, t('detail.delete'))
-						)
-					),
+							h(Button, { key: 'delete', size: 'sm', variant: 'danger', icon: h(TrashIcon, { size: 13 }), onClick: () => props.onDelete(monitor), disabled: busy }, t('detail.delete')),
+						],
+					}),
 					props.pricesError ? h(ErrorBar, { message: props.pricesError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
+					props.flightsError ? h(ErrorBar, { message: props.flightsError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
 					h(
 						Section,
-						{ title: t('detail.chart.title'), help: t('detail.chart.caption') },
-						prices === null && props.pricesError === null
-							? h(Skeleton, { height: 180, radius: 10 })
-							: h(PriceChart, { points: pricePoints, stats: chartStats, emptyText: t('detail.waiting') }),
-						h(Stats, { items: statsItems })
+						{ title: t('watch.realTitle'), help: t('watch.realHint') },
+						passengerIds.length === 0
+							? h('span', { className: 'pw-hint' }, t('watch.emptyPrecise'))
+							: h(
+									'div',
+									{ className: 'pw-col', style: { gap: 8 } },
+									passengerIds.map((id) => {
+										const series = seriesList.find((entry) => entry && entry.passengerId === id) || null;
+										return h(PassengerPriceCard, {
+											key: id,
+											passenger: passengerById(id) || (series && series.passenger) || null,
+											series,
+											fareLabel: fareByPassenger.get(id) || '',
+										});
+									})
+								)
+					),
+					h(
+						Section,
+						{ title: t('watch.reference'), help: t('watch.referenceCaption') },
+						prices === null && props.pricesError === null ? h(Skeleton, { height: 150, radius: 10 }) : h(PriceChart, { points: reference, stats: referenceStats, compact: true, emptyText: t('watch.emptyPrecise') })
+					),
+					seriesList.length === 0
+						? null
+						: seriesList.map((series) => {
+								const passenger = passengerById(series.passengerId) || (series.passenger && typeof series.passenger === 'object' ? series.passenger : null);
+								const name = passenger && typeof passenger.nickname === 'string' ? passenger.nickname : series.passengerId;
+								const typeLabel = passenger && PASSENGER_TYPES.indexOf(passenger.type) >= 0 ? t(`type.${passenger.type}`) : '';
+								const points = normalizePricePoints(series.points);
+								return h(
+									Section,
+									{ key: series.passengerId, title: t('watch.seriesTitle', { name, type: typeLabel }) },
+									points.length === 0 ? h('span', { className: 'pw-hint' }, t('watch.seriesEmpty')) : h(PriceChart, { points: series.points, compact: true, emptyText: t('watch.seriesEmpty') })
+								);
+							}),
+					h(
+						Section,
+						{ title: t('watch.flights'), help: flightsFetchedAt === null ? null : t('watch.fetchedAt', { when: relativeTime(flightsFetchedAt) }) },
+						flightsData === null && props.flightsError === null ? h(Skeleton, { height: 120, radius: 10 }) : h(FlightTable, { flights, passengers }),
+						tax === null
+							? null
+							: h(
+									'div',
+									{ className: 'pw-tax-line' },
+									h('span', { style: { fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } }, t('watch.taxTitle')),
+									h('span', null, t('watch.taxAirport', { price: formatMoney(tax.airportFee) })),
+									h('span', { className: 'pw-strip-sep' }, '·'),
+									h('span', null, t('watch.taxFuel', { price: formatMoney(tax.fuel) })),
+									h('span', { className: 'pw-strip-sep' }, '·'),
+									h('span', null, t('watch.taxTotal', { price: formatMoney(tax.total) }))
+								)
 					),
 					ruleSection
 				)
 			);
+		}
+
+		/** Detail dispatcher: the mode decides between the bar calendar and the watch. */
+		function DetailView(props) {
+			useLocaleRevision();
+			if (monitorMode(props.monitor) === 'calendar') return h(CalendarDetailView, props);
+			return h(WatchDetailView, props);
 		}
 		// #endregion
 
@@ -1730,18 +2379,26 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const source = settings && typeof settings === 'object' ? settings : {};
 			const cadence = source.cadence && typeof source.cadence === 'object' ? source.cadence : {};
 			const notify = source.notify && typeof source.notify === 'object' ? source.notify : {};
-			const quiet = Array.isArray(notify.quietHours) && notify.quietHours.length === 2 ? notify.quietHours : null;
+			const l1 = source.l1 && typeof source.l1 === 'object' ? source.l1 : {};
 			const l2 = source.l2 && typeof source.l2 === 'object' ? source.l2 : {};
+			const quiet = Array.isArray(notify.quietHours) && notify.quietHours.length === 2 ? notify.quietHours : null;
+			const calendarHours = numberOrNull(cadence.calendarHours);
+			const watchMinutes = numberOrNull(cadence.watchMinutes);
 			const perDay = numberOrNull(l2.perDay);
+			const minInterval = numberOrNull(l2.minIntervalMinutes);
 			return {
-				cadenceMinutes: numberOrNull(cadence.l1Minutes) === null ? DEFAULT_CADENCE : cadence.l1Minutes,
+				calendarHours: CALENDAR_HOURS.indexOf(calendarHours) >= 0 ? calendarHours : 6,
+				watchMinutes: WATCH_MINUTES.indexOf(watchMinutes) >= 0 ? watchMinutes : 60,
+				l1PerDay: numberOrNull(l1.perDay) === null ? null : Math.max(0, Math.round(l1.perDay)),
 				l2Enabled: l2.enabled === true,
-				l2PerDay: perDay === null ? 1 : Math.min(3, Math.max(1, Math.round(perDay))),
+				l2PerDay: perDay === null || L2_PER_DAY.indexOf(Math.round(perDay)) < 0 ? 3 : Math.round(perDay),
+				l2MinInterval: minInterval === null || L2_MIN_INTERVALS.indexOf(Math.round(minInterval)) < 0 ? 720 : Math.round(minInterval),
 				feishuWebhook: typeof notify.feishuWebhook === 'string' ? notify.feishuWebhook : '',
 				quietStart: String(quiet === null ? 22 : numberOrNull(quiet[0]) === null ? 22 : quiet[0]),
 				quietEnd: String(quiet === null ? 8 : numberOrNull(quiet[1]) === null ? 8 : quiet[1]),
 				cooldownMinutes: String(numberOrNull(notify.cooldownMinutes) === null ? 360 : notify.cooldownMinutes),
 				digestAt: typeof notify.digestAt === 'string' && /^\d{2}:\d{2}$/.test(notify.digestAt) ? notify.digestAt : '12:00',
+				panelBaseUrl: typeof source.panelBaseUrl === 'string' ? source.panelBaseUrl : '',
 			};
 		}
 
@@ -1794,8 +2451,15 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				const quietEnd = Number(draft.quietEnd);
 				const cooldown = Number(draft.cooldownMinutes);
 				const body = {
-					cadence: { l1Minutes: Number(draft.cadenceMinutes) || DEFAULT_CADENCE },
-					l2: { enabled: draft.l2Enabled === true, perDay: Math.min(3, Math.max(1, Math.round(Number(draft.l2PerDay) || 1))) },
+					cadence: {
+						calendarHours: CALENDAR_HOURS.indexOf(Number(draft.calendarHours)) >= 0 ? Number(draft.calendarHours) : 6,
+						watchMinutes: WATCH_MINUTES.indexOf(Number(draft.watchMinutes)) >= 0 ? Number(draft.watchMinutes) : 60,
+					},
+					l2: {
+						enabled: draft.l2Enabled === true,
+						perDay: L2_PER_DAY.indexOf(Number(draft.l2PerDay)) >= 0 ? Number(draft.l2PerDay) : 3,
+						minIntervalMinutes: L2_MIN_INTERVALS.indexOf(Number(draft.l2MinInterval)) >= 0 ? Number(draft.l2MinInterval) : 720,
+					},
 					notify: {
 						feishuWebhook: draft.feishuWebhook.trim(),
 						quietHours: [Number.isFinite(quietStart) ? Math.min(23, Math.max(0, Math.round(quietStart))) : 22, Number.isFinite(quietEnd) ? Math.min(23, Math.max(0, Math.round(quietEnd))) : 8],
@@ -1803,6 +2467,10 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						digestAt: /^\d{2}:\d{2}$/.test(draft.digestAt) ? draft.digestAt : '12:00',
 					},
 				};
+				// Partial POST is allowed, but echoing the untouched L1 budget and the
+				// read-only panel base URL keeps a save from clearing them on the Host.
+				if (draft.l1PerDay !== null) body.l1 = { perDay: draft.l1PerDay };
+				if (draft.panelBaseUrl !== '') body.panelBaseUrl = draft.panelBaseUrl;
 				setSaving(true);
 				setSettingsError(null);
 				try {
@@ -1858,8 +2526,10 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				}
 			};
 
-			const auth = props.status && typeof props.status === 'object' && props.status.auth && typeof props.status.auth === 'object' ? props.status.auth : null;
-			const blocked = blockedNotice(auth);
+			const statusSnapshot = props.status && typeof props.status === 'object' ? props.status : null;
+			const auth = statusSnapshot && statusSnapshot.auth && typeof statusSnapshot.auth === 'object' ? statusSnapshot.auth : null;
+			const l2Live = l2State(statusSnapshot);
+			const blocked = blockedNotice(statusSnapshot);
 			const signedIn = auth !== null && (auth.status === 'valid' || auth.status === 'expired');
 			const loginPending = props.loginPending === true;
 			const signIn = async () => {
@@ -1897,15 +2567,28 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 							{ className: 'pw-form-row' },
 							h(
 								Field,
-								{ label: t('settings.cadence.title') },
+								{ label: t('settings.cadence.calendar') },
 								h(
 									'select',
 									{
 										className: 'pw-input',
-										value: String(draft.cadenceMinutes),
-										onChange: (event) => update({ cadenceMinutes: Number(event.target.value) }),
+										value: String(draft.calendarHours),
+										onChange: (event) => update({ calendarHours: Number(event.target.value) }),
 									},
-									CADENCE_CHOICES.map((minutes) => h('option', { key: minutes, value: String(minutes) }, t('cadence.minutes', { n: minutes })))
+									CALENDAR_HOURS.map((hours) => h('option', { key: hours, value: String(hours) }, t('settings.cadence.hours', { n: hours })))
+								)
+							),
+							h(
+								Field,
+								{ label: t('settings.cadence.watch') },
+								h(
+									'select',
+									{
+										className: 'pw-input',
+										value: String(draft.watchMinutes),
+										onChange: (event) => update({ watchMinutes: Number(event.target.value) }),
+									},
+									WATCH_MINUTES.map((minutes) => h('option', { key: minutes, value: String(minutes) }, t('settings.cadence.minutes', { n: minutes })))
 								)
 							)
 						)
@@ -1928,16 +2611,26 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								h(
 									'select',
 									{ className: 'pw-input', value: String(draft.l2PerDay), onChange: (event) => update({ l2PerDay: Number(event.target.value) }) },
-									[1, 2, 3].map((count) => h('option', { key: count, value: String(count) }, t('settings.l2.times', { n: count })))
+									L2_PER_DAY.map((count) => h('option', { key: count, value: String(count) }, t('settings.l2.times', { n: count })))
+								)
+							),
+							h(
+								Field,
+								{ label: t('settings.l2.minInterval') },
+								h(
+									'select',
+									{ className: 'pw-input', value: String(draft.l2MinInterval), onChange: (event) => update({ l2MinInterval: Number(event.target.value) }) },
+									L2_MIN_INTERVALS.map((minutes) => h('option', { key: minutes, value: String(minutes) }, t('settings.l2.hours', { n: minutes / 60 })))
 								)
 							)
 						),
+						l2Live.used === null || l2Live.perDay === null ? null : h('span', { className: 'pw-hint' }, t('settings.l2.budget', { used: l2Live.used, perDay: l2Live.perDay })),
 						h('div', { className: 'pw-divider' }),
 						h(
 							'div',
 							{ className: 'pw-row', style: { gap: 8, flexWrap: 'wrap' } },
 							h('span', { className: 'pw-label' }, t('settings.l2.auth')),
-							h(AuthChip, { auth, pending: loginPending, onLogin: signIn }),
+							h(AuthChip, { status: statusSnapshot, pending: loginPending, onLogin: signIn }),
 							blocked === null ? null : h(Chip, { tone: 'warn' }, blocked)
 						),
 						h(
@@ -1950,7 +2643,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						h(
 							'div',
 							{ className: 'pw-row', style: { gap: 8, flexWrap: 'wrap' } },
-							h(Button, { onClick: signIn, disabled: loginPending || (auth !== null && auth.available === false) }, loginPending ? t('login.pending') : t('settings.login')),
+							h(Button, { onClick: signIn, disabled: loginPending || l2Live.available === false }, loginPending ? t('login.pending') : t('settings.login')),
 							h(Button, { variant: 'danger', onClick: signOut, disabled: loginPending || !signedIn }, t('settings.logout'))
 						)
 					),
@@ -2060,63 +2753,132 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		// #endregion
 
 		// #region new view
+		/** Searchable city input: IATA code or localized city name, with suggestions. */
+		function CityField(props) {
+			const [open, setOpen] = useState(false);
+			const query = typeof props.query === 'string' ? props.query : '';
+			const matches = useMemo(() => (open ? cityMatches(query) : []), [open, query]);
+			const showEmpty = open && query.trim() !== '' && matches.length === 0;
+			return h(
+				'div',
+				{ className: 'pw-combo' },
+				h('input', {
+					className: 'pw-input',
+					value: query,
+					placeholder: t('new.cityPlaceholder'),
+					autoComplete: 'off',
+					spellCheck: false,
+					onChange: (event) => {
+						setOpen(true);
+						props.onQuery(event.target.value);
+					},
+					onFocus: () => setOpen(true),
+					onBlur: () => window.setTimeout(() => setOpen(false), 120),
+				}),
+				matches.length === 0
+					? showEmpty
+						? h('div', { className: 'pw-combo-list' }, h('div', { className: 'pw-combo-item', style: { color: 'var(--dsw-alias-label-secondary)' } }, t('new.cityEmpty')))
+						: null
+					: h(
+							'div',
+							{ className: 'pw-combo-list', role: 'listbox' },
+							matches.map((match) =>
+								h(
+									'button',
+									{
+										key: match.code,
+										type: 'button',
+										className: 'pw-combo-item',
+										role: 'option',
+										onMouseDown: (event) => {
+											event.preventDefault();
+											props.onPick(match.code);
+											setOpen(false);
+										},
+									},
+									h('span', null, match.name),
+									h('span', { className: 'pw-combo-code' }, match.code)
+								)
+							)
+						)
+			);
+		}
+
 		function NewView(props) {
-			const [dep, setDep] = useState('');
-			const [arr, setArr] = useState('');
+			const [depQuery, setDepQuery] = useState('');
+			const [depCode, setDepCode] = useState('');
+			const [arrQuery, setArrQuery] = useState('');
+			const [arrCode, setArrCode] = useState('');
 			const [trip, setTrip] = useState('oneway');
+			const [datesFixed, setDatesFixed] = useState(false);
 			const [departDate, setDepartDate] = useState('');
 			const [returnDate, setReturnDate] = useState('');
-			const [selected, setSelected] = useState([]);
-			const [target, setTarget] = useState('');
+			const [selected, setSelected] = useState(null);
 			const [error, setError] = useState(null);
 			const [submitting, setSubmitting] = useState(false);
 			const passengers = Array.isArray(props.passengers) ? props.passengers : null;
-			const cadence = props.settings && props.settings.cadence && numberOrNull(props.settings.cadence.l1Minutes) !== null ? props.settings.cadence.l1Minutes : DEFAULT_CADENCE;
+			const canSubmit = passengers !== null && passengers.length > 0;
 
+			// Every existing passenger is selected by default; a later reload only drops
+			// ids that vanished, so a manual deselect survives.
 			useEffect(() => {
 				if (passengers === null) return;
-				setSelected((current) => current.filter((id) => passengers.some((passenger) => passenger.id === id)));
+				setSelected((current) => {
+					if (current === null) return passengers.map((passenger) => passenger.id);
+					return current.filter((id) => passengers.some((passenger) => passenger.id === id));
+				});
 			}, [passengers]);
 
 			const togglePassenger = (id) => {
-				setSelected((current) => (current.indexOf(id) >= 0 ? current.filter((entry) => entry !== id) : current.concat([id])));
-			};
-
-			const validate = () => {
-				const depCode = dep.trim().toUpperCase();
-				const arrCode = arr.trim().toUpperCase();
-				if (!/^[A-Z]{3}$/.test(depCode) || !/^[A-Z]{3}$/.test(arrCode)) return t('new.invalidCode');
-				if (depCode === arrCode) return t('new.sameCode');
-				if (!/^\d{4}-\d{2}-\d{2}$/.test(departDate)) return t('new.required');
-				if (trip === 'round') {
-					if (!/^\d{4}-\d{2}-\d{2}$/.test(returnDate)) return t('new.returnRequired');
-					if (returnDate <= departDate) return t('new.returnOrder');
-				}
-				if (selected.length === 0) return t('new.passengerRequired');
-				const targetRaw = target.trim();
-				if (targetRaw !== '' && (!Number.isFinite(Number(targetRaw)) || Number(targetRaw) <= 0)) return t('detail.rules.invalid');
-				return null;
+				setSelected((current) => {
+					const list = Array.isArray(current) ? current : [];
+					return list.indexOf(id) >= 0 ? list.filter((entry) => entry !== id) : list.concat([id]);
+				});
 			};
 
 			const submit = async () => {
-				const invalid = validate();
-				if (invalid !== null) {
-					setError(invalid);
+				const dep = resolveCity(depQuery) || (depCode !== '' ? depCode : null);
+				const arr = resolveCity(arrQuery) || (arrCode !== '' ? arrCode : null);
+				if (dep === null || arr === null) {
+					setError(t('new.invalidCode'));
 					return;
 				}
-				const params = { mode: 'locked', trip, dep: dep.trim().toUpperCase(), arr: arr.trim().toUpperCase(), departDate };
-				if (trip === 'round') params.returnDate = returnDate;
-				const rules = [];
-				const targetRaw = target.trim();
-				if (targetRaw !== '') rules.push({ kind: 'target', value: Number(targetRaw) });
-				else rules.push({ kind: 'new_low' });
-				const body = { params, passengerIds: selected.slice(), rules, cadence: { l1Minutes: cadence } };
+				if (dep === arr) {
+					setError(t('new.sameCode'));
+					return;
+				}
+				if (datesFixed) {
+					if (!/^\d{4}-\d{2}-\d{2}$/.test(departDate)) {
+						setError(t('new.departRequired'));
+						return;
+					}
+					if (trip === 'round') {
+						if (!/^\d{4}-\d{2}-\d{2}$/.test(returnDate)) {
+							setError(t('new.returnRequired'));
+							return;
+						}
+						if (returnDate <= departDate) {
+							setError(t('new.returnOrder'));
+							return;
+						}
+					}
+				}
+				const ids = Array.isArray(selected) ? selected : [];
+				if (ids.length === 0) {
+					setError(t('new.passengerRequired'));
+					return;
+				}
+				const body = { trip, dep, arr, passengerIds: ids.slice() };
+				if (datesFixed) {
+					body.departDate = departDate;
+					if (trip === 'round') body.returnDate = returnDate;
+				}
 				setSubmitting(true);
 				setError(null);
 				try {
 					await props.onCreate(body);
-				} catch (submitError) {
-					setError(submitError && submitError.message ? submitError.message : String(submitError));
+				} catch (reason) {
+					setError(reason && reason.message ? reason.message : String(reason));
 				} finally {
 					setSubmitting(false);
 				}
@@ -2136,7 +2898,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								'div',
 								{ className: 'pw-row', style: { flexWrap: 'wrap', gap: 6 } },
 								passengers.map((passenger) => {
-									const active = selected.indexOf(passenger.id) >= 0;
+									const active = Array.isArray(selected) && selected.indexOf(passenger.id) >= 0;
 									const typeLabel = PASSENGER_TYPES.indexOf(passenger.type) >= 0 ? t(`type.${passenger.type}`) : passenger.type;
 									return h(
 										'button',
@@ -2167,28 +2929,16 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						h(IconButton, { label: t('new.back'), onClick: props.onBack }, h(BackIcon, { size: 16 })),
 						h('h2', { className: 'pw-page-title' }, t('new.title')),
 						h('span', { className: 'pw-spacer' }),
-						h(Button, { variant: 'primary', onClick: submit, disabled: submitting || passengers === null || passengers.length === 0 }, submitting ? t('new.submitting') : t('new.submit'))
+						h(Button, { variant: 'primary', onClick: submit, disabled: submitting || !canSubmit }, submitting ? t('new.submitting') : t(datesFixed ? 'new.submit.watch' : 'new.submit.calendar'))
 					),
 					h(
 						Section,
-						{ title: t('new.route.title'), help: t('new.routeHint') },
+						{ title: t('new.route.title'), help: t('new.cityHint') },
 						h(
 							'div',
 							{ className: 'pw-form-row' },
-							h(
-								Field,
-								{ label: t('new.from') },
-								h('input', {
-									className: 'pw-input',
-									maxLength: 3,
-									autoComplete: 'off',
-									spellCheck: false,
-									placeholder: 'SHA',
-									value: dep,
-									onChange: (event) => setDep(event.target.value.toUpperCase()),
-								})
-							),
-							h(Field, { label: t('new.to') }, h('input', { className: 'pw-input', maxLength: 3, autoComplete: 'off', spellCheck: false, placeholder: 'BJS', value: arr, onChange: (event) => setArr(event.target.value.toUpperCase()) }))
+							h(Field, { label: t('new.from') }, h(CityField, { query: depQuery, onQuery: (value) => { setDepQuery(value); setDepCode(resolveCity(value) || ''); }, onPick: (code) => { setDepCode(code); setDepQuery(cityLabel(code)); } })),
+							h(Field, { label: t('new.to') }, h(CityField, { query: arrQuery, onQuery: (value) => { setArrQuery(value); setArrCode(resolveCity(value) || ''); }, onPick: (code) => { setArrCode(code); setArrQuery(cityLabel(code)); } }))
 						)
 					),
 					h(
@@ -2196,57 +2946,52 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						{ title: t('new.trip.title') },
 						h(
 							'div',
-							{ className: 'pw-row', style: { gap: 10, flexWrap: 'wrap' } },
-							h(
-								'div',
-								{ className: 'pw-tabs', role: 'tablist' },
-								[
-									{ id: 'oneway', label: t('new.trip.oneway') },
-									{ id: 'round', label: t('new.trip.round') },
-								].map((entry) =>
-									h(
-										'button',
-										{
-											key: entry.id,
-											type: 'button',
-											role: 'tab',
-											className: 'pw-tab',
-											'data-active': trip === entry.id ? 'true' : 'false',
-											'aria-selected': trip === entry.id ? 'true' : 'false',
-											onClick: () => setTrip(entry.id),
-										},
-										entry.label
-									)
+							{ className: 'pw-tabs', role: 'tablist' },
+							[
+								{ id: 'oneway', label: t('new.trip.oneway') },
+								{ id: 'round', label: t('new.trip.round') },
+							].map((entry) =>
+								h(
+									'button',
+									{
+										key: entry.id,
+										type: 'button',
+										role: 'tab',
+										className: 'pw-tab',
+										'data-active': trip === entry.id ? 'true' : 'false',
+										'aria-selected': trip === entry.id ? 'true' : 'false',
+										onClick: () => setTrip(entry.id),
+									},
+									entry.label
 								)
 							)
-						),
-						h(
-							'div',
-							{ className: 'pw-form-row' },
-							h(Field, { label: t('new.departDate') }, h('input', { className: 'pw-input', type: 'date', value: departDate, onChange: (event) => setDepartDate(event.target.value) })),
-							trip === 'round' ? h(Field, { label: t('new.returnDate') }, h('input', { className: 'pw-input', type: 'date', value: returnDate, onChange: (event) => setReturnDate(event.target.value) })) : null
 						)
 					),
-					h(Section, { title: t('new.passengers.title'), help: t('new.passengers.help') }, passengerSection),
 					h(
 						Section,
-						{ title: t('new.target.title'), help: t('new.target.help') },
-						h('input', {
-							className: 'pw-input',
-							type: 'number',
-							min: 0,
-							inputMode: 'numeric',
-							placeholder: '¥',
-							value: target,
-							onChange: (event) => setTarget(event.target.value),
-						})
+						{ title: t('new.date.title'), help: datesFixed ? t('new.date.watchHint') : t('new.date.calendarHint') },
+						h(
+							'div',
+							{ className: 'pw-rule-row' },
+							h('span', null, t('new.date.known')),
+							h(Switch, { checked: datesFixed, label: t('new.date.known'), onChange: (next) => setDatesFixed(next) })
+						),
+						datesFixed
+							? h(
+									'div',
+									{ className: 'pw-form-row' },
+									h(Field, { label: t('new.departDate') }, h('input', { className: 'pw-input', type: 'date', value: departDate, onChange: (event) => setDepartDate(event.target.value) })),
+									trip === 'round' ? h(Field, { label: t('new.returnDate') }, h('input', { className: 'pw-input', type: 'date', value: returnDate, onChange: (event) => setReturnDate(event.target.value) })) : null
+								)
+							: null
 					),
+					h(Section, { title: t('new.passengers.title'), help: t('new.passengers.help') }, passengerSection),
 					error === null ? null : h(ErrorBar, { message: error, inline: true, onDismiss: () => setError(null) }),
 					h(
 						'div',
 						{ className: 'pw-row', style: { justifyContent: 'flex-end', gap: 8 } },
 						h(Button, { onClick: props.onBack, disabled: submitting }, t('new.back')),
-						h(Button, { variant: 'primary', onClick: submit, disabled: submitting || passengers === null || passengers.length === 0 }, submitting ? t('new.submitting') : t('new.submit'))
+						h(Button, { variant: 'primary', onClick: submit, disabled: submitting || !canSubmit }, submitting ? t('new.submitting') : t(datesFixed ? 'new.submit.watch' : 'new.submit.calendar'))
 					)
 				)
 			);
@@ -2269,6 +3014,10 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [settingsError, setSettingsError] = useState(null);
 			const [prices, setPrices] = useState(null);
 			const [pricesError, setPricesError] = useState(null);
+			const [flights, setFlights] = useState(null);
+			const [flightsError, setFlightsError] = useState(null);
+			const [calendar, setCalendar] = useState(null);
+			const [calendarError, setCalendarError] = useState(null);
 			const [busyKey, setBusyKey] = useState(null);
 			const [filter, setFilter] = useState('all');
 			const [refreshing, setRefreshing] = useState(false);
@@ -2280,6 +3029,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 
 			const coreSeq = useRef(0);
 			const pricesSeq = useRef(0);
+			const calendarSeq = useRef(0);
 			const auxSeq = useRef(0);
 			const loginRef = useRef(false);
 
@@ -2290,7 +3040,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				coreSeq.current = seq;
 				if (manual) setRefreshing(true);
 				try {
-					const results = await Promise.allSettled([apiFetch('/monitors'), apiFetch('/status')]);
+					const results = await Promise.allSettled([apiFetch('/monitors'), apiFetch('/status'), apiFetch('/settings')]);
 					if (seq !== coreSeq.current) return;
 					let firstError = null;
 					if (results[0].status === 'fulfilled') {
@@ -2303,6 +3053,12 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						setStatus(results[1].value && typeof results[1].value === 'object' ? results[1].value : null);
 					} else if (firstError === null) {
 						firstError = results[1].reason;
+					}
+					if (results[2].status === 'fulfilled') {
+						const next = results[2].value;
+						// Keep the same object when nothing changed so the 30s poll cannot
+						// reset the settings form while the user is editing it.
+						setSettings((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
 					}
 					setError(firstError === null ? null : firstError.message || String(firstError));
 				} finally {
@@ -2320,30 +3076,63 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			}, []);
 
 			const detailId = view.kind === 'detail' ? view.monitorId : null;
+			const detailMonitor = detailId === null || monitors === null ? null : monitors.find((monitor) => monitor.id === detailId) || null;
+			const detailMode = detailMonitor === null ? null : monitorMode(detailMonitor);
+			const calendarHours = settings && settings.cadence && numberOrNull(settings.cadence.calendarHours) !== null ? settings.cadence.calendarHours : null;
 
 			useEffect(() => {
 				setPrices(null);
 				setPricesError(null);
+				setFlights(null);
+				setFlightsError(null);
+				setCalendar(null);
+				setCalendarError(null);
 			}, [detailId]);
 
+			// Watch mode: reference + per-passenger series and the last flight snapshot.
 			useEffect(() => {
-				if (detailId === null) return undefined;
+				if (detailId === null || detailMode !== 'watch') return undefined;
 				const seq = pricesSeq.current + 1;
 				pricesSeq.current = seq;
-				apiFetch(`/monitors/${encodeURIComponent(detailId)}/prices?days=${PRICE_DAYS}`)
-					.then((data) => {
-						if (seq !== pricesSeq.current) return;
-						setPrices(data && typeof data === 'object' ? data : null);
+				Promise.allSettled([apiFetch(`/monitors/${encodeURIComponent(detailId)}/prices?days=${PRICE_DAYS}`), apiFetch(`/monitors/${encodeURIComponent(detailId)}/flights`)]).then((results) => {
+					if (seq !== pricesSeq.current) return;
+					if (results[0].status === 'fulfilled') {
+						setPrices(results[0].value && typeof results[0].value === 'object' ? results[0].value : null);
 						setPricesError(null);
-					})
-					.catch((reason) => {
-						if (seq !== pricesSeq.current) return;
-						setPricesError(reason && reason.message ? reason.message : String(reason));
-					});
+					} else {
+						setPricesError(results[0].reason && results[0].reason.message ? results[0].reason.message : String(results[0].reason));
+					}
+					if (results[1].status === 'fulfilled') {
+						setFlights(results[1].value && typeof results[1].value === 'object' ? results[1].value : null);
+						setFlightsError(null);
+					} else {
+						setFlightsError(results[1].reason && results[1].reason.message ? results[1].reason.message : String(results[1].reason));
+					}
+				});
 				return () => {
 					pricesSeq.current += 1;
 				};
-			}, [detailId, tick]);
+			}, [detailId, detailMode, tick]);
+
+			// Calendar mode: the 380-day fare calendar for the picked route.
+			useEffect(() => {
+				if (detailId === null || detailMode !== 'calendar') return undefined;
+				const seq = calendarSeq.current + 1;
+				calendarSeq.current = seq;
+				apiFetch(`/monitors/${encodeURIComponent(detailId)}/calendar`)
+					.then((data) => {
+						if (seq !== calendarSeq.current) return;
+						setCalendar(data && typeof data === 'object' ? data : null);
+						setCalendarError(null);
+					})
+					.catch((reason) => {
+						if (seq !== calendarSeq.current) return;
+						setCalendarError(reason && reason.message ? reason.message : String(reason));
+					});
+				return () => {
+					calendarSeq.current += 1;
+				};
+			}, [detailId, detailMode, tick]);
 
 			const auxView = view.kind === 'settings' || view.kind === 'new' ? view.kind : null;
 
@@ -2413,9 +3202,52 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					const key = `refresh:${id}`;
 					setBusyKey(key);
 					try {
-						await apiFetch(`/monitors/${encodeURIComponent(id)}/refresh`, { method: 'POST' });
+						await apiFetch(`/monitors/${encodeURIComponent(id)}/refresh`, { method: 'POST', body: { l2: false } });
 						await loadCore();
 						setTick((value) => value + 1);
+					} catch (reason) {
+						fail(reason);
+					} finally {
+						setBusyKey(null);
+					}
+				},
+				[loadCore, fail]
+			);
+
+			/** Manual L2 exception: `POST /refresh` with `{l2:true}`. */
+			const refreshRealPrice = useCallback(
+				async (id) => {
+					const key = `l2:${id}`;
+					setBusyKey(key);
+					try {
+						await apiFetch(`/monitors/${encodeURIComponent(id)}/refresh`, { method: 'POST', body: { l2: true } });
+						await loadCore();
+						setTick((value) => value + 1);
+					} catch (reason) {
+						fail(reason);
+					} finally {
+						setBusyKey(null);
+					}
+				},
+				[loadCore, fail]
+			);
+
+			/** Turn a picked calendar day into a watch monitor (dates fixed). */
+			const pinDate = useCallback(
+				async (monitor, selection) => {
+					if (!monitor || !selection || typeof selection.departDate !== 'string') return;
+					const params = monitorParams(monitor);
+					const trip = monitorTrip(monitor);
+					const key = `pin:${monitor.id}`;
+					setBusyKey(key);
+					try {
+						const body = { trip, dep: params.dep, arr: params.arr, departDate: selection.departDate, passengerIds: Array.isArray(monitor.passengerIds) ? monitor.passengerIds.slice() : [] };
+						if (trip === 'round' && typeof selection.returnDate === 'string') body.returnDate = selection.returnDate;
+						const data = await apiFetch('/monitors', { method: 'POST', body });
+						const created = data && data.monitor && typeof data.monitor === 'object' ? data.monitor : null;
+						await loadCore();
+						if (created && typeof created.id === 'string') setView({ kind: 'detail', monitorId: created.id });
+						else setView({ kind: 'list', monitorId: null });
 					} catch (reason) {
 						fail(reason);
 					} finally {
@@ -2530,8 +3362,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				setView({ kind: 'list', monitorId: null });
 			}, [view, monitors]);
 
-			const detailMonitor = detailId === null || monitors === null ? null : monitors.find((monitor) => monitor.id === detailId) || null;
-
 			let content = null;
 			if (view.kind === 'detail') {
 				content =
@@ -2540,14 +3370,21 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						: h(DetailView, {
 								monitor: detailMonitor,
 								passengers,
+								calendar,
+								calendarError,
+								calendarHours,
 								prices,
 								pricesError,
+								flights,
+								flightsError,
 								busy: busyKey !== null,
 								onBack: goList,
 								onToggleEnabled: toggleEnabled,
 								onRefresh: refreshMonitor,
+								onRefreshL2: refreshRealPrice,
 								onDelete: deleteMonitor,
 								onSaveRules: saveRules,
+								onPin: (selection) => void pinDate(detailMonitor, selection),
 							});
 			} else if (view.kind === 'settings') {
 				content = h(SettingsView, {

@@ -7,6 +7,15 @@
  * profile passes. Nothing here fabricates requests: it drives the same pages a
  * human would open and reads the text.
  *
+ * V2 (contract §8) returns `{ points, flights, tax }`:
+ *  - `flights` lists up to 8 rows of static information read straight from the
+ *    list page; only the cheapest row is expanded and gets `products` / `prices`;
+ *  - `points` carries one fare per passenger, taken from the cheapest bookable
+ *    product of that expanded row;
+ *  - `tax` is the order-page fee breakdown, or `null` when it could not be read.
+ * Multi-row reading is best effort: when the row selectors do not match, the
+ * collector degrades to the single expanded row instead of failing the run.
+ *
  * Safety rules baked in:
  *  - one persistent profile under `$DSH_HOME/price-watch/browser-profile/`;
  *    the login cookie never leaves it and never reaches the JSON stores;
@@ -17,6 +26,7 @@
  *    submitted, so nothing is ever ordered.
  */
 import { mkdir, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 import { isoNow } from '../util.js';
@@ -24,6 +34,15 @@ import { isoNow } from '../util.js';
 const LIST_BASE = 'https://flights.ctrip.com';
 const HOME = 'https://www.ctrip.com/';
 const BLOCK_RE = /whaleguard|访问异常|禁止访问|安全验证|请完成验证|拖动滑块|滑动验证/;
+/** How many flight rows one run reads, per contract §8. */
+const MAX_ROWS = 8;
+/** Park the window for ten idle minutes before closing it. */
+const IDLE_CLOSE_MS = 10 * 60 * 1000;
+/** Dwell on a page 3–8 s so the traffic still looks human. */
+const DWELL_MIN_MS = 3000;
+const DWELL_MAX_MS = 8000;
+/** Row selectors tried before falling back to climbing from the book buttons. */
+const ROW_SELECTORS = ['.flight-item', '[class*="flight-item"]', '[class*="flightItem"]', '.flight-list-item'];
 
 /** Error raised when Ctrip answers with a bot-check page. */
 export class BlockedError extends Error {
@@ -89,6 +108,24 @@ function listUrl(monitor) {
   return `${LIST_BASE}/online/list/oneway-${params.dep}-${params.arr}?depdate=${params.departDate}&${query}`;
 }
 
+/** Pause for a human-looking 3–8 s; never throws. */
+async function dwell(page) {
+  const ms = DWELL_MIN_MS + Math.floor(Math.random() * (DWELL_MAX_MS - DWELL_MIN_MS + 1));
+  await page.waitForTimeout(ms).catch(() => {});
+}
+
+/** Pick the tax figures out of the booking page (best effort). */
+function taxFromOrderInfo(info) {
+  if (!info) return null;
+  const fee = (value) => (Number.isFinite(value) && value > 0 ? value : null);
+  const airportFee = fee(info.airportFee);
+  const fuel = fee(info.fuel);
+  const declared = fee(info.feeSum);
+  const total = airportFee !== null && fuel !== null ? airportFee + fuel : declared;
+  if (!Number.isFinite(total) || total <= 0) return null;
+  return { airportFee, fuel, total };
+}
+
 /**
  * @param {object} deps
  * @param {string} deps.rootDir        `$DSH_HOME/price-watch`
@@ -98,21 +135,58 @@ function listUrl(monitor) {
 export function createBrowserCollector({ rootDir, logger, store }) {
   const profileDir = join(rootDir, 'browser-profile');
   let playwright = null;
-  let playwrightChecked = false;
+  let playwrightAttempts = 0;
+  let playwrightRetryAt = 0;
+  let lastLoadError = null;
   let context = null;
   let idleTimer = null;
   let queue = Promise.resolve();
 
+  /**
+   * Resolve `playwright-core` once it is present.
+   *
+   * A plain dynamic `import()` of a bare specifier goes through the Host's own
+   * module hooks, which fail for a package installed under this plugin only
+   * (`Cannot read properties of undefined (reading 'playwright')`). Loading it
+   * through `createRequire` uses Node's own CJS resolver and works in-process.
+   * A failed resolution is retried later instead of being cached forever: the
+   * profile's `node_modules` may be relinked while a plugin reload runs.
+   */
   async function loadPlaywright() {
-    if (playwrightChecked) return playwright;
-    playwrightChecked = true;
+    if (playwright) return playwright;
+    if (Date.now() < playwrightRetryAt) return null;
+    const errors = [];
     try {
-      playwright = await import('playwright-core');
-    } catch (error) {
-      logger.warn('未安装 playwright-core，精确采集不可用（L1 仍可用）', error);
-      playwright = null;
+      const requireFromHere = createRequire(import.meta.url);
+      const loaded = requireFromHere('playwright-core');
+      const candidate = loaded?.chromium ? loaded : loaded?.default;
+      if (!candidate?.chromium) throw new Error('playwright-core 未导出 chromium');
+      playwright = candidate;
+    } catch (cjsError) {
+      errors.push(`require: ${cjsError?.message || cjsError}`);
+      try {
+        const loaded = await import('playwright-core');
+        const candidate = loaded?.chromium ? loaded : loaded?.default;
+        if (!candidate?.chromium) throw new Error('playwright-core 未导出 chromium');
+        playwright = candidate;
+      } catch (esmError) {
+        errors.push(`import: ${esmError?.message || esmError}`);
+        playwright = null;
+      }
     }
-    return playwright;
+    if (playwright) {
+      playwrightAttempts = 0;
+      playwrightRetryAt = 0;
+      lastLoadError = null;
+      return playwright;
+    }
+    playwrightAttempts += 1;
+    lastLoadError = errors.join(' | ');
+    // 1min, 2min, 5min, then every 10min.
+    const waitMinutes = Math.min(10, playwrightAttempts <= 1 ? 1 : playwrightAttempts === 2 ? 2 : playwrightAttempts === 3 ? 5 : 10);
+    playwrightRetryAt = Date.now() + waitMinutes * 60000;
+    logger.warn(`无法加载 playwright-core（第 ${playwrightAttempts} 次），${waitMinutes} 分钟后重试；期间精确采集不可用，L1 仍可用`, lastLoadError);
+    return null;
   }
 
   async function ensureContext({ visible = false } = {}) {
@@ -159,7 +233,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
         }
         context = null;
       }
-    }, 120000);
+    }, IDLE_CLOSE_MS);
     idleTimer.unref?.();
   }
 
@@ -267,7 +341,141 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     throw new Error(`航班列表未加载出来（${diag.len} 字，价格标记 ${diag.priceChips} 个）`);
   }
 
+  /**
+   * Read up to 8 rows of static list-page information.
+   * Best effort by design: any selector failure yields `[]` and the caller then
+   * degrades to the single expanded row.
+   */
+  async function readRowList(page) {
+    try {
+      return await page.evaluate(({ selectors, maxRows }) => {
+        const cap = Math.max(1, Math.min(12, Number(maxRows) || 8));
+        const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+        const plausiblyARow = (node) => Boolean(
+          node
+          && node.querySelector
+          && node.querySelector('button.btn-book')
+          && /¥\s?\d{2,6}/.test(node.innerText || ''),
+        );
+        let nodes = [];
+        for (const selector of selectors) {
+          try {
+            const found = [...document.querySelectorAll(selector)].filter(plausiblyARow);
+            if (found.length > 0) {
+              nodes = found;
+              break;
+            }
+          } catch {
+            /* a bad selector is not fatal */
+          }
+        }
+        if (nodes.length === 0) {
+          // Fallback: climb from each book button to the nearest container that
+          // still wraps exactly that one button.
+          const seen = new Set();
+          for (const button of document.querySelectorAll('button.btn-book')) {
+            let node = button;
+            for (let depth = 0; depth < 8 && node && node.parentElement; depth += 1) {
+              node = node.parentElement;
+              const text = node.innerText || '';
+              if (/¥\s?\d{2,6}/.test(text) && text.length < 900 && node.querySelectorAll('button.btn-book').length === 1) {
+                if (!seen.has(node)) {
+                  seen.add(node);
+                  nodes.push(node);
+                }
+                break;
+              }
+            }
+          }
+        }
+        nodes = nodes.slice(0, cap);
+        const parsed = nodes.map((node) => {
+          const text = norm(node.innerText);
+          const flightNo = (text.match(/\b[A-Z]{2}\d{3,4}\b/) || [])[0] || '';
+          const airline = (text.match(/([\u4e00-\u9fa5]{2,8}航空)/) || [])[1] || '';
+          const craft = (text.match(/((?:空客|波音|商飞)\s?[A-Z0-9]{2,4})/) || [])[1] || '';
+          const times = text.match(/\b\d{2}:\d{2}\b/g) || [];
+          const depTime = times[0] || '';
+          const arrTime = times[1] || '';
+          // A row reads `08:00 大兴国际机场 10:10 浦东国际机场T2 ...`: the airport
+          // between the two clock times is the departure and the one after the
+          // arrival time is the destination. Slicing beats a `...T\d` regex,
+          // because most airports carry no terminal suffix.
+          const airportOf = (value) => {
+            const match = String(value || '').match(/[^\s\d]{2,12}?机场(?:T\d)?/);
+            return match ? match[0] : '';
+          };
+          const i1 = depTime ? text.indexOf(depTime) : -1;
+          const i2 = i1 >= 0 && arrTime ? text.indexOf(arrTime, i1 + depTime.length) : -1;
+          let depAirport = '';
+          let arrAirport = '';
+          if (i1 >= 0 && i2 > i1) {
+            depAirport = airportOf(text.slice(i1 + depTime.length, i2));
+            arrAirport = airportOf(text.slice(i2 + arrTime.length));
+          } else if (i1 >= 0) {
+            depAirport = airportOf(text.slice(i1 + depTime.length));
+          }
+          const cabinMatch = text.match(/(超级经济舱|经济舱|公务舱|头等舱)\s*([\d.]+\s*折)?/);
+          const prices = [...text.matchAll(/¥\s?(\d{2,6})/g)]
+            .map((match) => Number(match[1]))
+            .filter((value) => Number.isFinite(value) && value > 0);
+          return {
+            node,
+            flightNo,
+            airline,
+            craft: craft.replace(/\s+/g, ''),
+            depTime,
+            arrTime,
+            depAirport,
+            arrAirport,
+            cabin: cabinMatch ? cabinMatch[1] : '',
+            discount: cabinMatch && cabinMatch[2] ? cabinMatch[2].replace(/\s+/g, '') : null,
+            listPrice: prices.length ? Math.min(...prices) : 0,
+          };
+        }).filter((row) => row.listPrice > 0);
+        // Re-number after the filter so row N in the returned array is also the
+        // node the "expand row N" step later clicks.
+        return parsed.map((row, index) => {
+          try {
+            row.node.setAttribute('data-pw-row', String(index));
+          } catch {
+            /* cosmetic */
+          }
+          delete row.node;
+          return row;
+        });
+      }, { selectors: ROW_SELECTORS, maxRows: MAX_ROWS });
+    } catch (error) {
+      logger.warn('读取航班列表失败，降级为只返回已展开的航班', error);
+      return [];
+    }
+  }
+
   /** Expand one flight row so its fare products render. */
+  async function expandRow(page, index) {
+    if (Number.isInteger(index) && index >= 0) {
+      const clicked = await page.evaluate((rowIndex) => {
+        const row = document.querySelector('[data-pw-row="' + rowIndex + '"]');
+        const button = row && row.querySelector('button.btn-book');
+        if (!button) return false;
+        button.scrollIntoView({ block: 'center' });
+        button.click();
+        return true;
+      }, index).catch(() => false);
+      if (clicked) {
+        for (let poll = 0; poll < 12; poll += 1) {
+          await page.waitForTimeout(700);
+          const active = await page.locator('.flight-item.active').count().catch(() => 0);
+          if (active > 0) return true;
+        }
+      }
+    }
+    // Layout fallback: the old "click the first row" path.
+    if (await expandFirstFlight(page)) return true;
+    return false;
+  }
+
+  /** Expand the first flight row so its fare products render. */
   async function expandFirstFlight(page) {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       await page.evaluate(() => {
@@ -301,23 +509,27 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   }
 
   /** Read the fare products of the expanded row as plain data. */
-  async function readProducts(page) {
-    return page.evaluate(() => {
-      const row = document.querySelector('.flight-item.active');
+  async function readProducts(page, rowIndex) {
+    return page.evaluate((index) => {
+      const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+      const row = document.querySelector('.flight-item.active')
+        || (Number.isInteger(index) && index >= 0 ? document.querySelector('[data-pw-row="' + index + '"]') : null);
       if (!row) return null;
-      const header = (row.innerText || '').replace(/\s+/g, ' ');
-      const flightNo = (header.match(/[A-Z]{2}\d{3,4}/) || [])[0] || '';
-      const airline = (header.match(/^(\S+?(?:航空|公司))/) || [])[1] || '';
-      const times = header.match(/\d{2}:\d{2}/g) || [];
+      const header = norm(row.innerText);
+      const flightNo = (header.match(/\b[A-Z]{2}\d{3,4}\b/) || [])[0] || '';
+      const airline = (header.match(/([\u4e00-\u9fa5]{2,8}航空)/) || [])[1] || '';
+      const craft = (header.match(/((?:空客|波音|商飞)\s?[A-Z0-9]{2,4})/) || [])[1] || '';
+      const times = header.match(/\b\d{2}:\d{2}\b/g) || [];
+      const airports = header.match(/[\u4e00-\u9fa5]{2,6}T\d/g) || [];
       const products = [];
       const seen = new Set();
       for (const button of row.querySelectorAll('button.btn-book')) {
-        const label = (button.textContent || '').trim();
+        const label = norm(button.textContent);
         if (!/预订|选购/.test(label)) continue;
         let node = button.parentElement;
         let box = null;
         for (let depth = 0; depth < 7 && node; depth += 1) {
-          const text = (node.innerText || '').replace(/\s+/g, ' ');
+          const text = norm(node.innerText);
           if (/¥\s?\d{2,6}/.test(text) && text.length < 420) {
             box = node;
             break;
@@ -325,21 +537,41 @@ export function createBrowserCollector({ rootDir, logger, store }) {
           node = node.parentElement;
         }
         if (!box) continue;
-        const text = (box.innerText || '').replace(/\s+/g, ' ');
+        const text = norm(box.innerText);
         const price = Number((text.match(/¥\s?(\d{2,6})/) || [])[1]);
         if (!Number.isFinite(price) || price <= 0) continue;
         const key = `${price}|${text.slice(0, 60)}`;
         if (seen.has(key)) continue;
         seen.add(key);
+        const cabin = /超级经济舱/.test(text)
+          ? '超级经济舱'
+          : /公务舱|商务舱/.test(text)
+            ? '公务舱'
+            : /头等舱/.test(text)
+              ? '头等舱'
+              : /经济舱/.test(text)
+                ? '经济舱'
+                : '';
+        const discount = Number((text.match(/(\d(?:\.\d)?)\s*折/) || [])[1]);
         products.push({
           price,
-          label,
+          cabin,
+          discount: Number.isFinite(discount) ? discount : null,
           text: text.slice(0, 300),
           limits: text.match(/限[^ ]{0,50}/g) || [],
         });
       }
-      return { flightNo, airline, depTime: times[0] || '', arrTime: times[1] || '', products };
-    });
+      return {
+        flightNo,
+        airline,
+        craft: craft.replace(/\s+/g, ''),
+        depTime: times[0] || '',
+        arrTime: times[1] || '',
+        depAirport: airports[0] || '',
+        arrAirport: airports[1] || '',
+        products,
+      };
+    }, rowIndex ?? null).catch(() => null);
   }
 
   /** Best-effort tax read on the booking page. Returns null on any trouble. */
@@ -365,87 +597,191 @@ export function createBrowserCollector({ rootDir, logger, store }) {
         return {
           airportFee: pick(/机建[^¥]{0,10}¥?\s*(\d{1,5})/),
           fuel: pick(/燃油[^¥]{0,10}¥?\s*(\d{1,5})/),
-          total: pick(/(?:总价|合计)[^¥]{0,10}¥?\s*(\d{1,5})/),
+          feeSum: pick(/(?:税费|基建燃油|机建燃油)[^¥]{0,12}¥?\s*(\d{1,5})/),
+          orderTotal: pick(/(?:总价|合计)[^¥]{0,10}¥?\s*(\d{1,5})/),
           sawBooking: /乘机人|证件|订单填写|去支付/.test(text),
         };
       }).catch(() => null);
       await page.goBack({ timeout: 12000 }).catch(() => {});
       await page.waitForTimeout(1500);
       if (!info || !info.sawBooking) return null;
-      return info;
+      const tax = taxFromOrderInfo(info);
+      if (!tax) logger.info('订单页没有解析出机建燃油费，含税价改用估算');
+      return tax;
     } catch (error) {
       logger.warn('读取订单页含税价失败，回退到日历估算', error);
       return null;
     }
   }
 
+  /** Contract §8 flight object for a row that was not expanded. */
+  function passiveFlight(row) {
+    return {
+      no: row.flightNo || '',
+      airline: row.airline || '',
+      craft: row.craft || '',
+      depTime: row.depTime || '',
+      arrTime: row.arrTime || '',
+      depAirport: row.depAirport || '',
+      arrAirport: row.arrAirport || '',
+      listPrice: Number(row.listPrice) || 0,
+      products: null,
+      prices: [],
+      expanded: false,
+    };
+  }
+
+  /** Contract §8 flight object for the expanded (cheapest) row. */
+  function expandedFlight(row, snapshot, products, prices) {
+    return {
+      no: row.flightNo || snapshot.flightNo || '',
+      airline: row.airline || snapshot.airline || '',
+      craft: row.craft || snapshot.craft || '',
+      depTime: row.depTime || snapshot.depTime || '',
+      arrTime: row.arrTime || snapshot.arrTime || '',
+      // The row parser knows which airport sits between the two clock times; the
+      // expanded-product reader only sees them in DOM order and gets the
+      // departure wrong when an airport has no terminal suffix.
+      depAirport: row.depAirport || snapshot.depAirport || '',
+      arrAirport: row.arrAirport || snapshot.arrAirport || '',
+      listPrice: Number(row.listPrice) || 0,
+      products,
+      prices,
+      expanded: true,
+    };
+  }
+
   /**
    * Collect one monitor with the browser.
-   * @returns {Promise<Array<object>>} price points, one per passenger
+   * @returns {Promise<{points:Array<object>, flights:Array<object>, tax:object|null}>}
    */
   async function collect(monitor, { signal } = {}) {
     const run = async () => {
-      const ctx = await ensureContext();
-      if (!(await hasTicket(ctx))) throw new AuthError();
-      const page = ctx.pages()[0] || (await ctx.newPage());
-      if (signal?.aborted) throw new Error('已取消');
+      try {
+        const params = monitor?.params || {};
+        if (!params.departDate) throw new Error('日历模式没有确定日期，不做浏览器精确采集');
+        const ctx = await ensureContext();
+        if (!(await hasTicket(ctx))) throw new AuthError();
+        const page = ctx.pages()[0] || (await ctx.newPage());
+        if (signal?.aborted) throw new Error('已取消');
 
-      await page.goto(listUrl(monitor), { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await waitForFlights(page);
+        await page.goto(listUrl(monitor), { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await waitForFlights(page);
+        // Human pacing: look at the list for a few seconds before touching it.
+        await dwell(page);
 
-      if (!(await expandFirstFlight(page))) throw new Error('未能展开票价产品列表');
-      await expandAllProducts(page);
+        // Step 1 — static information for up to 8 rows (best effort).
+        const rows = await readRowList(page);
+        const cheapest = rows.length ? rows.reduce((best, row) => (row.listPrice < best.listPrice ? row : best)) : null;
+        const targetIndex = cheapest ? rows.indexOf(cheapest) : null;
 
-      const snapshot = await readProducts(page);
-      if (!snapshot || snapshot.products.length === 0) throw new Error('没有解析到票价产品');
+        // Step 2 — expand only the cheapest row.
+        const expanded = await expandRow(page, targetIndex);
+        if (!expanded) throw new Error('未能展开票价产品列表');
+        await expandAllProducts(page);
+        const snapshot = await readProducts(page, targetIndex);
+        if (!snapshot || snapshot.products.length === 0) throw new Error('没有解析到票价产品');
 
-      const passengers = (monitor.passengerIds || []).map((id) => store.findPassenger(id)).filter(Boolean);
-      if (passengers.length === 0) throw new Error('监控没有有效乘客');
-      const paxCount = passengers.length;
+        const passengers = (monitor.passengerIds || []).map((id) => store.findPassenger(id)).filter(Boolean);
+        if (passengers.length === 0) throw new Error('监控没有有效乘客');
+        const paxCount = passengers.length;
 
-      const chosen = [];
-      for (const passenger of passengers) {
-        const eligible = snapshot.products
+        // Cheapest first: products are ordered by bare fare, and the tax part is
+        // a constant for the whole page, so the same order holds for totals.
+        const catalogue = snapshot.products
           .map((product) => ({ product, rules: parseFareRules(product.limits.join(' ') || product.text) }))
-          .filter((entry) => fareFits(entry.rules, passenger, paxCount))
           .sort((a, b) => a.product.price - b.product.price);
-        const winner = eligible[0];
-        if (!winner) continue;
-        chosen.push({ passenger, product: winner.product, rules: winner.rules });
-      }
-      if (chosen.length === 0) throw new Error('当前乘客没有可订的票价产品');
 
-      const tax = await readOrderTax(page);
-      const at = isoNow();
-      const points = chosen.map((entry) => {
-        const total = tax?.total && tax.total > entry.product.price ? tax.total : null;
-        const estimatedBare = entry.product.price;
-        const estimatedTotal = total || Math.round(estimatedBare * 1.15);
-        return {
-          at,
-          src: 'l2',
-          taxSource: tax?.total ? 'order' : 'estimate',
-          key: {
-            departDate: monitor.params.departDate,
-            ...(monitor.params.trip === 'round' ? { returnDate: monitor.params.returnDate } : {}),
-            passengerId: entry.passenger.id,
-          },
-          price: { bare: estimatedBare, total: estimatedTotal },
-          meta: {
-            flightNo: snapshot.flightNo,
-            airline: snapshot.airline,
-            depTime: snapshot.depTime,
-            arrTime: snapshot.arrTime,
-            fareLabel: entry.product.label,
-            fareText: entry.product.text.slice(0, 160),
-            restrictions: entry.rules,
-            airportFee: tax?.airportFee ?? null,
-            fuel: tax?.fuel ?? null,
-          },
+        // Step 3 — the tax breakdown, which turns bare fares into real totals.
+        const tax = await readOrderTax(page);
+        const feesTotal = tax && Number.isFinite(tax.total) ? tax.total : null;
+        const estimateTotal = (bare) => Math.round(Number(bare) * 1.15);
+        const totalFor = (bare) => (feesTotal !== null ? Math.round(Number(bare) + feesTotal) : estimateTotal(bare));
+
+        // Which row was actually expanded: the click may land on another row when
+        // the selector fallback kicked in, so trust the flight number the page
+        // rendered. Its cabin/discount also fills in what a product card omits.
+        let expandedIndex = targetIndex;
+        if (rows.length > 0 && snapshot.flightNo) {
+          const match = rows.findIndex((row) => row.flightNo === snapshot.flightNo);
+          if (match >= 0) expandedIndex = match;
+        }
+        const expandedRow = expandedIndex !== null && rows[expandedIndex] ? rows[expandedIndex] : {};
+        const cabinOf = (product) => product.cabin || expandedRow.cabin || '';
+        const discountOf = (product) => product.discount ?? expandedRow.discount ?? null;
+        const fareLabelOf = (product) => {
+          const cabin = cabinOf(product);
+          const discount = discountOf(product);
+          if (cabin) return discount ? `${cabin} ${discount}` : cabin;
+          const cleaned = String(product.text || '')
+            .replace(/¥\s?\d+/g, '')
+            .replace(/(选购|预订|订票|剩\s?\d+\s?张|展开查看所有产品)/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+          return cleaned.slice(0, 24) || '票价';
         };
-      });
-      scheduleIdleClose();
-      return points;
+
+        const products = catalogue.map((entry) => ({
+          price: entry.product.price,
+          total: feesTotal !== null ? Math.round(Number(entry.product.price) + feesTotal) : null,
+          cabin: cabinOf(entry.product),
+          discount: discountOf(entry.product),
+          text: entry.product.text,
+          limits: entry.product.limits,
+        }));
+
+        const chosen = [];
+        for (const passenger of passengers) {
+          const winner = catalogue.find((entry) => fareFits(entry.rules, passenger, paxCount));
+          if (!winner) continue;
+          chosen.push({ passenger, product: winner.product, rules: winner.rules });
+        }
+        if (chosen.length === 0) throw new Error('当前乘客没有可订的票价产品');
+
+        const at = isoNow();
+        const points = chosen.map((entry) => {
+          const bare = Number(entry.product.price);
+          return {
+            at,
+            src: 'l2',
+            taxSource: feesTotal !== null ? 'order' : 'estimate',
+            key: {
+              departDate: params.departDate,
+              ...(params.trip === 'round' ? { returnDate: params.returnDate } : {}),
+              passengerId: entry.passenger.id,
+            },
+            price: { bare, total: totalFor(bare) },
+            meta: {
+              flightNo: snapshot.flightNo,
+              airline: snapshot.airline,
+              depTime: snapshot.depTime,
+              arrTime: snapshot.arrTime,
+              fareLabel: fareLabelOf(entry.product),
+              fareText: entry.product.text.slice(0, 160),
+              restrictions: entry.rules,
+              airportFee: tax?.airportFee ?? null,
+              fuel: tax?.fuel ?? null,
+            },
+          };
+        });
+        const prices = chosen.map((entry) => ({
+          passengerId: entry.passenger.id,
+          total: totalFor(entry.product.price),
+          fareLabel: fareLabelOf(entry.product),
+        }));
+
+        // Contract §8 `flights`: every static row, with only the expanded one
+        // carrying products.
+        const flights = rows.length === 0
+          ? [expandedFlight({}, snapshot, products, prices)]
+          : rows.map((row, index) => (index === expandedIndex
+            ? expandedFlight(row, snapshot, products, prices)
+            : passiveFlight(row)));
+
+        return { points, flights, tax };
+      } finally {
+        scheduleIdleClose();
+      }
     };
 
     // Serialise every browser run: one window, one page at a time.
@@ -457,6 +793,8 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   return {
     id: 'ctrip-browser',
     isAvailable: async () => Boolean(await loadPlaywright()),
+    /** Last `playwright-core` resolution error, for the panel's diagnostics. */
+    loadError: () => lastLoadError,
     authStatus,
     startLogin,
     logout,
