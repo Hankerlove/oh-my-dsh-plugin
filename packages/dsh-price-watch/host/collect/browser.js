@@ -316,14 +316,32 @@ export function combineRoundSchemes({ monitor, passengers, round, out, back, err
   const roundPayable = Number.isFinite(roundPayableRaw) && roundPayableRaw > 0 ? Math.round(roundPayableRaw) : null;
   const roundSource = round?.payableSource === 'list' ? 'list' : 'order';
 
+  /** 一段单程实测的税费 = 含税价 - 裸价。 */
+  const legTaxOf = (best) => (best && best.total > 0 && best.bare > 0 ? Math.max(0, best.total - best.bare) : 0);
+  let roundEstimated = false;
+
   // 每位乘客各算一次「联程 vs 两段单买」，取更便宜的那个作为该乘客的点。
   const perPassenger = list.map((passenger) => {
     const outBest = bestFor(outFlights, passenger.id);
     const backBest = bestFor(backFlights, passenger.id);
     const onewaySum = outBest && backBest ? Math.round(outBest.total + backBest.total) : null;
+    // 联程只读到列表裸价时，用两段实测税费把它补成「待支付价」：否则拿裸价去比
+    // 两段的含税价，会得出「联程省一大截」的错误结论。
+    let roundTotal = roundPayable;
+    if (roundSource === 'list' && roundPayable !== null && outBest && backBest) {
+      roundTotal = Math.round(roundPayable + legTaxOf(outBest) + legTaxOf(backBest));
+      roundEstimated = true;
+    }
     const options = [];
-    if (roundPayable !== null) {
-      options.push({ scheme: 'round', total: roundPayable, bare: 0, flightNo: round?.flightNo || '', flight: null, fareLabel: '' });
+    if (roundTotal !== null) {
+      options.push({
+        scheme: 'round',
+        total: roundTotal,
+        bare: Number(round?.listTotal) > 0 ? Math.round(Number(round.listTotal)) : 0,
+        flightNo: round?.flightNo || '',
+        flight: null,
+        fareLabel: '',
+      });
     }
     if (onewaySum !== null) {
       options.push({
@@ -336,7 +354,7 @@ export function combineRoundSchemes({ monitor, passengers, round, out, back, err
       });
     }
     options.sort((left, right) => left.total - right.total);
-    return { passenger, outBest, backBest, onewaySum, chosen: options[0] || null };
+    return { passenger, outBest, backBest, onewaySum, roundTotal, chosen: options[0] || null };
   });
 
   const usable = perPassenger.filter((entry) => entry.chosen);
@@ -349,21 +367,29 @@ export function combineRoundSchemes({ monitor, passengers, round, out, back, err
     if (onewaySum === null || entry.onewaySum < onewaySum) onewaySum = entry.onewaySum;
   }
 
-  const comparison = roundPayable !== null && onewaySum !== null
+  // 联程的「到手价」：读不到预订页时用「列表裸价 + 两段实测税费」。
+  let roundEffective = null;
+  for (const entry of perPassenger) {
+    if (entry.roundTotal === null) continue;
+    if (roundEffective === null || entry.roundTotal < roundEffective) roundEffective = entry.roundTotal;
+  }
+  if (roundEffective === null) roundEffective = roundPayable;
+
+  const comparison = roundEffective !== null && onewaySum !== null
     ? (roundPayable === onewaySum
-      ? { cheaper: 'tie', diff: 0, diffPct: 0, minTotal: roundPayable, maxTotal: onewaySum }
+      ? { cheaper: 'tie', diff: 0, diffPct: 0, minTotal: roundEffective, maxTotal: onewaySum }
       : {
-        cheaper: roundPayable < onewaySum ? 'round' : 'oneway',
-        diff: Math.abs(roundPayable - onewaySum),
+        cheaper: roundEffective < onewaySum ? 'round' : 'oneway',
+        diff: Math.abs(roundEffective - onewaySum),
         // 百分比按「更贵的那个」算：读作「比另一种买法省 7.2%」，比按低价算更直观。
-        diffPct: Number(((Math.abs(roundPayable - onewaySum) / Math.max(roundPayable, onewaySum)) * 100).toFixed(1)),
-        minTotal: Math.min(roundPayable, onewaySum),
-        maxTotal: Math.max(roundPayable, onewaySum),
+        diffPct: Number(((Math.abs(roundEffective - onewaySum) / Math.max(roundEffective, onewaySum)) * 100).toFixed(1)),
+        minTotal: Math.min(roundEffective, onewaySum),
+        maxTotal: Math.max(roundEffective, onewaySum),
       })
     : null;
 
-  // 只要有一头没有真实到手价（联程只读到列表价、或两段缺一段）就标 partial。
-  const partial = roundPayable === null || onewaySum === null || roundSource === 'list';
+  // 只要有一头没有真实到手价（联程是估算、或两段缺一段）就标 partial。
+  const partial = roundEffective === null || onewaySum === null || roundEstimated || roundSource !== 'order';
 
   /** 单程段摘要：该段最便宜的可订航班（快照展示用）。 */
   const legSummary = (flights) => {
@@ -400,7 +426,7 @@ export function combineRoundSchemes({ monitor, passengers, round, out, back, err
     meta: {
       // D10：这个点用的是哪一种买法，以及两种买法的价格都在 meta 里，供面板/卡片解释。
       scheme: chosen.scheme,
-      roundPayable,
+      roundPayable: roundEffective,
       onewaySum,
       comparison: comparison ? { cheaper: comparison.cheaper, diff: comparison.diff } : null,
       flightNo: chosen.flightNo,
@@ -441,9 +467,9 @@ export function combineRoundSchemes({ monitor, passengers, round, out, back, err
     lowest,
     roundTrip: {
       partial,
-      round: roundPayable === null ? null : {
-        payable: roundPayable,
-        payableSource: roundSource,
+      round: roundEffective === null ? null : {
+        payable: roundEffective,
+        payableSource: roundEstimated ? 'list+tax' : roundSource,
         listTotal: Number(round?.listTotal) > 0 ? Math.round(Number(round.listTotal)) : null,
         flightNo: round?.flightNo || '',
         airline: round?.airline || '',
@@ -659,7 +685,12 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       const state = await page.evaluate(() => {
         const text = document.body.innerText || '';
         return {
-          rows: document.querySelectorAll('button.btn-book').length,
+          // `.flight-item` covers both layouts: one-way rows carry a 订票
+          // button, round-trip rows carry 「选为去程」 and no btn-book at all.
+          rows: Math.max(
+            document.querySelectorAll('.flight-item').length,
+            document.querySelectorAll('.btn-book').length,
+          ),
           blocked: /whaleguard|访问异常|禁止访问|安全验证|请完成验证|拖动滑块|滑动验证/.test(text),
           bodyLen: text.length,
         };
@@ -723,12 +754,17 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       const texts = await page.evaluate(({ selectors, maxRows }) => {
         const cap = Math.max(1, Math.min(30, Number(maxRows) || 25));
         const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-        const plausiblyARow = (node) => Boolean(
-          node
-          && node.querySelector
-          && node.querySelector('button.btn-book')
-          && /¥\s?\d{2,6}/.test(node.innerText || ''),
-        );
+        const plausiblyARow = (node) => {
+          if (!node || !node.querySelector) return false;
+          const text = node.innerText || '';
+          if (!/¥\s?\d{2,6}/.test(text)) return false;
+          const books = node.querySelectorAll('.btn-book').length;
+          if (books === 1) return true;
+          // A wrapper that holds several book buttons is the list, not a row.
+          if (books > 1) return false;
+          // Round-trip rows: no 订票 button, but they do carry 「选为去程」.
+          return /选为去程|选择去程|订票|预订/.test(text) && text.length < 1200;
+        };
         let nodes = [];
         for (const selector of selectors) {
           try {
@@ -745,12 +781,12 @@ export function createBrowserCollector({ rootDir, logger, store }) {
           // Fallback: climb from each book button to the nearest container that
           // still wraps exactly that one button.
           const seen = new Set();
-          for (const button of document.querySelectorAll('button.btn-book')) {
+          for (const button of document.querySelectorAll('.btn-book')) {
             let node = button;
             for (let depth = 0; depth < 8 && node && node.parentElement; depth += 1) {
               node = node.parentElement;
               const text = node.innerText || '';
-              if (/¥\s?\d{2,6}/.test(text) && text.length < 900 && node.querySelectorAll('button.btn-book').length === 1) {
+              if (/¥\s?\d{2,6}/.test(text) && text.length < 900 && node.querySelectorAll('.btn-book').length === 1) {
                 if (!seen.has(node)) {
                   seen.add(node);
                   nodes.push(node);
@@ -784,7 +820,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     if (Number.isInteger(index) && index >= 0) {
       const clicked = await page.evaluate((rowIndex) => {
         const row = document.querySelector('[data-pw-row="' + rowIndex + '"]');
-        const button = row && row.querySelector('button.btn-book');
+        const button = row && row.querySelector('.btn-book');
         if (!button) return false;
         button.scrollIntoView({ block: 'center' });
         button.click();
@@ -807,7 +843,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   async function expandFirstFlight(page) {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       await page.evaluate(() => {
-        const button = document.querySelector('button.btn-book');
+        const button = document.querySelector('.btn-book');
         if (button) {
           button.scrollIntoView({ block: 'center' });
           button.click();
@@ -855,7 +891,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       const headerCabin = header.match(/(超级经济舱|经济舱|公务舱|头等舱)\s*([\d.]+\s*折)?/);
       const products = [];
       const seen = new Set();
-      for (const button of row.querySelectorAll('button.btn-book')) {
+      for (const button of row.querySelectorAll('.btn-book')) {
         const label = norm(button.textContent);
         if (!/预订|选购/.test(label)) continue;
         let node = button.parentElement;
@@ -946,7 +982,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       const navigated = page.waitForNavigation({ timeout: 18000 }).catch(() => null);
       await page.evaluate(() => {
         const row = document.querySelector('.flight-item.active');
-        const button = row && [...row.querySelectorAll('button.btn-book')].find((b) => /预订/.test(b.textContent || ''));
+        const button = row && [...row.querySelectorAll('.btn-book')].find((b) => /预订/.test(b.textContent || ''));
         if (button) {
           button.scrollIntoView({ block: 'center' });
           button.click();
@@ -979,7 +1015,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
         const scope = explicit || document.querySelector('.flight-item.active');
         if (!scope) return false;
         const text = scope.innerText || '';
-        const bookButtons = scope.querySelectorAll('button.btn-book').length;
+        const bookButtons = scope.querySelectorAll('.btn-book').length;
         // A collapsed row has exactly one 「预订」 button; an expanded one has one
         // per fare product (or an explicit 「选购」/「展开所有产品」 entry).
         return bookButtons >= 2 || /选购|展开查看所有产品/.test(text);
@@ -1246,7 +1282,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     try {
       return await page.evaluate((idx) => {
         const row = Number.isInteger(idx) && idx >= 0 ? document.querySelector('[data-pw-row="' + idx + '"]') : null;
-        const button = row && row.querySelector('button.btn-book');
+        const button = row && row.querySelector('.btn-book');
         if (!button) return false;
         button.scrollIntoView({ block: 'center' });
         button.click();
@@ -1261,7 +1297,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   async function clickFirstBook(page) {
     try {
       return await page.evaluate(() => {
-        const button = document.querySelector('button.btn-book');
+        const button = document.querySelector('.btn-book');
         if (!button) return false;
         button.scrollIntoView({ block: 'center' });
         button.click();
@@ -1280,7 +1316,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       const state = await page.evaluate(() => {
         const text = document.body.innerText || '';
         return {
-          rows: document.querySelectorAll('button.btn-book').length,
+          rows: document.querySelectorAll('.btn-book').length,
           booking: /乘机人|证件|订单填写|去支付|填写订单/.test(text),
         };
       }).catch(() => ({ rows: 0, booking: false }));

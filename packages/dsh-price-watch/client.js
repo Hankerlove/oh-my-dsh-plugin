@@ -1123,6 +1123,7 @@ window.__ModuleLoader__.load({
 			'watch.scheme.round': '联程',
 			'watch.scheme.oneway': '两段单买',
 			'watch.scheme.listPrice': '列表起价',
+			'watch.scheme.estimated': '含税费估算',
 			'watch.compare.title': '两种买法对比',
 			'watch.compare.partial': '部分数据缺失：{sides}',
 			'watch.compare.partialGeneric': '部分数据缺失',
@@ -1347,6 +1348,7 @@ window.__ModuleLoader__.load({
 			'watch.scheme.round': 'Through ticket',
 			'watch.scheme.oneway': 'Two one-ways',
 			'watch.scheme.listPrice': 'List price',
+			'watch.scheme.estimated': 'Estimated with taxes',
 			'watch.compare.title': 'Ticket options compared',
 			'watch.compare.partial': 'Some data is missing: {sides}',
 			'watch.compare.partialGeneric': 'Some data is missing',
@@ -3385,7 +3387,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			// ticket) vs 两段单买 (two one-ways). A one-way monitor keeps its old header.
 			const schemeLabel =
 				!roundMode || lowest === null || lowest.scheme === null ? null : lowest.scheme === 'round' ? t('watch.scheme.round') : lowest.scheme === 'oneway' ? t('watch.scheme.oneway') : null;
-			const listPriceNote = roundMode && roundTrip !== null && lowest !== null && lowest.scheme === 'round' && roundTrip.round.source === 'list';
+			const roundSource = roundMode && roundTrip !== null ? roundTrip.round.source : null;
+			const priceNoteKey =
+				lowest === null || lowest.scheme !== 'round' ? null : roundSource === 'list' ? 'watch.scheme.listPrice' : roundSource === 'list+tax' ? 'watch.scheme.estimated' : null;
 			const latestPoint = minSeries.length > 0 ? minSeries[minSeries.length - 1] : null;
 			const previousPoint = minSeries.length > 1 ? minSeries[minSeries.length - 2] : null;
 			const deltaPercent = latestPoint !== null && previousPoint !== null && previousPoint.total > 0 ? ((latestPoint.total - previousPoint.total) / previousPoint.total) * 100 : null;
@@ -3411,7 +3415,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								'div',
 								{ className: 'pw-summary-scheme' },
 								h(Chip, { tone: 'brand' }, schemeLabel),
-								listPriceNote ? h('span', { className: 'pw-hint' }, t('watch.scheme.listPrice')) : null
+								priceNoteKey === null ? null : h('span', { className: 'pw-hint' }, t(priceNoteKey))
 							),
 					deltaText === null ? null : h('span', { className: 'pw-summary-delta', 'data-tone': deltaTone }, t('watch.vsLast', { percent: deltaText, price: formatMoney(previousPoint.total) })),
 					lowestFlight === null ? null : h('span', { className: 'pw-summary-route' }, flightRouteLine(lowestFlight))

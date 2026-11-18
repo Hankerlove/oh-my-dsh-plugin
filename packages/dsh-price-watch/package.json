@@ -1,6 +1,6 @@
 {
   "name": "@ultraslow/dsh-price-watch",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Flight price watch for the DeepSeek Harness Web UI: with no date it tracks the next year's lowest fare day by day from Ctrip's public calendar; with a fixed date it also reads the real flight list and each passenger's payable price from your logged-in browser, keeps the history, and pushes Feishu cards on new highs and lows.",
   "license": "MIT",
   "dependencies": {

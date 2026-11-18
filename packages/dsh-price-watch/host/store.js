@@ -710,7 +710,8 @@ export function createStore(rootDir) {
     const roundLeg = value.round && typeof value.round === 'object'
       ? {
         payable: round(value.round.payable),
-        payableSource: value.round.payableSource === 'list' ? 'list' : 'order',
+        // order = 预订页真实总价；list = 只有列表起价；list+tax = 列表起价 + 两段实测税费估算。
+        payableSource: ['order', 'list', 'list+tax'].includes(value.round.payableSource) ? value.round.payableSource : 'order',
         listTotal: round(value.round.listTotal),
         flightNo: text(value.round.flightNo),
         airline: text(value.round.airline),
