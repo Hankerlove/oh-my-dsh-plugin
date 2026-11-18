@@ -941,7 +941,21 @@ window.__ModuleLoader__.load({
 			'calendar.stat.minDay': '最低日',
 			'calendar.dayHint': '{date} · {price}',
 			'watch.flights': '航班与待支付价',
+			'watch.flightsRound': '去程航班与待支付价',
+			'watch.flightsRoundHelp': '去程单买按待支付价升序的前 10 个航班',
 			'watch.flightsEmpty': '还没有航班快照，点「立即采集」试试',
+			'watch.scheme.round': '联程',
+			'watch.scheme.oneway': '两段单买',
+			'watch.scheme.listPrice': '列表起价',
+			'watch.compare.title': '两种买法对比',
+			'watch.compare.partial': '部分数据缺失：{sides}',
+			'watch.compare.partialGeneric': '部分数据缺失',
+			'watch.compare.join': '、',
+			'watch.compare.returnLeg': '回程 {flightNo} {depTime}→{arrTime}',
+			'watch.compare.split': '{outLabel} {outPrice} + {backLabel} {backPrice}',
+			'watch.compare.roundCheaper': '联程省 {amount}',
+			'watch.compare.onewayCheaper': '两段单买省 {amount}',
+			'watch.compare.tie': '两者持平',
 			'watch.lowestLabel': '当前最低可订价',
 			'watch.vsLast': '比上次 {percent}（上次 {price}）',
 			'watch.trendTitle': '最低可订价走势',
@@ -1142,7 +1156,21 @@ window.__ModuleLoader__.load({
 			'calendar.stat.minDay': 'Cheapest day',
 			'calendar.dayHint': '{date} · {price}',
 			'watch.flights': 'Flights and payable price',
+			'watch.flightsRound': 'Outbound flights and payable price',
+			'watch.flightsRoundHelp': 'Top 10 outbound one-way flights by payable price',
 			'watch.flightsEmpty': 'No flight snapshot yet. Try "Collect now".',
+			'watch.scheme.round': 'Through ticket',
+			'watch.scheme.oneway': 'Two one-ways',
+			'watch.scheme.listPrice': 'List price',
+			'watch.compare.title': 'Ticket options compared',
+			'watch.compare.partial': 'Some data is missing: {sides}',
+			'watch.compare.partialGeneric': 'Some data is missing',
+			'watch.compare.join': ', ',
+			'watch.compare.returnLeg': 'Return {flightNo} {depTime}→{arrTime}',
+			'watch.compare.split': '{outLabel} {outPrice} + {backLabel} {backPrice}',
+			'watch.compare.roundCheaper': 'Through ticket saves {amount}',
+			'watch.compare.onewayCheaper': 'Two one-ways save {amount}',
+			'watch.compare.tie': 'Same total',
 			'watch.lowestLabel': 'Lowest bookable price',
 			'watch.vsLast': '{percent} vs last time ({price})',
 			'watch.trendTitle': 'Lowest bookable price trend',
@@ -1475,6 +1503,20 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-summary-delta[data-tone="down"] { color: var(--dsw-alias-state-success-primary); }
 .pw-summary-delta[data-tone="flat"] { color: var(--dsw-alias-label-secondary); }
 .pw-summary-route { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+.pw-summary-scheme { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* round-trip comparison card */
+.pw-compare-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.pw-compare-side { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2); }
+.pw-compare-side[data-cheaper="true"] { border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 45%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, transparent); }
+.pw-compare-label { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.pw-compare-price { font-size: 20px; font-weight: 600; line-height: 26px; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary); }
+.pw-compare-side[data-cheaper="true"] .pw-compare-price { color: var(--dsw-alias-state-success-primary); }
+.pw-compare-detail { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+.pw-compare-verdict { font-size: 13px; line-height: 20px; }
+.pw-compare-verdict[data-cheaper="round"], .pw-compare-verdict[data-cheaper="oneway"] { color: var(--dsw-alias-state-success-primary); font-weight: 500; }
+.pw-compare-verdict[data-cheaper="tie"] { color: var(--dsw-alias-label-secondary); }
+.pw-compare-warning { font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-warn-primary); }
+@media (max-width: 640px) { .pw-compare-sides { grid-template-columns: minmax(0, 1fr); } }
 .pw-delivery { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .pw-delivery[data-ok="false"] { color: var(--dsw-alias-state-error-primary); }
 .pw-test-result { font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
@@ -2908,11 +2950,133 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		function lowestBookable(flightsData, minSeries) {
 			const lowest = flightsData && flightsData.lowest && typeof flightsData.lowest === 'object' ? flightsData.lowest : null;
 			if (lowest !== null && typeof lowest.total === 'number' && Number.isFinite(lowest.total)) {
-				return { total: lowest.total, flightNo: typeof lowest.flightNo === 'string' ? lowest.flightNo : null };
+				return {
+					total: lowest.total,
+					flightNo: typeof lowest.flightNo === 'string' ? lowest.flightNo : null,
+					// `round` = one through-ticket, `oneway` = two separate one-way tickets.
+					scheme: typeof lowest.scheme === 'string' ? lowest.scheme : null,
+				};
 			}
 			const last = Array.isArray(minSeries) && minSeries.length > 0 ? minSeries[minSeries.length - 1] : null;
-			if (last !== null) return { total: last.total, flightNo: null };
+			if (last !== null) return { total: last.total, flightNo: null, scheme: null };
 			return null;
+		}
+
+		/**
+		 * Normalised `flights.roundTrip` (D10): the through ticket vs the sum of two
+		 * one-ways, which side is cheaper, and what the Host could not collect. Returns
+		 * null for a one-way monitor, so nothing renders for those.
+		 */
+		function roundTripInfo(flightsData) {
+			const roundTrip = flightsData && flightsData.roundTrip && typeof flightsData.roundTrip === 'object' ? flightsData.roundTrip : null;
+			if (roundTrip === null) return null;
+			const round = roundTrip.round && typeof roundTrip.round === 'object' ? roundTrip.round : null;
+			const oneway = roundTrip.oneway && typeof roundTrip.oneway === 'object' ? roundTrip.oneway : null;
+			const out = oneway && oneway.out && typeof oneway.out === 'object' ? oneway.out : null;
+			const back = oneway && oneway.back && typeof oneway.back === 'object' ? oneway.back : null;
+			const roundPayable = round !== null && typeof round.payable === 'number' && Number.isFinite(round.payable) ? round.payable : null;
+			const outPayable = out !== null && typeof out.payable === 'number' && Number.isFinite(out.payable) ? out.payable : null;
+			const backPayable = back !== null && typeof back.payable === 'number' && Number.isFinite(back.payable) ? back.payable : null;
+			const onewayTotal = oneway !== null && typeof oneway.sum === 'number' && Number.isFinite(oneway.sum) ? oneway.sum : outPayable !== null && backPayable !== null ? outPayable + backPayable : null;
+			const comparison = roundTrip.comparison && typeof roundTrip.comparison === 'object' ? roundTrip.comparison : null;
+			const declared = comparison && (comparison.cheaper === 'round' || comparison.cheaper === 'oneway' || comparison.cheaper === 'tie') ? comparison.cheaper : null;
+			const diff = comparison && typeof comparison.diff === 'number' && Number.isFinite(comparison.diff) ? comparison.diff : roundPayable !== null && onewayTotal !== null ? Math.abs(roundPayable - onewayTotal) : null;
+			const cheaper = declared !== null ? declared : roundPayable !== null && onewayTotal !== null ? (roundPayable < onewayTotal ? 'round' : roundPayable > onewayTotal ? 'oneway' : 'tie') : null;
+			const errors = roundTrip.errors && typeof roundTrip.errors === 'object' ? roundTrip.errors : {};
+			return {
+				partial: roundTrip.partial === true,
+				round: {
+					payable: roundPayable,
+					source: round !== null && typeof round.payableSource === 'string' ? round.payableSource : null,
+					flight: round,
+					returnLeg: round !== null && round.return && typeof round.return === 'object' ? round.return : null,
+				},
+				oneway: { total: onewayTotal, outPayable, backPayable },
+				cheaper,
+				diff,
+				roundMissing: roundPayable === null || errors.round !== null,
+				onewayMissing: onewayTotal === null || errors.out !== null || errors.back !== null,
+			};
+		}
+
+		/** One side of the round-trip comparison: label, price and a single detail line. */
+		function CompareSide(props) {
+			return h(
+				'div',
+				{ className: 'pw-compare-side', 'data-cheaper': props.cheaper === true ? 'true' : 'false' },
+				h('span', { className: 'pw-compare-label' }, props.label),
+				h('span', { className: 'pw-compare-price' }, props.price === null ? '—' : formatMoney(props.price)),
+				props.detail === null ? null : h('span', { className: 'pw-compare-detail' }, props.detail)
+			);
+		}
+
+		/**
+		 * 联程 vs 两段单买 (D10): both totals, one detail line each, a verdict on which is
+		 * cheaper (green on the winning side), and a warning line when the Host could
+		 * only collect part of the comparison.
+		 */
+		function RoundTripCompare(props) {
+			const info = props.info;
+			const roundFlight = info.round.flight;
+			const returnLeg = info.round.returnLeg;
+			const routeParts = [];
+			if (roundFlight !== null && typeof roundFlight.flightNo === 'string' && roundFlight.flightNo !== '') {
+				routeParts.push(`${roundFlight.flightNo} ${roundFlight.depTime || '—'}→${roundFlight.arrTime || '—'}`);
+			}
+			if (returnLeg !== null) {
+				routeParts.push(
+					t('watch.compare.returnLeg', {
+						flightNo: typeof returnLeg.flightNo === 'string' && returnLeg.flightNo !== '' ? returnLeg.flightNo : '—',
+						depTime: returnLeg.depTime || '—',
+						arrTime: returnLeg.arrTime || '—',
+					})
+				);
+			}
+			const roundDetail = routeParts.length === 0 ? null : routeParts.join(' / ');
+			const onewayDetail =
+				info.oneway.outPayable === null || info.oneway.backPayable === null
+					? null
+					: t('watch.compare.split', {
+							outLabel: t('calendar.out'),
+							outPrice: formatMoney(info.oneway.outPayable),
+							backLabel: t('calendar.back'),
+							backPrice: formatMoney(info.oneway.backPayable),
+						});
+
+			const missing = [];
+			if (info.roundMissing) missing.push(t('watch.scheme.round'));
+			if (info.onewayMissing) missing.push(t('watch.scheme.oneway'));
+			const warning = info.partial
+				? missing.length === 0
+					? t('watch.compare.partialGeneric')
+					: t('watch.compare.partial', { sides: missing.join(t('watch.compare.join')) })
+				: null;
+
+			const bothKnown = info.round.payable !== null && info.oneway.total !== null;
+			let verdict = null;
+			let verdictTone = 'tie';
+			if (bothKnown && info.cheaper === 'round') {
+				verdict = t('watch.compare.roundCheaper', { amount: formatMoney(info.diff === null ? 0 : info.diff) });
+				verdictTone = 'round';
+			} else if (bothKnown && info.cheaper === 'oneway') {
+				verdict = t('watch.compare.onewayCheaper', { amount: formatMoney(info.diff === null ? 0 : info.diff) });
+				verdictTone = 'oneway';
+			} else if (bothKnown && info.cheaper === 'tie') {
+				verdict = t('watch.compare.tie');
+			}
+
+			return h(
+				Section,
+				{ title: t('watch.compare.title') },
+				warning === null ? null : h('div', { className: 'pw-compare-warning', role: 'status' }, warning),
+				h(
+					'div',
+					{ className: 'pw-compare-sides' },
+					h(CompareSide, { label: t('watch.scheme.round'), price: info.round.payable, detail: roundDetail, cheaper: info.cheaper === 'round' && info.round.payable !== null }),
+					h(CompareSide, { label: t('watch.scheme.oneway'), price: info.oneway.total, detail: onewayDetail, cheaper: info.cheaper === 'oneway' && info.oneway.total !== null })
+				),
+				verdict === null ? null : h('div', { className: 'pw-compare-verdict', 'data-cheaper': verdictTone, role: 'status' }, verdict)
+			);
 		}
 
 		/** The flight row the summary line describes: by `lowest.flightNo`, else by price. */
@@ -3019,6 +3183,15 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const minSeries = useMemo(() => normalizeMinSeries(prices && prices.min), [prices]);
 			const lowest = lowestBookable(flightsData, minSeries);
 			const lowestFlight = lowestFlightOf(flights, lowest);
+			// Round-trip monitors carry the through-ticket vs two-one-ways comparison;
+			// one-way monitors keep the exact layout they had (roundTrip is null).
+			const roundTrip = roundTripInfo(flightsData);
+			const roundMode = monitorTrip(monitor) === 'round';
+			// The scheme tag only makes sense for a round-trip monitor: 联程 (one through
+			// ticket) vs 两段单买 (two one-ways). A one-way monitor keeps its old header.
+			const schemeLabel =
+				!roundMode || lowest === null || lowest.scheme === null ? null : lowest.scheme === 'round' ? t('watch.scheme.round') : lowest.scheme === 'oneway' ? t('watch.scheme.oneway') : null;
+			const listPriceNote = roundMode && roundTrip !== null && lowest !== null && lowest.scheme === 'round' && roundTrip.round.source === 'list';
 			const latestPoint = minSeries.length > 0 ? minSeries[minSeries.length - 1] : null;
 			const previousPoint = minSeries.length > 1 ? minSeries[minSeries.length - 2] : null;
 			const deltaPercent = latestPoint !== null && previousPoint !== null && previousPoint.total > 0 ? ((latestPoint.total - previousPoint.total) / previousPoint.total) * 100 : null;
@@ -3038,6 +3211,14 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					{ className: 'pw-summary-main' },
 					h('span', { className: 'pw-summary-label' }, t('watch.lowestLabel')),
 					h('span', { className: 'pw-summary-price' }, lowest === null ? '—' : formatMoney(lowest.total)),
+					schemeLabel === null
+						? null
+						: h(
+								'div',
+								{ className: 'pw-summary-scheme' },
+								h(Chip, { tone: 'brand' }, schemeLabel),
+								listPriceNote ? h('span', { className: 'pw-hint' }, t('watch.scheme.listPrice')) : null
+							),
 					deltaText === null ? null : h('span', { className: 'pw-summary-delta', 'data-tone': deltaTone }, t('watch.vsLast', { percent: deltaText, price: formatMoney(previousPoint.total) })),
 					lowestFlight === null ? null : h('span', { className: 'pw-summary-route' }, flightRouteLine(lowestFlight))
 				),
@@ -3068,6 +3249,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				props.pricesError ? h(ErrorBar, { key: 'prices-error', message: props.pricesError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
 				props.flightsError ? h(ErrorBar, { key: 'flights-error', message: props.flightsError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
 				conclusion,
+				roundTrip === null ? null : h(RoundTripCompare, { key: 'compare', info: roundTrip }),
 				h(
 					Section,
 					{ key: 'trend', title: t('watch.trendTitle') },
@@ -3077,8 +3259,13 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					Section,
 					{
 						key: 'flights',
-						title: t('watch.flights'),
-						help: flightsFetchedAt === null ? t('watch.flightsHelp') : `${t('watch.flightsHelp')} · ${t('watch.fetchedAt', { when: relativeTime(flightsFetchedAt) })}`,
+						title: roundMode ? t('watch.flightsRound') : t('watch.flights'),
+						help:
+							flightsFetchedAt === null
+								? roundMode
+									? t('watch.flightsRoundHelp')
+									: t('watch.flightsHelp')
+								: `${roundMode ? t('watch.flightsRoundHelp') : t('watch.flightsHelp')} · ${t('watch.fetchedAt', { when: relativeTime(flightsFetchedAt) })}`,
 					},
 					flightsData === null && props.flightsError === null ? h(Skeleton, { height: 180, radius: 12 }) : h(FlightTable, { flights })
 				),
