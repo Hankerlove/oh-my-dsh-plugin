@@ -27,6 +27,14 @@
  * (no retry); the outcome lands in `state.delivery[id]` and `alerts.jsonl`.
  * Alert rules, cooldowns and the daily digest were deleted with rules.js.
  *
+ * Delivery channels A2.2 (spec §1/§5): the default is a self-built Feishu app
+ * (`channel:'app'`): the trend is rendered locally to a PNG (`host/chart.js`),
+ * uploaded for an `img_key`, and the card is sent to a group chat with the
+ * tenant token (`host/feishu.js`). `channel:'webhook'` keeps the custom-bot
+ * webhook and is text-only. Missing channel config ⇒ `skipped:'no-config'`
+ * (no state entry, no log line). A failed render/upload degrades to a text-only
+ * card instead of blocking the delivery.
+ *
  * Scheduling: a single 60s heartbeat collects every monitor whose `nextDue` has
  * passed. `nextDue = now + base * (0.85 + rand*0.30)`, where `base` is the
  * monitor's cadence in minutes (or its mode's global default). There is no quiet
@@ -45,9 +53,11 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { renderTrendPng } from './host/chart.js';
 import { collectCalendar, probeL1 } from './host/collect/index.js';
 import { AuthError, BlockedError, createBrowserCollector } from './host/collect/browser.js';
-import { buildCalendarCard, buildFailureCard, buildWatchCard, sendFeishu } from './host/notify.js';
+import { deliverAppCard } from './host/feishu.js';
+import { buildCalendarCard, buildFailureCard, buildTestCard, buildWatchCard, sendFeishu } from './host/notify.js';
 import { createRouter } from './host/routes.js';
 import { clampCadence, createStore } from './host/store.js';
 import { createLogger, isoNow, minSeries, sleep } from './host/util.js';
@@ -134,10 +144,13 @@ export function apply(ctx) {
     return hashOf(['calendar', rows(report.snapshot?.out), rows(report.snapshot?.back)]);
   }
 
-  /** The card for one collection report. */
-  function buildCardFor(monitor, report) {
-    const url = panelUrl();
-    if (report.kind === 'failure') return buildFailureCard({ monitor, error: report.error, panelUrl: url });
+  /**
+   * The card body for one collection report. `imageKey` is the `img_key` of the
+   * freshly uploaded trend PNG (`null` for the webhook channel, for a failed
+   * upload, or when there are not enough points to draw anything).
+   */
+  function buildCardFor(monitor, report, imageKey = null) {
+    if (report.kind === 'failure') return buildFailureCard({ monitor, error: report.error });
     if (report.kind === 'watch') {
       const lowest = report.lowest || null;
       const lowestFlight = (Array.isArray(report.flights) ? report.flights : [])
@@ -147,9 +160,8 @@ export function apply(ctx) {
         lowest,
         lowestFlight,
         previous: report.previous,
-        minSeries: report.minSeries,
         flights: report.flights,
-        panelUrl: url,
+        imageKey,
       });
     }
     return buildCalendarCard({
@@ -157,33 +169,101 @@ export function apply(ctx) {
       out: report.snapshot?.out || [],
       back: report.snapshot?.back || null,
       previous: report.previous,
-      panelUrl: url,
+      imageKey,
     });
   }
 
   /**
-   * Push at most one card for one collection attempt (spec §1.1).
+   * Which delivery channel the current config resolves to (spec §5).
    *
-   *  - no webhook configured → not a delivery at all: no state, no log line, so
-   *    a user who does not use Feishu never sees a red "delivery failed";
-   *  - same key as the last delivered card → skip the push (data is already
-   *    stored by the caller), keep the previous delivery record;
-   *  - otherwise push exactly once (`sendFeishu` has no retry loop any more) and
-   *    record `{hash, at, ok, error, kind}` in `state.delivery`, plus one line in
-   *    the delivery log.
+   * No cross-fallback on purpose: if the user picked `app` but the app fields are
+   * incomplete we report `no-config` instead of silently pushing through a
+   * leftover webhook — a message appearing in the wrong place is worse than a
+   * missing one, and the panel already shows the delivery state.
+   */
+  function resolveChannel(config) {
+    const notifyConfig = config?.notify && typeof config.notify === 'object' ? config.notify : {};
+    const webhook = String(notifyConfig.feishuWebhook || '').trim();
+    const appId = String(notifyConfig.appId || '').trim();
+    const appSecret = String(notifyConfig.appSecret || '');
+    const chatId = String(notifyConfig.chatId || '').trim();
+    if (notifyConfig.channel === 'webhook') {
+      return /^https:\/\//i.test(webhook) ? { kind: 'webhook', webhook } : { kind: 'none' };
+    }
+    if (appId && appSecret && chatId) return { kind: 'app', appId, appSecret, chatId };
+    return { kind: 'none' };
+  }
+
+  /**
+   * The numbers the trend PNG shows: the watch card plots the last 20 per-collection
+   * lowest payable prices, the calendar card the next 30 daily totals (the forward
+   * leg for a round trip).
+   */
+  function trendValuesFor(report) {
+    const values = report.kind === 'watch'
+      ? (Array.isArray(report.minSeries) ? report.minSeries.slice(-20) : [])
+      : (Array.isArray(report.snapshot?.out) ? report.snapshot.out.slice(0, 30).map((row) => row?.total) : []);
+    return values.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
+  }
+
+  /**
+   * Render the trend PNG for a report, or null when the report has no chart.
+   *
+   *  - 失败卡永远不带图；
+   *  - 点数不足 2 个（监控首次采集）交给 `renderTrendPng` 出空白占位图：保持卡片
+   *    版式一致，也让「第一次采集」看起来是正常的而不是像挂了；
+   *  - 渲染本身出错才降级为无图卡片（投递不能因此中断）。
+   */
+  function renderTrend(report) {
+    if (report.kind === 'failure') return null;
+    try {
+      return renderTrendPng(trendValuesFor(report));
+    } catch (error) {
+      logger.warn(`走势图渲染失败，降级为无图卡片: ${String(error?.message || error)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Push at most one card for one collection attempt (spec §1.1 + A2.2 §5).
+   *
+   *  - no usable channel config → `skipped:'no-config'`: no state entry and no
+   *    log line, so a panel with notifications off never shows a red failure;
+   *  - same key as the last delivered card → `skipped:'duplicate'` (data is
+   *    already stored by the caller), keep the previous delivery record;
+   *  - otherwise deliver exactly once:
+   *      app      render PNG → upload for `img_key` → send card to the chat
+   *               (a failed render/upload sends the same card without an image);
+   *      webhook  custom bot, text-only by nature;
+   *    then record `{hash, at, ok, error, kind}` in `state.delivery` plus one
+   *    line in the delivery log.
    *
    * Never throws: a delivery problem must not affect data collection.
    */
   async function deliverReport(monitor, report) {
     try {
-      const webhook = String(store.getConfig()?.notify?.feishuWebhook || '').trim();
-      if (!webhook) return { skipped: 'no-webhook' };
+      const channel = resolveChannel(store.getConfig());
+      if (channel.kind === 'none') return { skipped: 'no-config' };
       const hash = deliveryKeyFor(report);
       const previous = store.getState().delivery?.[monitor.id];
       if (previous && previous.hash === hash) return { skipped: 'duplicate' };
 
-      const card = buildCardFor(monitor, report);
-      const result = await sendFeishu(webhook, card, { logger });
+      let result;
+      if (channel.kind === 'app') {
+        // 图先渲染好再交给 feishu.js：上传失败时它照样发正文（无图降级）。
+        const png = renderTrend(report);
+        result = await deliverAppCard({
+          appId: channel.appId,
+          appSecret: channel.appSecret,
+          chatId: channel.chatId,
+          png,
+          buildCard: (imageKey) => buildCardFor(monitor, report, imageKey),
+          logger,
+        });
+      } else {
+        // 自定义机器人不能带图，正文照发。
+        result = await sendFeishu(channel.webhook, buildCardFor(monitor, report, null), { logger });
+      }
       const at = isoNow();
       const entry = {
         hash,
@@ -203,7 +283,12 @@ export function apply(ctx) {
         error: entry.error,
       });
       if (!entry.ok) logger.warn(`飞书投递失败（不重试） ${monitor.title}: ${entry.error}`);
-      return { delivered: entry.ok, error: entry.error };
+      return {
+        delivered: entry.ok,
+        error: entry.error,
+        channel: channel.kind,
+        image: channel.kind === 'app' ? Boolean(result.imageKey) : false,
+      };
     } catch (error) {
       logger.warn(`投递流程异常 ${monitor?.title || monitor?.id}: ${String(error?.message || error)}`);
       return { error: String(error?.message || error) };
@@ -501,6 +586,40 @@ export function apply(ctx) {
       return collectOne(monitor);
     },
     refreshAll: async () => tick({ force: true }),
+    /**
+     * `POST /notify/test`（spec §4）：用当前通道发一张测试卡，成功/失败都原样回给
+     * 设置页就地展示。测试消息不参与 per-monitor 幂等，也不写投递日志。
+     */
+    notifyTest: async () => {
+      try {
+        await store.init();
+        const channel = resolveChannel(store.getConfig());
+        if (channel.kind === 'none') {
+          return { ok: false, error: '未配置投递通道：请填写 App ID / App Secret / 群 chat_id，或改用手动机器人并填写 webhook' };
+        }
+        const card = buildTestCard({
+          channel: channel.kind,
+          chatId: channel.chatId,
+          webhook: channel.webhook,
+          at: isoNow(),
+        });
+        const result = channel.kind === 'app'
+          ? await deliverAppCard({
+            appId: channel.appId,
+            appSecret: channel.appSecret,
+            chatId: channel.chatId,
+            png: null,
+            buildCard: () => card,
+            logger,
+          })
+          : await sendFeishu(channel.webhook, card, { logger });
+        logger.info(`测试消息投递（${channel.kind}）: ${result.ok ? '成功' : `失败 ${result.error}`}`);
+        return { ok: result.ok === true, error: result.ok ? null : String(result.error || '投递失败') };
+      } catch (error) {
+        logger.warn(`测试消息投递异常: ${String(error?.message || error)}`);
+        return { ok: false, error: String(error?.message || error) };
+      }
+    },
     loginStart: async () => {
       await store.init();
       return browser.startLogin({});
@@ -532,7 +651,7 @@ export function apply(ctx) {
       const monitors = store.listMonitors();
       const failures = Object.values(state.failures || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
       return {
-        version: '0.4.0',
+        version: '0.5.0',
         auth: { ...(state.auth || { status: 'unknown' }), available },
         lastCollectAt: state.lastCollectAt,
         monitorCount: monitors.length,
@@ -553,8 +672,9 @@ export function apply(ctx) {
           ...(available ? {} : { loadError: browser.loadError?.() || null }),
         },
         cadence: config.cadence,
-        // A2 §1.3: 只剩「是否配置了飞书」+ 最近一次投递结果，日报/冷却/规则都没了。
-        notify: { feishu: Boolean(config?.notify?.feishuWebhook), lastDelivery: lastDeliveryOf(state) },
+        // A2 §1.3 + A2.2：has-channel 表示当前通道（app / webhook）配置齐全，
+        // 不再是「有 webhook 就 true」；lastDelivery 是最近一次真实投递结果。
+        notify: { feishu: resolveChannel(config).kind !== 'none', lastDelivery: lastDeliveryOf(state) },
         panelUrl: panelUrl(),
       };
     },

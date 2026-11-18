@@ -15,6 +15,11 @@
  * line is gone), and every list item carries `delivery: { at, ok, error } | null`
  * plus `lastError` so the panel never has to join against `/status`.
  *
+ * A2.2 additions: `notify` settings grew a channel selector; `appSecret` is
+ * **never** returned (only `appSecretSet`), and an empty `appSecret` in a POST is
+ * ignored instead of clearing the stored one. `POST /notify/test` sends one test
+ * card through the configured channel for the settings page button.
+ *
  * Write requests pass a same-origin check because plugin routes are not behind
  * the Host web token. Bodies are capped and destroyed when oversized.
  */
@@ -150,6 +155,22 @@ export function createRouter({ store, logger, actions }) {
     const entry = store.getState().delivery?.[monitor.id];
     if (!entry || typeof entry.at !== 'string') return null;
     return { at: entry.at, ok: entry.ok === true, error: entry.error || null };
+  }
+
+  /**
+   * The settings-page view of `config.notify`: everything except the app secret
+   * itself, which is replaced by a boolean so the UI can render
+   * 「已设置，留空则不修改」 without ever holding the credential.
+   */
+  function publicNotify(notifyConfig) {
+    const notify = notifyConfig && typeof notifyConfig === 'object' ? notifyConfig : {};
+    return {
+      channel: notify.channel === 'webhook' ? 'webhook' : 'app',
+      appId: typeof notify.appId === 'string' ? notify.appId : '',
+      appSecretSet: Boolean(String(notify.appSecret || '')),
+      chatId: typeof notify.chatId === 'string' ? notify.chatId : '',
+      feishuWebhook: typeof notify.feishuWebhook === 'string' ? notify.feishuWebhook : '',
+    };
   }
 
   /** One list item, exactly the fields spec §5 promises. */
@@ -404,16 +425,17 @@ export function createRouter({ store, logger, actions }) {
     if (segments[0] === 'settings') {
       if (method === 'GET') {
         const config = store.getConfig();
-        // 只回传还存在的配置：A2 之后 notify 里只剩 webhook（日报时间与冷却已删除）。
+        // cadence 照旧；notify 脱敏：appSecret 原文绝不出 Host（spec §1）。
         return sendJson(res, 200, {
           ok: true,
-          data: { cadence: config.cadence, notify: config.notify, panelBaseUrl: config.panelBaseUrl },
+          data: { cadence: config.cadence, notify: publicNotify(config.notify), panelBaseUrl: config.panelBaseUrl },
         });
       }
       if (method === 'POST') {
         const body = await readBody(req);
         // A partial body must only touch the fields it actually carries.
         // 老客户端可能仍发 l1 / l2：直接丢弃，不让它们复活被删掉的预算模型。
+        // appSecret 为空串表示「不修改」，由 store.saveConfig 保留旧值。
         const next = await store.saveConfig({
           cadence: body.cadence,
           notify: body.notify,
@@ -421,10 +443,16 @@ export function createRouter({ store, logger, actions }) {
         });
         return sendJson(res, 200, {
           ok: true,
-          data: { cadence: next.cadence, notify: next.notify, panelBaseUrl: next.panelBaseUrl },
+          data: { cadence: next.cadence, notify: publicNotify(next.notify), panelBaseUrl: next.panelBaseUrl },
         });
       }
       return sendJson(res, 405, { ok: false, error: '方法不支持' });
+    }
+
+    // /api/notify/test — 设置页「发送测试消息」（A2.2 §4）
+    if (segments[0] === 'notify' && segments[1] === 'test' && method === 'POST') {
+      const result = await actions.notifyTest();
+      return sendJson(res, 200, { ok: true, data: result });
     }
 
     // /api/deliveries — 投递日志，最新在前（A2 §1.3）。`/alerts` 保留为别名，

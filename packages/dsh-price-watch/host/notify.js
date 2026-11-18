@@ -1,26 +1,21 @@
 /**
- * Outbound Feishu cards (A2 spec §2).
+ * Feishu card payloads (A2.2 spec §3).
  *
- * One card per *collection attempt*, not per alert: a successful run pushes the
- * card for its mode, a failed run pushes a failure card carrying the reason.
- * Whether the card is actually sent is decided in `index.js` (sha1 idempotency,
- * one attempt only) — nothing in this file retries.
+ * Two channels share these builders:
+ *   app      a self-built app sends the card object through `im/v1/messages`
+ *            after uploading the rendered PNG (`host/feishu.js` + `host/chart.js`);
+ *   webhook  a custom bot receives `{ msg_type:'interactive', card }` on its URL
+ *            (`sendFeishu` below) and therefore gets the text-only variant.
  *
- * Why the trend is a text sparkline and not a chart image: a Feishu custom-bot
- * webhook cannot embed a locally generated image — `img` elements need an
- * `img_key` produced by an upload API that requires tenant permissions a custom
- * bot does not have. So the trend is drawn with the unicode block ladder
- * `▁▂▃▄▅▆▇█`. Do not "improve" this into an image URL: it would silently render
- * as a broken placeholder.
+ * The trend is a **real PNG**, not a text sparkline: A2.2 replaced the character
+ * art with `renderTrendPng`, and the card builders accept the resulting
+ * `imageKey`. There is deliberately no `action`/button element any more, and no
+ * `#m=` deep link — the card is a report, not a navigation entry point.
  */
 import { CITY_NAMES, monthDay } from './util.js';
 
-/** The block ladder, lowest → highest. */
-const BLOCKS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-/** How many days of the calendar a card shows. */
+/** How many days of the calendar the card image shows. */
 const CALENDAR_SPARK_DAYS = 30;
-/** How many collection points the watch trend shows. */
-const WATCH_SPARK_POINTS = 20;
 /** How many cheapest flights the watch card lists. */
 const WATCH_TOP_N = 3;
 
@@ -61,24 +56,7 @@ function cardHeading(monitor) {
   return `价格监控 · ${route}（${depart}）`;
 }
 
-/**
- * `▁▂▃▂▅█▅▃…` — min/max scaled, one block per value. A flat series would divide
- * by zero, so it draws the middle block instead of an empty line.
- */
-export function sparkline(values) {
-  const numbers = (Array.isArray(values) ? values : [])
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value) && value > 0);
-  if (numbers.length === 0) return '';
-  const min = Math.min(...numbers);
-  const max = Math.max(...numbers);
-  if (max === min) return BLOCKS[3].repeat(numbers.length);
-  return numbers
-    .map((value) => BLOCKS[Math.round(((value - min) / (max - min)) * (BLOCKS.length - 1))])
-    .join('');
-}
-
-/** `比上次 -3.7%（上次 ¥540）` / `与上次持平（¥520）` / null when unknown. */
+/** `比上次 -3.7%（上次 ¥540）` / `与上次持平（¥540）` / null when unknown. */
 export function deltaLine(current, previous) {
   const now = Number(current);
   const before = Number(previous);
@@ -90,10 +68,10 @@ export function deltaLine(current, previous) {
 }
 
 /** Green when the price fell (good news), red when it rose, blue when unknown. */
-function templateFor(delta) {
-  if (delta === null) return 'blue';
-  if (delta < 0) return 'green';
-  if (delta > 0) return 'red';
+function templateFor(diff) {
+  if (diff === null || diff === undefined) return 'blue';
+  if (diff < 0) return 'green';
+  if (diff > 0) return 'red';
   return 'blue';
 }
 
@@ -114,112 +92,88 @@ function cheapestOf(rows) {
   return best;
 }
 
+/** The last N rows the image shows for a calendar leg. */
+function shownRows(rows) {
+  return Array.isArray(rows) ? rows.slice(0, CALENDAR_SPARK_DAYS) : [];
+}
+
 /**
- * One card, shared scaffolding: heading + body lines + a "查看详情" button that
- * deep-links to the standalone page (`#m=<id>` is honoured by host/page.js).
+ * One card object: optional image + caption + markdown body.
+ *
+ * The image is inserted only when an `img_key` was uploaded; every builder still
+ * produces a complete card when it was not, because a failed render/upload must
+ * degrade to text instead of blocking the delivery (spec §5).
  */
-function buildCard({ monitor, template, lines, panelUrl, buttonText }) {
-  const elements = [
-    { tag: 'div', text: { tag: 'lark_md', content: lines.filter((line) => typeof line === 'string' && line.length > 0).join('\n') } },
-  ];
-  const base = String(panelUrl || '').replace(/#.*$/, '');
-  if (base) {
-    elements.push({ tag: 'hr' });
+function buildCard({ template, title, imageKey, caption, bodyLines }) {
+  const elements = [];
+  if (imageKey) {
+    if (caption) elements.push({ tag: 'div', text: { tag: 'lark_md', content: caption } });
     elements.push({
-      tag: 'action',
-      actions: [
-        {
-          tag: 'button',
-          text: { tag: 'plain_text', content: String(buttonText || '查看详情').slice(0, 20) },
-          url: `${base}#m=${encodeURIComponent(String(monitor?.id || ''))}`,
-          type: 'primary',
-        },
-      ],
+      tag: 'img',
+      img_key: imageKey,
+      alt: { tag: 'plain_text', content: String(caption || '价格走势').slice(0, 100) },
+      mode: 'fit_horizontal',
+      preview: false,
     });
   }
+  const body = (Array.isArray(bodyLines) ? bodyLines : []).filter((line) => typeof line === 'string' && line.length > 0);
+  if (body.length > 0) elements.push({ tag: 'div', text: { tag: 'lark_md', content: body.join('\n') } });
   return {
-    msg_type: 'interactive',
-    card: {
-      config: { wide_screen_mode: true },
-      header: { template, title: { tag: 'plain_text', content: cardHeading(monitor).slice(0, 100) } },
-      elements,
-    },
+    config: { wide_screen_mode: true },
+    header: { template, title: { tag: 'plain_text', content: String(title).slice(0, 100) } },
+    elements,
   };
 }
 
 /**
- * The pieces of one calendar leg: the headline (its lowest price + date), the
- * delta against the previous run, the 30-day sparkline block and the cheapest
- * day *inside that window* (the headline lowest may sit outside the first 30
- * days, so annotating the window separately avoids a misleading duplicate).
- */
-function calendarLegParts(rows, { label, previous, trendTitle }) {
-  const cheapest = cheapestOf(rows);
-  const shown = rows.slice(0, CALENDAR_SPARK_DAYS);
-  const windowCheapest = cheapestOf(shown);
-  const before = Number(previous);
-  const diff = cheapest && Number.isFinite(before) && before > 0 ? cheapest.total - before : null;
-  const delta = cheapest ? deltaLine(cheapest.total, previous) : null;
-  const trend = [];
-  if (shown.length >= 2) {
-    trend.push(`${trendTitle}（${rangeLabel(shown)}）`);
-    trend.push(sparkline(shown.map((row) => row.total)));
-  }
-  return {
-    headline: cheapest ? `${label}${money(cheapest.total)} · ${shortDay(cheapest.date)}` : `${label}暂无报价`,
-    diff,
-    delta,
-    trend,
-    window: windowCheapest && shown.length >= 2 ? `图中最低 ${shortDay(windowCheapest.date)} ${money(windowCheapest.total)}` : null,
-  };
-}
-
-/**
- * Calendar-mode card (spec §2.1). A round trip prints both legs' lowest prices
- * first (去程/回程 each one line), then their deltas and trends — the spec asks
- * for the two minima up front so the card is readable on a phone lock screen.
+ * Calendar-mode card (spec §3 行情).
+ *
+ * Single trip:
+ *   **¥498** 当前最低 · 12-03 / 图中最低 12-03 ¥498 / 比上次 -3.7%（上次 ¥517）
+ * Round trip prints both legs' minima first, then the forward trend image.
  *
  * @param {{ monitor: object, out: Array<{date:string,total:number}>, back?: Array|null,
- *           previous?: { out?: number|null, back?: number|null }|null, panelUrl?: string }} input
+ *           previous?: { out?: number|null, back?: number|null }|null, imageKey?: string|null }} input
  */
-export function buildCalendarCard({ monitor, out, back, previous, panelUrl }) {
+export function buildCalendarCard({ monitor, out, back, previous, imageKey }) {
   const forward = Array.isArray(out) ? out : [];
   const backward = Array.isArray(back) ? back : [];
-  let firstDelta = null;
+  const shown = shownRows(forward);
+  const forwardLowest = cheapestOf(forward);
+  const backLowest = cheapestOf(backward);
+  const previousForward = Number(previous?.out);
+  const diff = forwardLowest && Number.isFinite(previousForward) && previousForward > 0
+    ? forwardLowest.total - previousForward
+    : null;
+  const caption = shown.length >= 2
+    ? `未来 30 天最低价走势（${rangeLabel(shown)}）`
+    : '未来 30 天最低价走势';
 
+  const body = [];
   if (monitor?.params?.trip === 'round') {
-    const forwardParts = calendarLegParts(forward, {
-      label: '去程最低 ',
-      previous: previous?.out,
-      trendTitle: '去程未来 30 天走势',
-    });
-    const backParts = calendarLegParts(backward, {
-      label: '回程最低 ',
-      previous: previous?.back,
-      trendTitle: '回程未来 30 天走势',
-    });
-    firstDelta = forwardParts.diff;
-    const lines = [
-      forwardParts.headline,
-      backParts.headline,
-      forwardParts.delta ? `去程${forwardParts.delta}` : null,
-      backParts.delta ? `回程${backParts.delta}` : null,
-      ...forwardParts.trend,
-      forwardParts.window,
-      ...backParts.trend,
-      backParts.window,
-    ];
-    return buildCard({ monitor, template: templateFor(firstDelta), lines, panelUrl, buttonText: '查看走势图' });
+    body.push(forwardLowest ? `去程最低 ${money(forwardLowest.total)}（${shortDay(forwardLowest.date)}）` : '去程暂无报价');
+    body.push(backLowest ? `回程最低 ${money(backLowest.total)}（${shortDay(backLowest.date)}）` : '回程暂无报价');
+    if (forwardLowest) body.push(`图中最低 ${shortDay(forwardLowest.date)} ${money(forwardLowest.total)}`);
+    const delta = deltaLine(forwardLowest?.total, previousForward);
+    if (delta) body.push(`去程${delta}`);
+  } else {
+    if (forwardLowest) {
+      body.push(`**${money(forwardLowest.total)}** 当前最低 · ${shortDay(forwardLowest.date)}`);
+      body.push(`图中最低 ${shortDay(forwardLowest.date)} ${money(forwardLowest.total)}`);
+    } else {
+      body.push('本次没有采到日历报价');
+    }
+    const delta = deltaLine(forwardLowest?.total, previousForward);
+    if (delta) body.push(delta);
   }
 
-  const forwardParts = calendarLegParts(forward, {
-    label: '当前最低 ',
-    previous: previous?.out,
-    trendTitle: '未来 30 天走势',
+  return buildCard({
+    template: templateFor(diff),
+    title: cardHeading(monitor),
+    imageKey: imageKey || null,
+    caption,
+    bodyLines: body,
   });
-  firstDelta = forwardParts.diff;
-  const lines = [forwardParts.headline, forwardParts.delta, ...forwardParts.trend, forwardParts.window];
-  return buildCard({ monitor, template: templateFor(firstDelta), lines, panelUrl, buttonText: '查看走势图' });
 }
 
 /** `MF8561 08:00 大兴国际机场 → 10:10 浦东国际机场T2`, tolerating missing bits. */
@@ -228,70 +182,89 @@ function flightLabel(flight) {
   const left = [flight.depTime, flight.depAirport].filter(Boolean).join(' ');
   const right = [flight.arrTime, flight.arrAirport].filter(Boolean).join(' ');
   const route = left || right ? `${left} → ${right}` : '';
-  return [flight.no, route].filter(Boolean).join(' ');
+  return [flight.no, route].filter(Boolean).join(' · ');
 }
 
 /**
- * Watch-mode card (spec §2.2).
+ * Watch-mode card (spec §3 监控).
  *
  * @param {{ monitor: object, lowest?: {flightNo:string,total:number}|null,
  *           lowestFlight?: object|null, previous?: number|null,
- *           minSeries?: number[], flights?: Array<object>, panelUrl?: string }} input
+ *           flights?: Array<object>, imageKey?: string|null }} input
  */
-export function buildWatchCard({ monitor, lowest, lowestFlight, previous, minSeries, flights, panelUrl }) {
-  const lines = [];
+export function buildWatchCard({ monitor, lowest, lowestFlight, previous, flights, imageKey }) {
   const current = Number(lowest?.total);
   const before = Number(previous);
-  // 卡片要显示「最低价那班」的时刻/机场：优先用调用方给的航班，退回按航班号匹配。
   const replayed = lowestFlight
     || (Array.isArray(flights) ? flights.find((flight) => flight?.no && flight.no === lowest?.flightNo) : null);
   const label = flightLabel(replayed);
-  lines.push(`当前最低可订价 ${money(current)}${label ? ` · ${label}` : ''}`);
-
   const diff = Number.isFinite(current) && Number.isFinite(before) && before > 0 ? current - before : null;
+
+  const body = [`**${money(current)}** 当前最低可订价`];
+  if (label) body.push(label);
   const delta = deltaLine(current, previous);
-  if (delta) lines.push(delta);
-
-  const series = (Array.isArray(minSeries) ? minSeries : [])
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value) && value > 0)
-    .slice(-WATCH_SPARK_POINTS);
-  if (series.length >= 2) {
-    lines.push('最近 20 次采集走势');
-    lines.push(sparkline(series));
-  }
-
+  if (delta) body.push(delta);
   const top = (Array.isArray(flights) ? flights : [])
     .filter((flight) => Number.isFinite(Number(flight?.taxIncluded)) && Number(flight.taxIncluded) > 0)
     .slice(0, WATCH_TOP_N);
   if (top.length > 0) {
-    lines.push(`TOP${top.length}：${top.map((flight) => `${flight.no || '—'} ${money(flight.taxIncluded)}`).join(' / ')}`);
+    body.push(`TOP${top.length}：${top.map((flight) => `${flight.no || '—'} ${money(flight.taxIncluded)}`).join(' / ')}`);
   }
 
   return buildCard({
-    monitor,
     template: templateFor(diff),
-    lines,
-    panelUrl,
-    buttonText: '查看详情',
+    title: cardHeading(monitor),
+    imageKey: imageKey || null,
+    caption: '最近 20 次采集的最低可订价走势',
+    bodyLines: body,
   });
 }
 
-/** Failure card (spec §2.3); the same error twice in a row is only pushed once. */
-export function buildFailureCard({ monitor, error, panelUrl }) {
+/** Failure card (spec §3 失败卡): no image, pure markdown, same idempotency. */
+export function buildFailureCard({ monitor, error }) {
   return buildCard({
-    monitor,
     template: 'orange',
-    lines: [`本次采集失败：${String(error || '未知错误').slice(0, 300)}`],
-    panelUrl,
-    buttonText: '查看详情',
+    title: cardHeading(monitor),
+    imageKey: null,
+    caption: '',
+    bodyLines: [`本次采集失败：${String(error || '未知错误').slice(0, 300)}`],
+  });
+}
+
+/** `2026-11-18 10:53` in the Host's local timezone (a UTC stamp would confuse). */
+function localStamp(value) {
+  const date = value ? new Date(value) : new Date();
+  if (!Number.isFinite(date.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * Test card for `POST /notify/test` (spec §4). Deliberately image-free and
+ * mentions the channel + target so the user can confirm where messages land.
+ */
+export function buildTestCard({ channel, chatId, webhook, at }) {
+  const channelLabel = channel === 'app' ? '企业自建应用机器人' : '自定义机器人 webhook';
+  const target = channel === 'app'
+    ? `目标群：${chatId || '—'}`
+    : `目标：${webhook ? '自定义机器人已配置' : '—'}`;
+  const when = localStamp(at);
+  return buildCard({
+    template: 'blue',
+    title: '价格监控 · 测试消息',
+    imageKey: null,
+    caption: '',
+    bodyLines: [`投递通道：${channelLabel}`, target, `时间：${when}`],
   });
 }
 
 /**
- * POST one card to a Feishu webhook. **Exactly one attempt** (A2 spec §1.1:
- * "投递只尝试一次，禁止重试") — a failure is reported to the caller, which
+ * POST one card to a Feishu custom-bot webhook. **Exactly one attempt** (spec
+ * §5: delivery is a single attempt) — a failure is reported to the caller, which
  * records it in `state.delivery` instead of retrying. Never throws.
+ *
+ * Custom bots cannot attach images, so this channel is text-only by nature;
+ * `card` here is the same card object the app channel sends.
  *
  * @returns {Promise<{ok:boolean, attempts:number, error?:string}>}
  */
@@ -302,7 +275,7 @@ export async function sendFeishu(webhook, card, { logger, signal } = {}) {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(card),
+      body: JSON.stringify({ msg_type: 'interactive', card }),
       signal,
     });
     const text = await response.text().catch(() => '');
@@ -315,11 +288,11 @@ export async function sendFeishu(webhook, card, { logger, signal } = {}) {
     const code = payload?.code ?? payload?.StatusCode ?? 0;
     if (response.ok && (code === 0 || code === undefined)) return { ok: true, attempts: 1 };
     const error = `HTTP ${response.status} ${String(text).slice(0, 120)}`;
-    logger?.warn?.(`飞书投递失败（不再重试）: ${error}`);
+    logger?.warn?.(`飞书 webhook 投递失败（不再重试）: ${error}`);
     return { ok: false, attempts: 1, error };
   } catch (error) {
     const message = String(error?.message || error);
-    logger?.warn?.(`飞书投递失败（不再重试）: ${message}`);
+    logger?.warn?.(`飞书 webhook 投递失败（不再重试）: ${message}`);
     return { ok: false, attempts: 1, error: message };
   }
 }

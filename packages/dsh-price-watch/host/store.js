@@ -31,6 +31,12 @@
  * skips the push but still stores its data. `alerts.jsonl` keeps one line per
  * delivery attempt. There are no alert rules, no cooldowns and no daily digest.
  *
+ * Delivery channels (A2.2 spec §1): `config.notify` carries either a self-built
+ * app (`channel:'app'` + appId/appSecret/chatId, the default) or a custom bot
+ * webhook (`channel:'webhook'` + feishuWebhook). The app secret is stored in
+ * plain text here because the Host must sign token requests with it; the HTTP
+ * layer never returns it, only `appSecretSet`.
+ *
  * Migration is idempotent: `init()` reads, folds every historical shape into the
  * current one and writes back only when the serialised document really changed,
  * so a second `init()` on migrated files performs no write at all.
@@ -86,9 +92,14 @@ const DEFAULT_CADENCE = { calendarMinutes: 360, watchMinutes: 360 };
 const DEFAULT_CONFIG = () => ({
   passengers: [],
   cadence: { ...DEFAULT_CADENCE },
-  // A2 spec §1.3: the only notification setting left is the webhook itself.
-  // Rules, cooldowns and the digest time were deleted along with rules.js.
+  // A2.2 §1: two delivery channels. `app` (企业自建应用) is the new default;
+  // `feishuWebhook` is kept so a self-built-bot-only user does not break on
+  // upgrade (see the migration below, which pins them to `webhook`).
   notify: {
+    channel: 'app',
+    appId: '',
+    appSecret: '',
+    chatId: '',
     feishuWebhook: '',
   },
   panelBaseUrl: '',
@@ -173,11 +184,25 @@ function normaliseConfig(raw) {
     : [];
 
   const inputNotify = input.notify && typeof input.notify === 'object' ? input.notify : {};
-  // Only the webhook survives A2. `cooldownMinutes` / `digestAt` are read past
-  // and dropped: a migrated config must not keep fields that imply a feature
-  // (quiet cooldowns, daily digest) the Host no longer implements.
+  const feishuWebhook = typeof inputNotify.feishuWebhook === 'string' ? inputNotify.feishuWebhook : base.notify.feishuWebhook;
+  /**
+   * 通道迁移（A2.2 §1）：老配置里没有 `channel`，只有 `feishuWebhook`。
+   *  - webhook 非空 → 固定成 'webhook'，老用户升级后立刻失效是最糟的结果；
+   *  - webhook 为空（A2 默认）→ 用新默认 'app'，用户去设置页填应用信息即可。
+   * 显式写的 channel 优先，只接受这两个值。
+   */
+  const channel = inputNotify.channel === 'app' || inputNotify.channel === 'webhook'
+    ? inputNotify.channel
+    : feishuWebhook.trim()
+      ? 'webhook'
+      : base.notify.channel;
+  // appSecret 不 trim：它是密钥，不做「顺手清理」，免得把有效凭据改坏。
   const notify = {
-    feishuWebhook: typeof inputNotify.feishuWebhook === 'string' ? inputNotify.feishuWebhook : base.notify.feishuWebhook,
+    channel,
+    appId: typeof inputNotify.appId === 'string' ? inputNotify.appId.trim() : '',
+    appSecret: typeof inputNotify.appSecret === 'string' ? inputNotify.appSecret : '',
+    chatId: typeof inputNotify.chatId === 'string' ? inputNotify.chatId.trim() : '',
+    feishuWebhook,
   };
 
   return {
@@ -405,11 +430,17 @@ export function createStore(rootDir) {
     }
     // l1 / l2 are deliberately not merged: a stale client sending them must not
     // resurrect the budget model. normaliseConfig drops the keys entirely.
+    const notifyPatch = { ...(defined.notify && typeof defined.notify === 'object' ? defined.notify : {}) };
+    // A2.2 §1：「App Secret 留空 = 不修改」。客户端永远拿不到明文，所以设置页
+    // 保存其它字段时必然带着空 secret；这里必须忽略它而不是把已存值清掉。
+    if (typeof notifyPatch.appSecret === 'string' && notifyPatch.appSecret === '') {
+      delete notifyPatch.appSecret;
+    }
     const merged = {
       ...cache.config,
       ...defined,
       cadence: { ...cache.config.cadence, ...(defined.cadence || {}) },
-      notify: { ...cache.config.notify, ...(defined.notify || {}) },
+      notify: { ...cache.config.notify, ...notifyPatch },
     };
     cache.config = normaliseConfig(merged);
     await writeJsonAtomic(configPath, cache.config);

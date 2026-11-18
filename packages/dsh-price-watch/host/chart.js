@@ -1,0 +1,256 @@
+/**
+ * Minimal PNG chart renderer for Feishu cards.
+ *
+ * Why hand-rolled: a Feishu card image has to be uploaded as an `image_key`, so
+ * the Host must produce real PNG bytes. Pulling in canvas/sharp would add a
+ * native dependency to a decorative plugin, and this only ever needs a plain
+ * trend line — so the encoder below writes the four PNG chunks itself and leans
+ * on `node:zlib` for compression. No text: every number the reader needs is in
+ * the card's markdown, the image only has to show the shape.
+ *
+ * Rendering is supersampled (2×) and box-filtered down, which is the cheapest
+ * way to get lines that do not look like stairs at 640px wide.
+ */
+import { deflateSync } from 'node:zlib';
+
+const SS = 2; // supersampling factor
+
+// #region PNG encoding
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buffer) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buffer.length; i += 1) c = CRC_TABLE[(c ^ buffer[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function chunk(type, data) {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([length, body, crc]);
+}
+
+/** Encode an RGB pixel buffer (width*height*3) as PNG bytes. */
+function encodePng(width, height, rgb) {
+  const stride = width * 3;
+  const raw = Buffer.alloc((stride + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    raw[y * (stride + 1)] = 0; // filter: none
+    rgb.copy ? rgb.copy(raw, y * (stride + 1) + 1, y * stride, y * stride + stride) : raw.set(rgb.subarray(y * stride, y * stride + stride), y * (stride + 1) + 1);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // colour type: truecolour
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(raw, { level: 9 })),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+// #endregion
+
+// #region colour + canvas
+function parseColor(value, fallback) {
+  const text = String(value || '').trim();
+  const hex = text.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const raw = hex[1];
+    const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
+    return [parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16)];
+  }
+  return fallback;
+}
+
+function createCanvas(width, height, background) {
+  const pixels = Buffer.alloc(width * height * 3);
+  for (let i = 0; i < width * height; i += 1) {
+    pixels[i * 3] = background[0];
+    pixels[i * 3 + 1] = background[1];
+    pixels[i * 3 + 2] = background[2];
+  }
+  const set = (x, y, colour) => {
+    const px = Math.round(x);
+    const py = Math.round(y);
+    if (px < 0 || py < 0 || px >= width || py >= height) return;
+    const offset = (py * width + px) * 3;
+    pixels[offset] = colour[0];
+    pixels[offset + 1] = colour[1];
+    pixels[offset + 2] = colour[2];
+  };
+  const blend = (x, y, colour, alpha) => {
+    const px = Math.round(x);
+    const py = Math.round(y);
+    if (px < 0 || py < 0 || px >= width || py >= height) return;
+    const offset = (py * width + px) * 3;
+    pixels[offset] = Math.round(pixels[offset] * (1 - alpha) + colour[0] * alpha);
+    pixels[offset + 1] = Math.round(pixels[offset + 1] * (1 - alpha) + colour[1] * alpha);
+    pixels[offset + 2] = Math.round(pixels[offset + 2] * (1 - alpha) + colour[2] * alpha);
+  };
+  const line = (x0, y0, x1, y1, colour, thickness = 1, alpha = 1) => {
+    let ax = Math.round(x0);
+    let ay = Math.round(y0);
+    const bx = Math.round(x1);
+    const by = Math.round(y1);
+    const dx = Math.abs(bx - ax);
+    const dy = Math.abs(by - ay);
+    const sx = ax < bx ? 1 : -1;
+    const sy = ay < by ? 1 : -1;
+    let error = dx - dy;
+    for (;;) {
+      if (thickness <= 1) {
+        if (alpha >= 1) set(ax, ay, colour);
+        else blend(ax, ay, colour, alpha);
+      } else {
+        const r = Math.floor(thickness / 2);
+        for (let oy = -r; oy <= r; oy += 1) {
+          for (let ox = -r; ox <= r; ox += 1) {
+            if (alpha >= 1) set(ax + ox, ay + oy, colour);
+            else blend(ax + ox, ay + oy, colour, alpha);
+          }
+        }
+      }
+      if (ax === bx && ay === by) break;
+      const e2 = error * 2;
+      if (e2 > -dy) {
+        error -= dy;
+        ax += sx;
+      }
+      if (e2 < dx) {
+        error += dx;
+        ay += sy;
+      }
+    }
+  };
+  return { width, height, pixels, set, blend, line };
+}
+
+/** Box-filter a supersampled canvas down to the requested size. */
+function downsample(canvas, factor) {
+  const width = Math.floor(canvas.width / factor);
+  const height = Math.floor(canvas.height / factor);
+  const out = Buffer.alloc(width * height * 3);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      for (let oy = 0; oy < factor; oy += 1) {
+        for (let ox = 0; ox < factor; ox += 1) {
+          const offset = ((y * factor + oy) * canvas.width + (x * factor + ox)) * 3;
+          r += canvas.pixels[offset];
+          g += canvas.pixels[offset + 1];
+          b += canvas.pixels[offset + 2];
+        }
+      }
+      const count = factor * factor;
+      const offset = (y * width + x) * 3;
+      out[offset] = Math.round(r / count);
+      out[offset + 1] = Math.round(g / count);
+      out[offset + 2] = Math.round(b / count);
+    }
+  }
+  return { width, height, pixels: out };
+}
+// #endregion
+
+/**
+ * Draw a trend line.
+ *
+ * @param {number[]} values  oldest → newest, at least 2 finite numbers
+ * @param {object}  [options]
+ * @returns {Buffer} PNG bytes
+ */
+export function renderTrendPng(values, options = {}) {
+  const width = Math.max(120, Math.min(1200, Number(options.width) || 640));
+  const height = Math.max(80, Math.min(600, Number(options.height) || 220));
+  const background = parseColor(options.background, [255, 255, 255]);
+  const grid = parseColor(options.grid, [232, 234, 238]);
+  const stroke = parseColor(options.line, [47, 107, 255]);
+  const fill = parseColor(options.fill, [47, 107, 255]);
+  const low = parseColor(options.lowlight, [234, 74, 74]);
+
+  const numbers = (Array.isArray(values) ? values : []).map(Number).filter((value) => Number.isFinite(value));
+  if (numbers.length < 2) return renderBlankPng({ width, height, background, grid });
+
+  const w = width * SS;
+  const h = height * SS;
+  const canvas = createCanvas(w, h, background);
+  const padLeft = 10 * SS;
+  const padRight = 10 * SS;
+  const padTop = 14 * SS;
+  const padBottom = 14 * SS;
+  const plotW = w - padLeft - padRight;
+  const plotH = h - padTop - padBottom;
+
+  let min = Math.min(...numbers);
+  let max = Math.max(...numbers);
+  if (min === max) {
+    min -= 1;
+    max += 1;
+  }
+  const span = max - min;
+  const toY = (value) => padTop + plotH - ((value - min) / span) * plotH;
+  const toX = (index) => padLeft + (index / (numbers.length - 1)) * plotW;
+
+  // Horizontal guides: 4 bands, faint.
+  for (let i = 0; i <= 4; i += 1) {
+    const y = padTop + (plotH / 4) * i;
+    canvas.line(padLeft, y, padLeft + plotW, y, grid, 1, 0.55);
+  }
+
+  // Area under the line.
+  for (let x = 0; x <= plotW; x += 1) {
+    const position = padLeft + x;
+    const ratio = x / plotW;
+    const index = ratio * (numbers.length - 1);
+    const lower = Math.floor(index);
+    const upper = Math.min(numbers.length - 1, lower + 1);
+    const frac = index - lower;
+    const value = numbers[lower] + (numbers[upper] - numbers[lower]) * frac;
+    const top = Math.round(toY(value));
+    for (let y = top; y < padTop + plotH; y += 1) canvas.blend(position, y, fill, 0.12);
+  }
+
+  // The line itself, 2 device pixels (≈1 css px after downsampling).
+  for (let i = 1; i < numbers.length; i += 1) {
+    canvas.line(toX(i - 1), toY(numbers[i - 1]), toX(i), toY(numbers[i]), stroke, 1.6 * SS, 1);
+  }
+
+  // Mark the lowest point with a dot.
+  const lowest = numbers.indexOf(Math.min(...numbers));
+  const dotR = 3 * SS;
+  for (let oy = -dotR; oy <= dotR; oy += 1) {
+    for (let ox = -dotR; ox <= dotR; ox += 1) {
+      if (ox * ox + oy * oy <= dotR * dotR) canvas.set(toX(lowest) + ox, toY(numbers[lowest]) + oy, low);
+    }
+  }
+
+  const small = downsample(canvas, SS);
+  return encodePng(small.width, small.height, small.pixels);
+}
+
+/** Placeholder used when there is not enough data to draw a trend. */
+export function renderBlankPng({ width = 640, height = 220, background = [255, 255, 255], grid = [232, 234, 238] } = {}) {
+  const canvas = createCanvas(width, height, background);
+  for (let i = 1; i < 4; i += 1) canvas.line(0, (height / 4) * i, width, (height / 4) * i, grid, 1, 0.55);
+  return encodePng(canvas.width, canvas.height, canvas.pixels);
+}
+
+export const __internals = { crc32, encodePng };

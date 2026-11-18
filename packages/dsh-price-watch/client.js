@@ -654,6 +654,19 @@ window.__ModuleLoader__.load({
 			'settings.feishu.label': 'Webhook 地址',
 			'settings.feishu.help': '在飞书群聊里添加自定义机器人，粘贴 webhook 地址。',
 			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
+			'settings.notify.channel': '投递方式',
+			'settings.notify.channel.app': '企业自建应用（推荐）',
+			'settings.notify.channel.webhook': '自定义机器人',
+			'settings.notify.appId': 'App ID',
+			'settings.notify.appSecret': 'App Secret',
+			'settings.notify.appSecretSet': '已设置，留空则不修改',
+			'settings.notify.chatId': '群 chat_id',
+			'settings.notify.chatIdPlaceholder': 'oc_ 开头的群 ID',
+			'settings.notify.chatIdHelp': '把机器人拉进群后，用群设置里的 chat_id。',
+			'settings.notify.test': '发送测试消息',
+			'settings.notify.testing': '发送中…',
+			'settings.notify.testOk': '测试消息已发送。',
+			'settings.notify.testFailed': '测试失败：{error}',
 			'passengers.title': '乘客',
 			'passengers.manage': '管理乘客',
 			'passengers.new': '新建乘客',
@@ -876,6 +889,19 @@ window.__ModuleLoader__.load({
 			'settings.feishu.label': 'Webhook URL',
 			'settings.feishu.help': 'Add a custom bot to a Feishu group, then paste its webhook URL here.',
 			'settings.feishu.placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/…',
+			'settings.notify.channel': 'Delivery channel',
+			'settings.notify.channel.app': 'Custom app (recommended)',
+			'settings.notify.channel.webhook': 'Custom bot webhook',
+			'settings.notify.appId': 'App ID',
+			'settings.notify.appSecret': 'App Secret',
+			'settings.notify.appSecretSet': 'Configured — leave empty to keep',
+			'settings.notify.chatId': 'Group chat_id',
+			'settings.notify.chatIdPlaceholder': 'Group id starting with oc_',
+			'settings.notify.chatIdHelp': 'Add the bot to the group, then copy the chat_id from the group settings.',
+			'settings.notify.test': 'Send test message',
+			'settings.notify.testing': 'Sending…',
+			'settings.notify.testOk': 'Test message sent.',
+			'settings.notify.testFailed': 'Test failed: {error}',
 			'passengers.title': 'Passengers',
 			'passengers.manage': 'Manage passengers',
 			'passengers.new': 'New passenger',
@@ -1185,6 +1211,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-summary-route { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
 .pw-delivery { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .pw-delivery[data-ok="false"] { color: var(--dsw-alias-state-error-primary); }
+.pw-test-result { font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.pw-test-result[data-ok="true"] { color: var(--dsw-alias-state-success-primary); }
+.pw-test-result[data-ok="false"] { color: var(--dsw-alias-state-error-primary); }
 .pw-strip-sep { color: var(--dsw-alias-border-l2); }
 @media (max-width: 780px) { .pw-spark { display: none; } .pw-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pw-head-row { flex-wrap: wrap; } .pw-head-actions { margin-left: 0; } }
 @media (max-width: 520px) { .pw-card { flex-wrap: wrap; } }
@@ -2752,6 +2781,13 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const source = settings && typeof settings === 'object' ? settings : {};
 			const notify = source.notify && typeof source.notify === 'object' ? source.notify : {};
 			return {
+				// `app` = enterprise self-built bot (recommended), `webhook` = legacy custom bot.
+				channel: notify.channel === 'webhook' ? 'webhook' : 'app',
+				appId: typeof notify.appId === 'string' ? notify.appId : '',
+				// GET /settings never returns the secret, only whether one is stored.
+				appSecret: '',
+				appSecretSet: notify.appSecretSet === true,
+				chatId: typeof notify.chatId === 'string' ? notify.chatId : '',
 				feishuWebhook: typeof notify.feishuWebhook === 'string' ? notify.feishuWebhook : '',
 			};
 		}
@@ -2761,6 +2797,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [saving, setSaving] = useState(false);
 			const [saved, setSaved] = useState(false);
 			const [settingsError, setSettingsError] = useState(null);
+			const [testing, setTesting] = useState(false);
+			const [testResult, setTestResult] = useState(null);
 
 			useEffect(() => {
 				if (props.settings === null || props.settings === undefined) return;
@@ -2776,13 +2814,22 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const update = (patch) => setDraft((current) => ({ ...current, ...patch }));
 
 			const saveSettings = async () => {
-				// Partial POST: only the Feishu fields this page still edits. The Host
-				// keeps the cooldown, the cadence and everything else untouched.
-				const body = {
-					notify: { feishuWebhook: draft.feishuWebhook.trim() },
-				};
+				// Partial POST: the channel plus the fields that channel owns. An empty
+				// App Secret is never sent, so the Host keeps the stored one.
+				const notify = { channel: draft.channel === 'webhook' ? 'webhook' : 'app' };
+				if (notify.channel === 'app') {
+					notify.appId = draft.appId.trim();
+					notify.chatId = draft.chatId.trim();
+					const secret = draft.appSecret.trim();
+					if (secret !== '') notify.appSecret = secret;
+				} else {
+					notify.feishuWebhook = draft.feishuWebhook.trim();
+				}
+				const body = { notify };
 				setSaving(true);
 				setSettingsError(null);
+				// A stale test result must not look like it describes the new config.
+				setTestResult(null);
 				try {
 					await props.onSaveSettings(body);
 					setSaved(true);
@@ -2790,6 +2837,31 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					setSettingsError(error && error.message ? error.message : String(error));
 				} finally {
 					setSaving(false);
+				}
+			};
+
+			/**
+			 * `POST /notify/test` sends one real card with the *saved* config, so the
+			 * result says whether the stored channel works. The Host's own error text is
+			 * surfaced verbatim; nothing is retried here.
+			 */
+			const sendTest = async () => {
+				if (testing) return;
+				setTesting(true);
+				setTestResult(null);
+				try {
+					const data = await apiFetch('/notify/test', { method: 'POST' });
+					const outcome = data && typeof data === 'object' ? data : {};
+					if (outcome.ok === false) {
+						const reason = typeof outcome.error === 'string' && outcome.error.trim() !== '' ? outcome.error.trim() : t('delivery.unknownError');
+						setTestResult({ ok: false, message: reason });
+					} else {
+						setTestResult({ ok: true, message: '' });
+					}
+				} catch (error) {
+					setTestResult({ ok: false, message: error && error.message ? error.message : t('delivery.unknownError') });
+				} finally {
+					setTesting(false);
 				}
 			};
 
@@ -2809,6 +2881,107 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				if (!confirmed) return;
 				await props.onLogout();
 			};
+
+			const channel = draft.channel === 'webhook' ? 'webhook' : 'app';
+			const channelPicker = h(
+				'div',
+				{ className: 'pw-field', key: 'channel' },
+				h('span', { className: 'pw-label' }, t('settings.notify.channel')),
+				h(SegControl, {
+					role: 'group',
+					label: t('settings.notify.channel'),
+					value: channel,
+					onChange: (next) => {
+						update({ channel: next });
+						setTestResult(null);
+					},
+					options: [
+						{ id: 'app', label: t('settings.notify.channel.app') },
+						{ id: 'webhook', label: t('settings.notify.channel.webhook') },
+					],
+				})
+			);
+			const secretPlaceholder = draft.appSecretSet ? t('settings.notify.appSecretSet') : t('settings.notify.appSecret');
+			const channelFields =
+				channel === 'app'
+					? [
+							h(
+								Field,
+								{ key: 'appId', label: t('settings.notify.appId') },
+								h('input', {
+									className: 'pw-input',
+									spellCheck: false,
+									autoComplete: 'off',
+									value: draft.appId,
+									placeholder: 'cli_…',
+									onChange: (event) => update({ appId: event.target.value }),
+								})
+							),
+							h(
+								Field,
+								{ key: 'appSecret', label: t('settings.notify.appSecret') },
+								h('input', {
+									className: 'pw-input',
+									type: 'password',
+									spellCheck: false,
+									autoComplete: 'new-password',
+									value: draft.appSecret,
+									placeholder: secretPlaceholder,
+									onChange: (event) => update({ appSecret: event.target.value }),
+								})
+							),
+							h(
+								'div',
+								{ className: 'pw-field', key: 'chatId' },
+								h('label', { className: 'pw-label' }, t('settings.notify.chatId')),
+								h(
+									'div',
+									{ className: 'pw-row', style: { gap: 6, alignItems: 'center' } },
+									h('input', {
+										className: 'pw-input',
+										spellCheck: false,
+										autoComplete: 'off',
+										value: draft.chatId,
+										placeholder: t('settings.notify.chatIdPlaceholder'),
+										onChange: (event) => update({ chatId: event.target.value }),
+									}),
+									h(InfoTip, { text: t('settings.notify.chatIdHelp'), align: 'end' })
+								)
+							),
+							h(
+								'div',
+								{ className: 'pw-row', style: { gap: 8, alignItems: 'center', flexWrap: 'wrap' }, key: 'test' },
+								h(Button, { onClick: () => void sendTest(), disabled: testing || props.loading === true }, testing ? t('settings.notify.testing') : t('settings.notify.test')),
+								testResult === null
+									? null
+									: h(
+											'span',
+											{ className: 'pw-test-result', 'data-ok': testResult.ok ? 'true' : 'false', role: 'status' },
+											testResult.ok ? t('settings.notify.testOk') : t('settings.notify.testFailed', { error: testResult.message })
+										)
+							),
+						]
+					: [
+							h(
+								'div',
+								{ className: 'pw-field', key: 'webhook' },
+								h('label', { className: 'pw-label' }, t('settings.feishu.label')),
+								h(
+									'div',
+									{ className: 'pw-row', style: { gap: 6, alignItems: 'center' } },
+									h('input', {
+										className: 'pw-input',
+										type: 'url',
+										spellCheck: false,
+										autoComplete: 'off',
+										placeholder: t('settings.feishu.placeholder'),
+										value: draft.feishuWebhook,
+										onChange: (event) => update({ feishuWebhook: event.target.value }),
+									}),
+									h(InfoTip, { text: t('settings.feishu.help'), align: 'end' })
+								)
+							),
+						];
 
 			return h(
 				PageShell,
@@ -2848,26 +3021,10 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				h(
 					Section,
 					{ key: 'feishu', title: t('settings.feishu.title') },
-					h(
-						'div',
-						{ className: 'pw-field' },
-						h('label', { className: 'pw-label' }, t('settings.feishu.label')),
-						h(
-							'div',
-							{ className: 'pw-row', style: { gap: 6, alignItems: 'center' } },
-							h('input', {
-								className: 'pw-input',
-								type: 'url',
-								spellCheck: false,
-								autoComplete: 'off',
-								placeholder: t('settings.feishu.placeholder'),
-								value: draft.feishuWebhook,
-								onChange: (event) => update({ feishuWebhook: event.target.value }),
-							}),
-							h(InfoTip, { text: t('settings.feishu.help'), align: 'end' })
-						)
-					),
-					h(DeliveryLine, { delivery: lastDelivery })
+					channelPicker,
+					...channelFields,
+					// Same status line as the watch detail footer (A2 §4.5).
+					h(DeliveryLine, { key: 'delivery', delivery: lastDelivery })
 				)
 			);
 		}
