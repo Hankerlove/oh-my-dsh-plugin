@@ -60,7 +60,7 @@ import { deliverAppCard } from './host/feishu.js';
 import { buildCalendarCard, buildFailureCard, buildTestCard, buildWatchCard, sendFeishu } from './host/notify.js';
 import { createRouter } from './host/routes.js';
 import { clampCadence, createStore } from './host/store.js';
-import { createLogger, isoNow, minSeries, sleep } from './host/util.js';
+import { createLogger, isDateString, isoDate, isoNow, minSeries, sleep } from './host/util.js';
 
 export const name = 'price-watch';
 
@@ -532,25 +532,73 @@ export function apply(ctx) {
   }
   // #endregion
 
-  async function tick({ force = false } = {}) {
+  // #region expired monitors (D1)
+  /**
+   * 这个监控的「最后一天」：单程看 departDate，往返看 returnDate。行情模式没有
+   * 日期（日期待定），永远返回 null —— 它不该因为时间流逝被删掉。
+   */
+  function expiryDateOf(monitor) {
+    if (monitor?.mode !== 'watch') return null;
+    const params = monitor?.params || {};
+    const date = params.trip === 'round' ? params.returnDate || params.departDate : params.departDate;
+    return isDateString(date) ? date : null;
+  }
+
+  /**
+   * `date < 本地今天` 才算过期：今天出发（或今天返程）的监控仍然有效，
+   * 只有整趟行程都已经过去才该退订。`isoDate()` 用的是 Host 本地时区，
+   * 与用户看到的日期一致。
+   */
+  function isExpired(monitor, today = isoDate()) {
+    const date = expiryDateOf(monitor);
+    return Boolean(date) && date < today;
+  }
+
+  /**
+   * 删除过期监控（D1，用户明确要求「直接自动清除」而不是停用）。
+   *
+   * 两点是有意的：
+   *  - 在**任何采集之前**执行：让过期监控再跑一次 L2 是白费一次浏览器采集；
+   *  - **不投递任何卡片**：行程结束了就不该再收到「新低价 / 采集失败」的消息，
+   *    幂等键和投递日志也不必为一条已消失的监控留痕。
+   * `store.removeMonitor` 负责清掉快照/序列文件与 state 里的残留条目。
+   */
+  async function purgeExpiredMonitors() {
+    let removed = 0;
+    const today = isoDate();
+    for (const monitor of store.listMonitors()) {
+      if (!isExpired(monitor, today)) continue;
+      try {
+        if (!(await store.removeMonitor(monitor.id))) continue;
+        removed += 1;
+        logger.info(`监控已过期（${expiryDateOf(monitor)} 早于 ${today}），已自动删除：${monitor.title} (${monitor.id})`);
+      } catch (error) {
+        logger.warn(`自动删除过期监控失败 ${monitor.id}: ${String(error?.message || error)}`);
+      }
+    }
+    return removed;
+  }
+  // #endregion
+
+  async function tick() {
     if (running || disposed) return { ok: true, skipped: 'busy' };
     running = true;
     try {
       await store.init();
+      // D1：先清过期监控，再决定采集目标（删除必须早于任何一次采集）。
+      const removed = await purgeExpiredMonitors();
       let collected = 0;
-      const targets = store.listMonitors().filter((monitor) => (force ? true : monitor.enabled !== false));
+      const targets = store.listMonitors().filter((monitor) => monitor.enabled !== false);
       for (const monitor of targets) {
         if (disposed) break;
-        if (!force) {
-          const due = Date.parse(store.getState().nextDue?.[monitor.id] || '');
-          if (Number.isFinite(due) && due > Date.now()) continue;
-        }
+        const due = Date.parse(store.getState().nextDue?.[monitor.id] || '');
+        if (Number.isFinite(due) && due > Date.now()) continue;
         await collectOne(monitor);
         collected += 1;
         // 同一 tick 内多个 monitor 之间也要错开，不要连发。
         await sleep(1500 + Math.floor(Math.random() * 2500));
       }
-      return { ok: true, collected };
+      return { ok: true, collected, removed };
     } catch (error) {
       logger.error('调度心跳失败', error);
       return { ok: false, error: String(error?.message || error) };
@@ -589,7 +637,6 @@ export function apply(ctx) {
       }
       return collectOne(monitor);
     },
-    refreshAll: async () => tick({ force: true }),
     /**
      * `POST /notify/test`（spec §4）：用当前通道发一张测试卡，成功/失败都原样回给
      * 设置页就地展示。测试消息不参与 per-monitor 幂等，也不写投递日志。
@@ -655,7 +702,7 @@ export function apply(ctx) {
       const monitors = store.listMonitors();
       const failures = Object.values(state.failures || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
       return {
-        version: '0.5.1',
+        version: '0.6.0',
         auth: { ...(state.auth || { status: 'unknown' }), available },
         lastCollectAt: state.lastCollectAt,
         monitorCount: monitors.length,

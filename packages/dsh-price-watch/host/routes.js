@@ -120,7 +120,7 @@ function calendarSummary(doc) {
  * @param {object} deps
  * @param {ReturnType<import('./store.js').createStore>} deps.store
  * @param {object} deps.logger
- * @param {{ refreshMonitor:(id:string, options?:object)=>Promise<object>, refreshAll:()=>Promise<object>, status:()=>Promise<object>, panelUrl:()=>string }} deps.actions
+ * @param {{ refreshMonitor:(id:string, options?:object)=>Promise<object>, notifyTest:()=>Promise<object>, status:()=>Promise<object>, panelUrl:()=>string }} deps.actions
  */
 export function createRouter({ store, logger, actions }) {
   /** `l2: { lastAt, ok }` for the list item; `null` until the monitor ran L2. */
@@ -460,11 +460,6 @@ export function createRouter({ store, logger, actions }) {
     if ((segments[0] === 'deliveries' || segments[0] === 'alerts') && method === 'GET') {
       const limit = Math.max(1, Math.min(200, Number(searchParams.get('limit') || 50)));
       return sendJson(res, 200, { ok: true, data: { deliveries: await store.readDeliveries(limit) } });
-    }
-
-    // /api/refresh — collect every monitor now (the panel's ↻ button)
-    if (segments[0] === 'refresh' && method === 'POST') {
-      return sendJson(res, 200, { ok: true, data: await actions.refreshAll() });
     }
 
     return sendJson(res, 404, { ok: false, error: '接口不存在' });

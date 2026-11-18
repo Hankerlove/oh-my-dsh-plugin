@@ -17,8 +17,9 @@
  *    booking page is opened exactly once, after all rows are expanded, and the
  *    same figure is applied to every row;
  *  - each flight gets `prices: [{ passengerId, bare, total, fareLabel }]` and
- *    `taxIncluded` (its cheapest payable price); the array is sorted by
- *    `taxIncluded` ascending with the priceless rows last;
+ *    `taxIncluded` (its cheapest payable price), plus `seats` / `soldOut` (D3:
+ *    「剩 N 张」structured out of the row text, `null`/`false` when absent); the
+ *    array is sorted by `taxIncluded` ascending with the priceless rows last;
  *  - `points` carries one point per passenger: that passenger's cheapest payable
  *    price across the TOP10;
  *  - `lowest = { flightNo, total }` is the cheapest payable price overall.
@@ -95,6 +96,44 @@ export function parseFareRules(text) {
     out.maxPax = Number(match[2]);
   }
   return out;
+}
+
+/**
+ * D3：从任意一段页面文本解析余票结构。
+ *
+ * - 「剩 3 张」「还剩3张」 → `{ seats: 3, soldOut: false }`
+ * - 「无票 / 售罄 / 已售完」 → `{ seats: null, soldOut: true }`
+ * - 都没写 → `{ seats: null, soldOut: false }`
+ *
+ * 列表行解析在页面上下文（`page.evaluate`）里执行，无法调用这里的函数，所以
+ * `readRowList` 里保留了同样的两条正则 —— 改这里时请同步那边。
+ */
+export function parseSeatInfo(text) {
+  const source = String(text || '');
+  const match = source.match(/剩\s?(\d+)\s?张/);
+  return {
+    seats: match ? Number(match[1]) : null,
+    soldOut: /无票|售罄|已售完/.test(source),
+  };
+}
+
+/**
+ * D3：行级余票为准，产品级只在行级没写时补齐。
+ *
+ * 售罄取「或」：任何一层看到无票都算售罄（少报售罄比多报更糟），但行级明确
+ * 写了剩余张数时，不采信产品级的「无票」反证。
+ */
+export function resolveSeatInfo(row, product) {
+  const rowSeats = Number.isInteger(row?.seats) ? row.seats : null;
+  const rowSoldOut = row?.soldOut === true;
+  const productSeats = Number.isInteger(product?.seats) ? product.seats : null;
+  const productSoldOut = product?.soldOut === true;
+  // 行级说无票就不要再用产品级的张数去「补」——两个口径都指向无票时，露出张数会误导。
+  if (rowSoldOut) return { seats: rowSeats, soldOut: true };
+  // 行级写了张数：以它为准，忽略产品级的「无票」反证（产品文案常是旧口径）。
+  if (rowSeats !== null) return { seats: rowSeats, soldOut: false };
+  // 行级完全没写余票：产品级是唯一线索，有则用。
+  return { seats: productSeats, soldOut: productSoldOut };
 }
 
 /** Can `passenger` book a product carrying `rules`? */
@@ -446,6 +485,12 @@ export function createBrowserCollector({ rootDir, logger, store }) {
             depAirport = airportOf(text.slice(i1 + depTime.length));
           }
           const cabinMatch = text.match(/(超级经济舱|经济舱|公务舱|头等舱)\s*([\d.]+\s*折)?/);
+          // D3 余票结构化：与模块顶部的 parseSeatInfo 保持同步（页面上下文里拿不到
+          // 模块作用域的函数）。拿不到就是 null / false —— 不猜。展开产品卡片里也
+          // 可能写剩票，但行级是权威来源（优先级见 resolveSeatInfo）。
+          const seatMatch = text.match(/剩\s?(\d+)\s?张/);
+          const seats = seatMatch ? Number(seatMatch[1]) : null;
+          const soldOut = /无票|售罄|已售完/.test(text);
           // Rows carry several ¥ numbers: the fare ("¥330起"), sometimes a
           // discount ("立减¥50") or a coupon. Prefer numbers marked 起, and never
           // trust anything below ¥100 as an airfare — a 50 here sorts the row to
@@ -466,6 +511,8 @@ export function createBrowserCollector({ rootDir, logger, store }) {
             cabin: cabinMatch ? cabinMatch[1] : '',
             discount: cabinMatch && cabinMatch[2] ? cabinMatch[2].replace(/\s+/g, '') : null,
             listPrice: prices.length ? Math.min(...prices) : 0,
+            seats,
+            soldOut,
           };
         }).filter((row) => row.listPrice > 0);
         // Re-number after the filter so `rowIndex` is the DOM marker the later
@@ -698,6 +745,10 @@ export function createBrowserCollector({ rootDir, logger, store }) {
    * Choose one bookable product per passenger out of an expanded row.
    * Returns `null` when the row cannot serve any passenger (e.g. every product is
    * student-only), which the caller treats as "this row has no payable price".
+   *
+   * Also reports the row's product-level 余票 markers: the list row is the
+   * authoritative source (see `flightOf`), these are only a fallback for rows
+   * that say nothing themselves.
    */
   function chooseFares(snapshot, passengers, paxCount) {
     if (!snapshot || !Array.isArray(snapshot.products) || snapshot.products.length === 0) return null;
@@ -719,7 +770,16 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       });
     }
     if (chosen.length === 0) return null;
-    return { flightNo: snapshot.flightNo || '', snapshot, chosen };
+    // 产品级余票只取最便宜的那个产品卡片：同一行的产品通常共享余票描述。
+    const leadProduct = catalogue[0]?.product || null;
+    const productSeats = parseSeatInfo(leadProduct?.text);
+    return {
+      flightNo: snapshot.flightNo || '',
+      snapshot,
+      chosen,
+      productSeats: productSeats.seats,
+      productSoldOut: productSeats.soldOut,
+    };
   }
 
   /**
@@ -763,6 +823,8 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       fareLabel: entry.fareLabel,
     }));
     const totals = prices.map((price) => price.total).filter((value) => Number.isFinite(value) && value > 0);
+    // D3：行级余票为准，产品级只补齐（规则集中在 resolveSeatInfo）。
+    const seatInfo = resolveSeatInfo(row, { seats: hit?.productSeats ?? null, soldOut: hit?.productSoldOut === true });
     return {
       no: row.flightNo || hit?.flightNo || snapshot?.flightNo || '',
       airline: row.airline || snapshot?.airline || '',
@@ -776,6 +838,8 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       arrAirport: row.arrAirport || snapshot?.arrAirport || '',
       listPrice: Number(row.listPrice) || 0,
       taxIncluded: totals.length ? Math.min(...totals) : null,
+      seats: seatInfo.seats,
+      soldOut: seatInfo.soldOut,
       prices,
       expanded: prices.length > 0,
     };

@@ -602,6 +602,8 @@ window.__ModuleLoader__.load({
 			'calendar.caption': '未来 380 天每天最低含税价',
 			'calendar.out': '去程',
 			'calendar.back': '回程',
+			'calendar.outBeforeBack': '去程必须早于回程',
+			'calendar.backAfterOut': '回程必须晚于去程',
 			'calendar.empty': '还没有日历数据，稍后会自动刷新',
 			'calendar.fetchedAt': '更新于 {when}',
 			'calendar.pin': '钉住 {date} · {price}',
@@ -622,6 +624,9 @@ window.__ModuleLoader__.load({
 			'watch.trendTitle': '最低可订价走势',
 			'watch.trendEmpty': '还没有采集到实付价，登录携程后点「立即采集」',
 			'watch.taxIncluded': '待支付价',
+			'watch.seats': '余票',
+			'watch.soldOut': '售罄',
+			'watch.seatsLeft': '剩 {n} 张',
 			'watch.status': '状态',
 			'watch.noPrice': '未采到价格',
 			'watch.bookable': '可订',
@@ -837,6 +842,8 @@ window.__ModuleLoader__.load({
 			'calendar.caption': 'Lowest tax-included fare for each of the next 380 days',
 			'calendar.out': 'Outbound',
 			'calendar.back': 'Return',
+			'calendar.outBeforeBack': 'Departure must be before the return',
+			'calendar.backAfterOut': 'Return must be after the departure',
 			'calendar.empty': 'No calendar data yet. It refreshes on schedule.',
 			'calendar.fetchedAt': 'Updated {when}',
 			'calendar.pin': 'Pin {date} · {price}',
@@ -857,6 +864,9 @@ window.__ModuleLoader__.load({
 			'watch.trendTitle': 'Lowest bookable price trend',
 			'watch.trendEmpty': 'No real fares collected yet. Sign in to Ctrip and use "Collect now".',
 			'watch.taxIncluded': 'Payable',
+			'watch.seats': 'Seats',
+			'watch.soldOut': 'Sold out',
+			'watch.seatsLeft': '{n} left',
 			'watch.status': 'Status',
 			'watch.noPrice': 'No price',
 			'watch.bookable': 'Bookable',
@@ -1053,6 +1063,8 @@ window.__ModuleLoader__.load({
 .pw-iconbtn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .pw-iconbtn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
 .pw-iconbtn:disabled { opacity: 0.4; cursor: default; }
+.pw-iconbtn[data-tone="danger"] { color: var(--dsw-alias-state-error-primary); }
+.pw-iconbtn[data-tone="danger"]:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-danger); color: var(--dsw-alias-state-error-primary); }
 /* form */
 .pw-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .pw-form-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
@@ -1181,6 +1193,12 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-table tbody tr[data-cheapest="true"] td { background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, transparent); }
 .pw-table tbody tr[data-cheapest="true"] td:first-child { box-shadow: inset 2px 0 0 var(--dsw-alias-state-success-primary); }
 .pw-nowrap { white-space: nowrap; }
+.pw-table th.pw-seats, .pw-table td.pw-seats { width: 1%; white-space: nowrap; }
+.pw-seats[data-tone="normal"] { color: var(--dsw-alias-label-secondary); }
+.pw-seats[data-tone="few"] { color: var(--dsw-alias-state-warn-primary); }
+.pw-seats[data-tone="soldout"] { color: var(--dsw-alias-state-error-primary); }
+.pw-seats[data-tone="none"] { color: var(--dsw-alias-label-tertiary); }
+@media (max-width: 760px) { .pw-table .pw-craft { display: none; } }
 .pw-table tr:last-child td { border-bottom: none; }
 .pw-table .pw-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* watch detail bits */
@@ -1312,6 +1330,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					disabled: props.disabled === true,
 					onClick: props.onClick,
 					style: props.style,
+					'data-tone': props.tone === 'danger' ? 'danger' : undefined,
 				},
 				props.children
 			);
@@ -1856,8 +1875,12 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						)
 			);
 		}
-		/** Bars for the 380-day calendar; y is the tax-included lowest fare. */
-		function buildCalendarLayout(days, selectedDate) {
+		/**
+		 * Bars for the 380-day calendar; y is the tax-included lowest fare.
+		 * `disabledBefore` greys out every bar on or before that day and
+		 * `disabledAfter` every bar on or after it (round-trip constraints).
+		 */
+		function buildCalendarLayout(days, selectedDate, disabledBefore, disabledAfter) {
 			const points = Array.isArray(days) ? days : [];
 			if (points.length === 0) return null;
 			const padLeft = 48;
@@ -1891,6 +1914,11 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			}
 			const slot = (plotRight - plotLeft) / points.length;
 			const barWidth = Math.max(0.9, slot * 0.68);
+			const isDisabled = (date) => {
+				if (typeof disabledBefore === 'string' && disabledBefore !== '' && date <= disabledBefore) return true;
+				if (typeof disabledAfter === 'string' && disabledAfter !== '' && date >= disabledAfter) return true;
+				return false;
+			};
 			const bars = points.map((point, index) => {
 				const y = yOf(point.total);
 				return {
@@ -1898,6 +1926,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					total: point.total,
 					bare: point.bare,
 					index,
+					disabled: isDisabled(point.date),
 					x: plotLeft + index * slot + (slot - barWidth) / 2,
 					y,
 					width: barWidth,
@@ -1932,9 +1961,16 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		 * `total`. All bars sharing the period low are green; the hovered bar is
 		 * bright with a stroke and the rest dim to 0.55; the picked bar keeps a brand
 		 * outline. Clicking a bar reports the day to the pin bar below.
+		 *
+		 * `disabledBefore` / `disabledAfter` mark days outside the legal window (the
+		 * round-trip calendars use them to keep the return after the departure): those
+		 * bars are faint, ignore hover and click and never show a tooltip.
 		 */
 		function CalendarChart(props) {
-			const layout = useMemo(() => buildCalendarLayout(props.days, props.selectedDate), [props.days, props.selectedDate]);
+			const layout = useMemo(
+				() => buildCalendarLayout(props.days, props.selectedDate, props.disabledBefore, props.disabledAfter),
+				[props.days, props.selectedDate, props.disabledBefore, props.disabledAfter]
+			);
 			const wrapRef = useRef(null);
 			const [hoverIndex, setHoverIndex] = useState(null);
 
@@ -1972,14 +2008,16 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					)
 				),
 				layout.bars.map((bar) => {
-					const selected = props.selectedDate === bar.date;
+					const disabled = bar.disabled === true;
+					const selected = !disabled && props.selectedDate === bar.date;
 					const isLowest = bar.total === layout.min;
-					const isHovered = hoverIndex === bar.index;
-					const dimmed = hoverIndex !== null && !isHovered;
+					const isHovered = !disabled && hoverIndex === bar.index;
+					const dimmed = !disabled && hoverIndex !== null && !isHovered;
 					let opacity = 0.8;
-					if (dimmed) opacity = 0.55;
-					if (isHovered) opacity = 1;
-					const stroke = selected ? 'var(--dsw-alias-state-business-primary)' : isHovered ? 'var(--dsw-alias-label-secondary)' : 'none';
+					if (disabled) opacity = 0.25;
+					else if (dimmed) opacity = 0.55;
+					else if (isHovered) opacity = 1;
+					const stroke = disabled ? 'none' : selected ? 'var(--dsw-alias-state-business-primary)' : isHovered ? 'var(--dsw-alias-label-secondary)' : 'none';
 					return h('rect', {
 						key: bar.date,
 						className: 'pw-cal-bar',
@@ -1991,9 +2029,10 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						fill: isLowest ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-idle-primary)',
 						opacity,
 						stroke,
-						strokeWidth: selected ? 1.6 : isHovered ? 1 : 0,
+						strokeWidth: disabled ? 0 : selected ? 1.6 : isHovered ? 1 : 0,
 						'data-selected': selected ? 'true' : 'false',
 						'data-lowest': isLowest ? 'true' : 'false',
+						'data-disabled': disabled ? 'true' : 'false',
 					});
 				}),
 				layout.xTicks.map((tick, index) => h('text', { key: `x-${index}`, x: tick.x, y: layout.plotBottom + 16, textAnchor: 'middle', fontSize: 11, fill: 'var(--dsw-alias-label-secondary)' }, tick.label)),
@@ -2016,11 +2055,16 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				{
 					className: 'pw-cal-wrap',
 					ref: wrapRef,
-					onMouseMove: (event) => setHoverIndex(pickIndex(event)),
+					onMouseMove: (event) => {
+						const index = pickIndex(event);
+						// A greyed bar is not a candidate: no hover state, no tooltip.
+						setHoverIndex(index !== null && layout.bars[index] && layout.bars[index].disabled ? null : index);
+					},
 					onMouseLeave: () => setHoverIndex(null),
 					onClick: (event) => {
 						const index = pickIndex(event);
 						if (index === null || typeof props.onPick !== 'function') return;
+						if (layout.bars[index] && layout.bars[index].disabled) return;
 						props.onPick(layout.points[index]);
 					},
 				},
@@ -2446,6 +2490,22 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 
 			const outPick = outDays.find((day) => day.date === selectedOut) || null;
 			const backPick = backDays.find((day) => day.date === selectedBack) || null;
+
+			/**
+			 * The two calendars are mutually constrained: the return has to be strictly
+			 * after the departure. Picking one side clears the other when the pair is no
+			 * longer legal, so the pin bar can never carry an inverted date range.
+			 */
+			const pickOut = (day) => {
+				const next = day.date === selectedOut ? null : day.date;
+				setSelectedOut(next);
+				if (next !== null && selectedBack !== null && selectedBack <= next) setSelectedBack(null);
+			};
+			const pickBack = (day) => {
+				const next = day.date === selectedBack ? null : day.date;
+				setSelectedBack(next);
+				if (next !== null && selectedOut !== null && selectedOut >= next) setSelectedOut(null);
+			};
 			const pinTotal = outPick === null ? null : round ? (backPick === null ? null : outPick.total + backPick.total) : outPick.total;
 			const sourcePassengerIds = Array.isArray(monitor.passengerIds) ? monitor.passengerIds.filter((id) => typeof id === 'string') : [];
 			const needsPassenger = sourcePassengerIds.length === 0;
@@ -2478,12 +2538,17 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					meta,
 					actions: [
 						h(Button, { key: 'refresh', size: 'sm', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: props.busy === true }, t('detail.refresh')),
+						// Pause / delete are icon buttons, exactly like the list page's actions.
 						h(
-							Button,
-							{ key: 'pause', size: 'sm', icon: enabled ? h(PauseIcon, { size: 13 }) : h(PlayIcon, { size: 13 }), onClick: () => props.onToggleEnabled(monitor), disabled: props.busy === true },
-							enabled ? t('detail.pause') : t('detail.resume')
+							'div',
+							{ className: 'pw-head-icons', key: 'icons' },
+							h(
+								IconButton,
+								{ label: enabled ? t('detail.pause') : t('detail.resume'), onClick: () => props.onToggleEnabled(monitor), disabled: props.busy === true },
+								enabled ? h(PauseIcon, { size: 15 }) : h(PlayIcon, { size: 15 })
+							),
+							h(IconButton, { label: t('detail.delete'), tone: 'danger', onClick: () => props.onDelete(monitor), disabled: props.busy === true }, h(TrashIcon, { size: 15 }))
 						),
-						h(Button, { key: 'delete', size: 'sm', variant: 'danger', icon: h(TrashIcon, { size: 13 }), onClick: () => props.onDelete(monitor), disabled: props.busy === true }, t('detail.delete')),
 					],
 				},
 				props.banner,
@@ -2493,7 +2558,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					{ key: 'out', title: round ? `${t('calendar.title')} · ${t('calendar.out')}` : t('calendar.title'), help: t('calendar.caption') },
 					calendar === null && props.calendarError === null
 						? h(Skeleton, { height: 150, radius: 12 })
-						: h(CalendarChart, { days: outDays, selectedDate: selectedOut, onPick: (day) => setSelectedOut(day.date === selectedOut ? null : day.date) }),
+						: h(CalendarChart, { days: outDays, selectedDate: selectedOut, disabledAfter: selectedBack, onPick: pickOut }),
+					round && selectedBack !== null ? h('span', { className: 'pw-hint' }, t('calendar.outBeforeBack')) : null,
 					outStatsItems.length === 0 ? null : h(Stats, { items: outStatsItems }),
 					fetchedAt === null ? null : h('span', { className: 'pw-hint' }, t('calendar.fetchedAt', { when: relativeTime(fetchedAt) }))
 				),
@@ -2503,7 +2569,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 							{ key: 'back', title: `${t('calendar.title')} · ${t('calendar.back')}`, help: t('calendar.caption') },
 							calendar === null && props.calendarError === null
 								? h(Skeleton, { height: 150, radius: 12 })
-								: h(CalendarChart, { days: backDays, selectedDate: selectedBack, onPick: (day) => setSelectedBack(day.date === selectedBack ? null : day.date) }),
+								: h(CalendarChart, { days: backDays, selectedDate: selectedBack, disabledBefore: selectedOut, onPick: pickBack }),
+							round && selectedOut !== null ? h('span', { className: 'pw-hint' }, t('calendar.backAfterOut')) : null,
 							backStatsItems.length === 0 ? null : h(Stats, { items: backStatsItems })
 						)
 					: null,
@@ -2616,9 +2683,22 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		}
 
 		/**
-		 * TOP10 flights: 航班号 / 航司 / 时刻 / 机场 / 机型 / 待支付价 / 状态, cheapest
-		 * first with unpriced rows last. The cheapest row is highlighted; an unpriced
-		 * row shows `—` and explains itself in its `title`.
+		 * 余票 cell: `售罄` / `剩 N 张` / `—`, with a tone for the scarce cases so the
+		 * table can colour them without a second lookup.
+		 */
+		function seatsInfo(flight) {
+			if (flight && flight.soldOut === true) return { text: t('watch.soldOut'), tone: 'soldout' };
+			const seats = flight && typeof flight.seats === 'number' && Number.isFinite(flight.seats) ? Math.max(0, Math.round(flight.seats)) : null;
+			if (seats === null) return { text: '—', tone: 'none' };
+			if (seats <= 0) return { text: t('watch.soldOut'), tone: 'soldout' };
+			return { text: t('watch.seatsLeft', { n: seats }), tone: seats <= 3 ? 'few' : 'normal' };
+		}
+
+		/**
+		 * TOP10 flights: 航班号 / 航司 / 时刻 / 机场 / 机型 / 待支付价 / 余票 / 状态,
+		 * cheapest first with unpriced rows last. The cheapest row is highlighted; an
+		 * unpriced row shows `—` and explains itself in its `title`. The 机型 column
+		 * is hidden on narrow panels so the 余票 column never squeezes the table.
 		 */
 		function FlightTable(props) {
 			const flights = Array.isArray(props.flights) ? props.flights.filter((flight) => flight && typeof flight === 'object') : [];
@@ -2635,14 +2715,15 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				})
 				.slice(0, 10);
 			const cheapest = payableOf(sorted[0]);
-			const headers = [t('watch.flightNo'), t('watch.airline'), t('watch.time'), t('watch.airport'), t('watch.craft'), t('watch.taxIncluded'), t('watch.status')];
+			const headers = [t('watch.flightNo'), t('watch.airline'), t('watch.time'), t('watch.airport'), t('watch.craft'), t('watch.taxIncluded'), t('watch.seats'), t('watch.status')];
+			const headerClass = (index) => (index === 5 ? 'pw-num' : index === 4 ? 'pw-craft' : index === 6 ? 'pw-seats' : undefined);
 			return h(
 				'div',
 				{ className: 'pw-table-wrap' },
 				h(
 					'table',
 					{ className: 'pw-table' },
-					h('thead', null, h('tr', null, headers.map((label, index) => h('th', { key: index, className: index === 5 ? 'pw-num' : undefined }, label)))),
+					h('thead', null, h('tr', null, headers.map((label, index) => h('th', { key: index, className: headerClass(index) }, label)))),
 					h(
 						'tbody',
 						null,
@@ -2651,6 +2732,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 							const prices = Array.isArray(flight.prices) ? flight.prices : [];
 							const fareLabel = prices.map((item) => (item && typeof item.fareLabel === 'string' ? item.fareLabel : '')).find((label) => label !== '') || '';
 							const isCheapest = total !== null && total === cheapest;
+							const seats = seatsInfo(flight);
 							return h(
 								'tr',
 								{ key: `${flight.no || 'flight'}-${index}`, 'data-cheapest': isCheapest ? 'true' : 'false', title: total === null ? t('watch.priceMissingHint') : undefined },
@@ -2658,8 +2740,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								h('td', null, flight.airline || '—'),
 								h('td', { className: 'pw-mono pw-nowrap' }, `${flight.depTime || '—'} – ${flight.arrTime || '—'}`),
 								h('td', null, `${flight.depAirport || '—'} → ${flight.arrAirport || '—'}`),
-								h('td', null, flight.craft || '—'),
+								h('td', { className: 'pw-craft' }, flight.craft || '—'),
 								h('td', { className: 'pw-num' }, total === null ? '—' : formatMoney(total)),
+								h('td', { className: 'pw-seats', 'data-tone': seats.tone }, seats.text),
 								h('td', { className: 'pw-nowrap' }, total === null ? h('span', { className: 'pw-hint' }, t('watch.noPrice')) : fareLabel !== '' ? h('span', { className: 'pw-hint' }, fareLabel) : h('span', { className: 'pw-hint' }, t('watch.bookable')))
 							);
 						})
@@ -2720,12 +2803,17 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					title: monitorTitle(monitor),
 					meta,
 					actions: [
+						// Pause / delete are icon buttons, exactly like the list page's actions.
 						h(
-							Button,
-							{ key: 'pause', size: 'sm', icon: enabled ? h(PauseIcon, { size: 13 }) : h(PlayIcon, { size: 13 }), onClick: () => props.onToggleEnabled(monitor), disabled: busy },
-							enabled ? t('detail.pause') : t('detail.resume')
+							'div',
+							{ className: 'pw-head-icons', key: 'icons' },
+							h(
+								IconButton,
+								{ label: enabled ? t('detail.pause') : t('detail.resume'), onClick: () => props.onToggleEnabled(monitor), disabled: busy },
+								enabled ? h(PauseIcon, { size: 15 }) : h(PlayIcon, { size: 15 })
+							),
+							h(IconButton, { label: t('detail.delete'), tone: 'danger', onClick: () => props.onDelete(monitor), disabled: busy }, h(TrashIcon, { size: 15 }))
 						),
-						h(Button, { key: 'delete', size: 'sm', variant: 'danger', icon: h(TrashIcon, { size: 13 }), onClick: () => props.onDelete(monitor), disabled: busy }, t('detail.delete')),
 					],
 				},
 				props.banner,
