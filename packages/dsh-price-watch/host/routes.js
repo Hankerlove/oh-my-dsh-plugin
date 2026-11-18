@@ -295,6 +295,8 @@ export function createRouter({ store, logger, actions }) {
             fetchedAt: doc?.fetchedAt || null,
             tax: doc?.tax && typeof doc.tax === 'object' ? doc.tax : null,
             lowest: doc?.lowest && typeof doc.lowest === 'object' ? doc.lowest : null,
+            // D10：往返监控的「联程 vs 两段单买」对比；单程监控为 null。
+            roundTrip: doc?.roundTrip && typeof doc.roundTrip === 'object' ? doc.roundTrip : null,
             flights: Array.isArray(doc?.flights) ? doc.flights : [],
           },
         });

@@ -9,7 +9,7 @@
  *   state.json       scheduler cursors, last-run marks, delivery bookkeeping
  *   prices/*.jsonl   one append-only series per watch monitor (L2 points only)
  *   calendar/*.json  latest full calendar snapshot per calendar monitor
- *   flights/*.json   latest browser flight list per watch monitor
+ *   flights/*.json   latest browser flight list per watch monitor (+ D10 roundTrip)
  *   alerts.jsonl     the delivery log (kept under its historical name)
  *
  * JSON documents are written through a temp file + rename so a crash mid-write
@@ -663,12 +663,95 @@ export function createStore(rootDir) {
     return (await readJson(join(flightsDir, `${id}.json`), null)).value;
   }
 
-  /** `lowest` = 所有航班所有乘客里的最低含税价（A2 spec §3.3），卡片和面板都用它。 */
+  /**
+   * `lowest` = 本次采集的最低待支付价，卡片和面板都用它。
+   * D10 起往返监控还可能带 `scheme: 'round'|'oneway'`（这个最低价来自哪种买法）。
+   */
   function normaliseLowest(value) {
     if (!value || typeof value !== 'object') return null;
     const total = Number(value.total);
     if (!Number.isFinite(total) || total <= 0) return null;
-    return { flightNo: typeof value.flightNo === 'string' ? value.flightNo : '', total: Math.round(total) };
+    return {
+      flightNo: typeof value.flightNo === 'string' ? value.flightNo : '',
+      total: Math.round(total),
+      scheme: value.scheme === 'round' || value.scheme === 'oneway' ? value.scheme : null,
+    };
+  }
+
+  /**
+   * D10 往返对比（`flights/<id>.json` 的 `roundTrip`）。
+   *
+   * 字段全部规范化成数字/字符串/null：快照要能被面板稳定读取，且老客户端遇到
+   * 未知字段也不会崩。缺失的一头写 null，`partial` 明确告诉 UI「这不是完整对比」。
+   */
+  function normaliseRoundTrip(value) {
+    if (!value || typeof value !== 'object') return null;
+    const round = (raw) => (Number.isFinite(Number(raw)) && Number(raw) > 0 ? Math.round(Number(raw)) : null);
+    const text = (raw) => (typeof raw === 'string' ? raw : '');
+    const leg = (raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const payable = round(raw.payable);
+      if (payable === null) return null;
+      return {
+        payable,
+        flightNo: text(raw.flightNo),
+        depTime: text(raw.depTime),
+        arrTime: text(raw.arrTime),
+        depAirport: text(raw.depAirport),
+        arrAirport: text(raw.arrAirport),
+      };
+    };
+    const roundLeg = value.round && typeof value.round === 'object'
+      ? {
+        payable: round(value.round.payable),
+        payableSource: value.round.payableSource === 'list' ? 'list' : 'order',
+        listTotal: round(value.round.listTotal),
+        flightNo: text(value.round.flightNo),
+        airline: text(value.round.airline),
+        craft: text(value.round.craft),
+        depTime: text(value.round.depTime),
+        arrTime: text(value.round.arrTime),
+        depAirport: text(value.round.depAirport),
+        arrAirport: text(value.round.arrAirport),
+        seats: Number.isInteger(value.round.seats) ? value.round.seats : null,
+        soldOut: value.round.soldOut === true,
+        return: value.round.return && typeof value.round.return === 'object'
+          ? {
+            flightNo: text(value.round.return.flightNo),
+            depTime: text(value.round.return.depTime),
+            arrTime: text(value.round.return.arrTime),
+            depAirport: text(value.round.return.depAirport),
+            arrAirport: text(value.round.return.arrAirport),
+            listPrice: round(value.round.return.listPrice),
+          }
+          : null,
+      }
+      : null;
+    const outLeg = leg(value.oneway?.out);
+    const backLeg = leg(value.oneway?.back);
+    const oneway = outLeg || backLeg
+      ? { out: outLeg, back: backLeg, sum: round(value.oneway?.sum) }
+      : null;
+    const comparison = value.comparison && typeof value.comparison === 'object'
+      ? {
+        cheaper: ['round', 'oneway', 'tie'].includes(value.comparison.cheaper) ? value.comparison.cheaper : null,
+        diff: round(value.comparison.diff) ?? 0,
+        diffPct: Number.isFinite(Number(value.comparison.diffPct)) ? Number(value.comparison.diffPct) : null,
+        minTotal: round(value.comparison.minTotal),
+        maxTotal: round(value.comparison.maxTotal),
+      }
+      : null;
+    return {
+      partial: value.partial === true,
+      round: roundLeg && roundLeg.payable !== null ? roundLeg : null,
+      oneway,
+      comparison,
+      errors: {
+        round: text(value.errors?.round) || null,
+        out: text(value.errors?.out) || null,
+        back: text(value.errors?.back) || null,
+      },
+    };
   }
 
   async function writeFlightsSnapshot(id, snapshot) {
@@ -676,6 +759,8 @@ export function createStore(rootDir) {
       fetchedAt: typeof snapshot?.fetchedAt === 'string' ? snapshot.fetchedAt : isoNow(),
       tax: snapshot?.tax && typeof snapshot.tax === 'object' ? snapshot.tax : null,
       lowest: normaliseLowest(snapshot?.lowest),
+      // D10：往返监控的「联程 vs 两段单买」对比；单程监控恒为 null。
+      roundTrip: normaliseRoundTrip(snapshot?.roundTrip),
       flights: Array.isArray(snapshot?.flights) ? snapshot.flights : [],
     };
     await writeJsonAtomic(join(flightsDir, `${id}.json`), doc);

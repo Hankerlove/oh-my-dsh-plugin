@@ -11,6 +11,10 @@
  * art with `renderTrendPng`, and the card builders accept the resulting
  * `imageKey`. There is deliberately no `action`/button element any more, and no
  * `#m=` deep link — the card is a report, not a navigation entry point.
+ *
+ * D10: a round-trip watch card also prints 「联程 ¥X / 两段单买 ¥Y / 谁省 Z」 from
+ * the snapshot's `roundTrip`, plus a 「部分数据」 marker when one scheme is
+ * missing — the two buying schemes are the whole point of that monitor.
  */
 import { CITY_NAMES, monthDay } from './util.js';
 
@@ -186,21 +190,69 @@ function flightLabel(flight) {
 }
 
 /**
+ * D10：往返监控的对比行。用户要的是「联程到手价 / 两段单买和 / 谁更便宜 / 差多少」，
+ * 所以数字与结论必须同屏出现，而不是让读者自己算。
+ *
+ * @param {{round?:{payable?:number}|null, oneway?:{sum?:number}|null,
+ *          comparison?:{cheaper?:string,diff?:number}|null, partial?:boolean}|null} roundTrip
+ */
+function roundSchemeLines(roundTrip) {
+  if (!roundTrip || typeof roundTrip !== 'object') return [];
+  const roundPayable = Number(roundTrip.round?.payable);
+  const onewaySum = Number(roundTrip.oneway?.sum);
+  const parts = [];
+  if (Number.isFinite(roundPayable) && roundPayable > 0) parts.push(`联程 ${money(roundPayable)}`);
+  if (Number.isFinite(onewaySum) && onewaySum > 0) parts.push(`两段单买 ${money(onewaySum)}`);
+  const lines = [];
+  if (parts.length > 0) {
+    let text = parts.join(' / ');
+    const comparison = roundTrip.comparison;
+    if (comparison && comparison.cheaper === 'tie') {
+      text += ' / 两者持平';
+    } else if (comparison && Number.isFinite(Number(comparison.diff)) && Number(comparison.diff) > 0) {
+      const winner = comparison.cheaper === 'round' ? '联程' : '两段单买';
+      text += ` / ${winner}省 ${money(comparison.diff)}`;
+    }
+    lines.push(text);
+  }
+  if (roundTrip.partial === true) {
+    const missing = [];
+    if (!roundTrip.round) missing.push('联程到手价');
+    if (!roundTrip.oneway) missing.push('两段单买');
+    lines.push(`（部分数据：缺 ${missing.length ? missing.join('、') : '完整到手价'}）`);
+  }
+  return lines;
+}
+
+/**
  * Watch-mode card (spec §3 监控).
  *
  * @param {{ monitor: object, lowest?: {flightNo:string,total:number}|null,
  *           lowestFlight?: object|null, previous?: number|null,
  *           flights?: Array<object>, imageKey?: string|null }} input
  */
-export function buildWatchCard({ monitor, lowest, lowestFlight, previous, flights, imageKey }) {
+export function buildWatchCard({ monitor, lowest, lowestFlight, previous, flights, roundTrip, imageKey }) {
   const current = Number(lowest?.total);
   const before = Number(previous);
-  const replayed = lowestFlight
+  // D10：往返监控的最低价值得说明来自哪种买法；联程时航班信息取联程的那一班。
+  const scheme = lowest?.scheme === 'round' || lowest?.scheme === 'oneway' ? lowest.scheme : null;
+  const roundFlight = scheme === 'round' && roundTrip?.round
+    ? {
+      no: roundTrip.round.flightNo || '',
+      depTime: roundTrip.round.depTime || '',
+      arrTime: roundTrip.round.arrTime || '',
+      depAirport: roundTrip.round.depAirport || '',
+      arrAirport: roundTrip.round.arrAirport || '',
+    }
+    : null;
+  const replayed = roundFlight
+    || lowestFlight
     || (Array.isArray(flights) ? flights.find((flight) => flight?.no && flight.no === lowest?.flightNo) : null);
   const label = flightLabel(replayed);
   const diff = Number.isFinite(current) && Number.isFinite(before) && before > 0 ? current - before : null;
 
-  const body = [`**${money(current)}** 当前最低可订价`];
+  const body = [`**${money(current)}** 当前最低可订价${scheme ? ` · ${scheme === 'round' ? '联程' : '两段单买'}` : ''}`];
+  body.push(...roundSchemeLines(roundTrip));
   if (label) body.push(label);
   const delta = deltaLine(current, previous);
   if (delta) body.push(delta);

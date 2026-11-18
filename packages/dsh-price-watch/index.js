@@ -124,7 +124,8 @@ export function apply(ctx) {
    * hashed, so an unrelated change (a new flight outside the TOP10, a different
    * `fetchedAt`, a re-ordered array the card does not print) must not re-push:
    *   行情  calendar.out / calendar.back 的 (date,total) 序列；
-   *   监控  flights 的 航班号 + 时刻 + 机场 + 含税价 序列；
+   *   监控  flights 的 航班号 + 时刻 + 机场 + 含税价 序列（D10 起再加最低价的买法
+   *        与联程/两段对比数字，因为卡片上会显示它们）；
    *   失败  错误文本。
    */
   function deliveryKeyFor(report) {
@@ -138,7 +139,17 @@ export function apply(ctx) {
         flight?.arrAirport || '',
         Number.isFinite(flight?.taxIncluded) ? flight.taxIncluded : null,
       ]);
-      return hashOf(['watch', flights]);
+      // D10：往返卡片会打印联程/两段的数字与结论、以及「联程/两段单买」标签，
+      // 这些变化必须改变幂等键，否则卡片内容变了却不推。
+      const roundTrip = report.roundTrip && typeof report.roundTrip === 'object'
+        ? [
+          Number(report.roundTrip.round?.payable) || null,
+          Number(report.roundTrip.oneway?.sum) || null,
+          report.roundTrip.comparison?.cheaper || null,
+          report.roundTrip.partial === true,
+        ]
+        : null;
+      return hashOf(['watch', flights, report.lowest?.scheme || null, roundTrip]);
     }
     const rows = (list) => (Array.isArray(list) ? list.map((row) => [row?.date || '', Number(row?.total) || 0]) : null);
     return hashOf(['calendar', rows(report.snapshot?.out), rows(report.snapshot?.back)]);
@@ -161,6 +172,8 @@ export function apply(ctx) {
         lowestFlight,
         previous: report.previous,
         flights: report.flights,
+        // D10：往返监控多两行对比（联程 / 两段单买 / 谁更便宜）；单程为 null。
+        roundTrip: report.roundTrip || null,
         imageKey,
       });
     }
@@ -473,8 +486,10 @@ export function apply(ctx) {
       const points = Array.isArray(result?.points) ? result.points : [];
       const flights = Array.isArray(result?.flights) ? result.flights : [];
       const lowest = result?.lowest || null;
+      // D10：往返监控带上「联程 vs 两段单买」的对比；单程监控这里是 undefined。
+      const roundTrip = result?.roundTrip && typeof result.roundTrip === 'object' ? result.roundTrip : null;
       await store.appendPoints(monitor.id, points);
-      await store.writeFlightsSnapshot(monitor.id, { fetchedAt: at, flights, tax: result?.tax || null, lowest });
+      await store.writeFlightsSnapshot(monitor.id, { fetchedAt: at, flights, tax: result?.tax || null, lowest, roundTrip });
       const state = store.getState();
       await store.saveState({
         l2LastRunBy: { ...(state.l2LastRunBy || {}), [monitor.id]: at },
@@ -493,6 +508,7 @@ export function apply(ctx) {
         kind: 'watch',
         flights,
         lowest,
+        roundTrip,
         previous: Number.isFinite(previous) && previous > 0 ? previous : null,
         minSeries: minSeriesTotals,
       });
@@ -702,7 +718,7 @@ export function apply(ctx) {
       const monitors = store.listMonitors();
       const failures = Object.values(state.failures || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
       return {
-        version: '0.6.0',
+        version: '0.7.0',
         auth: { ...(state.auth || { status: 'unknown' }), available },
         lastCollectAt: state.lastCollectAt,
         monitorCount: monitors.length,
