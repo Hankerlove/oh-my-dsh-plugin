@@ -353,6 +353,25 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   }
 
   /**
+   * The list is virtualised: only the first 7 rows exist in the DOM after load,
+   * the rest appear once the page is scrolled. Without this, "TOP 10" could
+   * never be more than 7 rows even though 19 flights exist for the day.
+   */
+  async function loadRowWindow(page, { target = READ_ROWS, rounds = 5, stepMs = 1600 } = {}) {
+    let previous = -1;
+    let count = 0;
+    for (let round = 0; round < rounds; round += 1) {
+      count = await page.evaluate(() => document.querySelectorAll('.flight-item').length).catch(() => count);
+      if (count >= target) return count;
+      if (count === previous) return count; // nothing new loaded, stop early
+      previous = count;
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight * 1.1)).catch(() => {});
+      await page.waitForTimeout(stepMs);
+    }
+    return count;
+  }
+
+  /**
    * Read up to 8 rows of static list-page information.
    * Best effort by design: any selector failure yields `[]` and the caller then
    * degrades to the single expanded row.
@@ -796,6 +815,9 @@ export function createBrowserCollector({ rootDir, logger, store }) {
 
         // Step 1 — static rows, then the cheapest TOP_N by *price*: the list is
         // often ordered by departure time, so the DOM order is not the answer.
+        // Scroll first: the list only renders ~7 rows until it is scrolled.
+        const loaded = await loadRowWindow(page);
+        logger.info(`航班列表已加载 ${loaded} 行，按价格取前 ${TOP_N} 行展开`);
         const rows = await readRowList(page);
         const targets = rows.slice().sort((a, b) => a.listPrice - b.listPrice).slice(0, TOP_N);
 
