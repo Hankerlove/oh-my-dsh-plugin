@@ -217,7 +217,11 @@ export function apply(ctx) {
   function renderTrend(report) {
     if (report.kind === 'failure') return null;
     try {
-      return renderTrendPng(trendValuesFor(report));
+      const values = trendValuesFor(report);
+      // A single point draws nothing worth looking at (the first collection of a
+      // monitor). Send the card without an image instead of a blank placeholder.
+      if (!Array.isArray(values) || values.length < 2) return null;
+      return renderTrendPng(values);
     } catch (error) {
       logger.warn(`走势图渲染失败，降级为无图卡片: ${String(error?.message || error)}`);
       return null;
