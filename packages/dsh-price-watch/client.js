@@ -71,13 +71,277 @@ window.__ModuleLoader__.load({
 		const CALENDAR_HEIGHT = 190;
 		const PASSENGER_TYPES = ['adult', 'student', 'child'];
 		/** Chinese airports offered by the city search; the dictionary owns their names. */
-		const CITY_CODES = [
-			'BJS', 'PEK', 'PKX', 'SHA', 'PVG', 'CAN', 'SZX', 'CTU', 'TFU', 'CKG',
-			'XIY', 'HGH', 'NKG', 'WUH', 'CSX', 'TAO', 'XMN', 'TSN', 'CGO', 'SYX',
-			'HAK', 'HRB', 'SHE', 'DLC', 'KMG', 'KWE', 'NNG', 'URC', 'FOC', 'TNA',
-			'WNZ', 'NGB', 'HFE', 'ZUH', 'LHW', 'TYN', 'HET', 'SJW', 'INC', 'XNN',
-			'CGQ', 'LXA',
+		/**
+		 * Built-in city / airport catalog, ordered roughly by traffic so an empty
+		 * query already shows the majors. `zh` + `en` are display names, `intl` marks
+		 * a non-mainland destination (the picker groups by it), and `alias` carries the
+		 * nicknames people actually type (「浦东」「大兴」「潮汕」…). Search matches the
+		 * Chinese name, its aliases and the IATA code — never the English name, so a
+		 * stray latin word does not surface a city by accident.
+		 *
+		 * Add a row here and everything downstream (new-monitor picker, card subtitle,
+		 * pin flow) picks it up: nothing assumes mainland-only routes.
+		 */
+		const CITIES = [
+			// ── mainland China ────────────────────────────────────────────────────
+			{ code: 'BJS', zh: '北京', en: 'Beijing', intl: false },
+			{ code: 'SHA', zh: '上海', en: 'Shanghai', intl: false, alias: { zh: ['上海虹桥', '虹桥'] } },
+			{ code: 'CAN', zh: '广州', en: 'Guangzhou', intl: false },
+			{ code: 'SZX', zh: '深圳', en: 'Shenzhen', intl: false },
+			{ code: 'CTU', zh: '成都', en: 'Chengdu', intl: false },
+			{ code: 'CKG', zh: '重庆', en: 'Chongqing', intl: false },
+			{ code: 'XIY', zh: '西安', en: "Xi'an", intl: false },
+			{ code: 'HGH', zh: '杭州', en: 'Hangzhou', intl: false },
+			{ code: 'NKG', zh: '南京', en: 'Nanjing', intl: false },
+			{ code: 'WUH', zh: '武汉', en: 'Wuhan', intl: false },
+			{ code: 'CSX', zh: '长沙', en: 'Changsha', intl: false },
+			{ code: 'TAO', zh: '青岛', en: 'Qingdao', intl: false },
+			{ code: 'XMN', zh: '厦门', en: 'Xiamen', intl: false },
+			{ code: 'TSN', zh: '天津', en: 'Tianjin', intl: false },
+			{ code: 'CGO', zh: '郑州', en: 'Zhengzhou', intl: false },
+			{ code: 'SYX', zh: '三亚', en: 'Sanya', intl: false },
+			{ code: 'HAK', zh: '海口', en: 'Haikou', intl: false },
+			{ code: 'HRB', zh: '哈尔滨', en: 'Harbin', intl: false },
+			{ code: 'SHE', zh: '沈阳', en: 'Shenyang', intl: false },
+			{ code: 'DLC', zh: '大连', en: 'Dalian', intl: false },
+			{ code: 'KMG', zh: '昆明', en: 'Kunming', intl: false },
+			{ code: 'KWE', zh: '贵阳', en: 'Guiyang', intl: false },
+			{ code: 'NNG', zh: '南宁', en: 'Nanning', intl: false },
+			{ code: 'URC', zh: '乌鲁木齐', en: 'Urumqi', intl: false },
+			{ code: 'FOC', zh: '福州', en: 'Fuzhou', intl: false },
+			{ code: 'TNA', zh: '济南', en: 'Jinan', intl: false },
+			{ code: 'WNZ', zh: '温州', en: 'Wenzhou', intl: false },
+			{ code: 'NGB', zh: '宁波', en: 'Ningbo', intl: false },
+			{ code: 'HFE', zh: '合肥', en: 'Hefei', intl: false },
+			{ code: 'ZUH', zh: '珠海', en: 'Zhuhai', intl: false },
+			{ code: 'LHW', zh: '兰州', en: 'Lanzhou', intl: false },
+			{ code: 'TYN', zh: '太原', en: 'Taiyuan', intl: false },
+			{ code: 'HET', zh: '呼和浩特', en: 'Hohhot', intl: false },
+			{ code: 'SJW', zh: '石家庄', en: 'Shijiazhuang', intl: false },
+			{ code: 'INC', zh: '银川', en: 'Yinchuan', intl: false },
+			{ code: 'XNN', zh: '西宁', en: 'Xining', intl: false },
+			{ code: 'CGQ', zh: '长春', en: 'Changchun', intl: false },
+			{ code: 'LXA', zh: '拉萨', en: 'Lhasa', intl: false },
+			{ code: 'PEK', zh: '北京首都', en: 'Beijing Capital', intl: false, alias: { zh: ['首都', '首都机场'] } },
+			{ code: 'PKX', zh: '北京大兴', en: 'Beijing Daxing', intl: false, alias: { zh: ['大兴', '大兴机场'] } },
+			{ code: 'PVG', zh: '上海浦东', en: 'Shanghai Pudong', intl: false, alias: { zh: ['浦东', '浦东机场'] } },
+			{ code: 'TFU', zh: '成都天府', en: 'Chengdu Tianfu', intl: false, alias: { zh: ['天府', '天府机场'] } },
+			{ code: 'WUX', zh: '无锡', en: 'Wuxi', intl: false },
+			{ code: 'CZX', zh: '常州', en: 'Changzhou', intl: false },
+			{ code: 'XUZ', zh: '徐州', en: 'Xuzhou', intl: false },
+			{ code: 'YTY', zh: '扬州', en: 'Yangzhou', intl: false, alias: { zh: ['扬州泰州', '泰州'] } },
+			{ code: 'NTG', zh: '南通', en: 'Nantong', intl: false },
+			{ code: 'YNZ', zh: '盐城', en: 'Yancheng', intl: false },
+			{ code: 'LYG', zh: '连云港', en: 'Lianyungang', intl: false },
+			{ code: 'HIA', zh: '淮安', en: "Huai'an", intl: false },
+			{ code: 'WHA', zh: '芜湖', en: 'Wuhu', intl: false, alias: { zh: ['芜宣'] } },
+			{ code: 'JUH', zh: '池州', en: 'Chizhou', intl: false, alias: { zh: ['九华山'] } },
+			{ code: 'TXN', zh: '黄山', en: 'Huangshan', intl: false, alias: { zh: ['屯溪'] } },
+			{ code: 'AQG', zh: '安庆', en: 'Anqing', intl: false },
+			{ code: 'FUG', zh: '阜阳', en: 'Fuyang', intl: false },
+			{ code: 'YIW', zh: '义乌', en: 'Yiwu', intl: false },
+			{ code: 'HSN', zh: '舟山', en: 'Zhoushan', intl: false, alias: { zh: ['普陀山'] } },
+			{ code: 'HYN', zh: '台州', en: 'Taizhou', intl: false, alias: { zh: ['黄岩'] } },
+			{ code: 'JUZ', zh: '衢州', en: 'Quzhou', intl: false },
+			{ code: 'KHN', zh: '南昌', en: 'Nanchang', intl: false },
+			{ code: 'KOW', zh: '赣州', en: 'Ganzhou', intl: false },
+			{ code: 'JDZ', zh: '景德镇', en: 'Jingdezhen', intl: false },
+			{ code: 'JIU', zh: '九江', en: 'Jiujiang', intl: false, alias: { zh: ['庐山'] } },
+			{ code: 'JGS', zh: '井冈山', en: 'Jinggangshan', intl: false },
+			{ code: 'YIC', zh: '宜春', en: 'Yichun (Jiangxi)', intl: false },
+			{ code: 'SQD', zh: '上饶', en: 'Shangrao', intl: false },
+			{ code: 'JJN', zh: '泉州', en: 'Quanzhou', intl: false, alias: { zh: ['晋江'] } },
+			{ code: 'WUS', zh: '武夷山', en: 'Wuyishan', intl: false },
+			{ code: 'SQJ', zh: '三明', en: 'Sanming', intl: false },
+			{ code: 'LCX', zh: '连城', en: 'Liancheng', intl: false, alias: { zh: ['龙岩'] } },
+			{ code: 'SWA', zh: '揭阳', en: 'Jieyang', intl: false, alias: { zh: ['潮汕', '汕头'] } },
+			{ code: 'ZHA', zh: '湛江', en: 'Zhanjiang', intl: false },
+			{ code: 'MXZ', zh: '梅州', en: 'Meizhou', intl: false },
+			{ code: 'HUZ', zh: '惠州', en: 'Huizhou', intl: false },
+			{ code: 'FUO', zh: '佛山', en: 'Foshan', intl: false },
+			{ code: 'KWL', zh: '桂林', en: 'Guilin', intl: false },
+			{ code: 'LZH', zh: '柳州', en: 'Liuzhou', intl: false },
+			{ code: 'BHY', zh: '北海', en: 'Beihai', intl: false },
+			{ code: 'WUZ', zh: '梧州', en: 'Wuzhou', intl: false },
+			{ code: 'AEB', zh: '百色', en: 'Baise', intl: false },
+			{ code: 'HCJ', zh: '河池', en: 'Hechi', intl: false },
+			{ code: 'YLX', zh: '玉林', en: 'Yulin (Guangxi)', intl: false },
+			{ code: 'BAR', zh: '琼海', en: 'Qionghai', intl: false, alias: { zh: ['博鳌'] } },
+			{ code: 'DYG', zh: '张家界', en: 'Zhangjiajie', intl: false },
+			{ code: 'CGD', zh: '常德', en: 'Changde', intl: false },
+			{ code: 'HJJ', zh: '怀化', en: 'Huaihua', intl: false },
+			{ code: 'HNY', zh: '衡阳', en: 'Hengyang', intl: false },
+			{ code: 'WGN', zh: '邵阳', en: 'Shaoyang', intl: false, alias: { zh: ['武冈'] } },
+			{ code: 'YYA', zh: '岳阳', en: 'Yueyang', intl: false },
+			{ code: 'LLF', zh: '永州', en: 'Yongzhou', intl: false },
+			{ code: 'YIH', zh: '宜昌', en: 'Yichang', intl: false },
+			{ code: 'XFN', zh: '襄阳', en: 'Xiangyang', intl: false },
+			{ code: 'WDS', zh: '十堰', en: 'Shiyan', intl: false, alias: { zh: ['武当山'] } },
+			{ code: 'ENH', zh: '恩施', en: 'Enshi', intl: false },
+			{ code: 'LYA', zh: '洛阳', en: 'Luoyang', intl: false },
+			{ code: 'NNY', zh: '南阳', en: 'Nanyang', intl: false },
+			{ code: 'XAI', zh: '信阳', en: 'Xinyang', intl: false },
+			{ code: 'DAT', zh: '大同', en: 'Datong', intl: false },
+			{ code: 'CIH', zh: '长治', en: 'Changzhi', intl: false },
+			{ code: 'YCU', zh: '运城', en: 'Yuncheng', intl: false },
+			{ code: 'LFQ', zh: '临汾', en: 'Linfen', intl: false },
+			{ code: 'WUT', zh: '忻州', en: 'Xinzhou', intl: false, alias: { zh: ['五台山'] } },
+			{ code: 'LLV', zh: '吕梁', en: 'Luliang', intl: false },
+			{ code: 'BAV', zh: '包头', en: 'Baotou', intl: false },
+			{ code: 'DSN', zh: '鄂尔多斯', en: 'Ordos', intl: false },
+			{ code: 'CIF', zh: '赤峰', en: 'Chifeng', intl: false },
+			{ code: 'TGO', zh: '通辽', en: 'Tongliao', intl: false },
+			{ code: 'HLD', zh: '呼伦贝尔', en: 'Hulunbuir', intl: false, alias: { zh: ['海拉尔'] } },
+			{ code: 'XIL', zh: '锡林浩特', en: 'Xilinhot', intl: false },
+			{ code: 'HLH', zh: '乌兰浩特', en: 'Ulanhot', intl: false },
+			{ code: 'NZH', zh: '满洲里', en: 'Manzhouli', intl: false },
+			{ code: 'ERL', zh: '二连浩特', en: 'Erenhot', intl: false },
+			{ code: 'RLK', zh: '巴彦淖尔', en: 'Bayannur', intl: false },
+			{ code: 'WUA', zh: '乌海', en: 'Wuhai', intl: false },
+			{ code: 'AXF', zh: '阿拉善左旗', en: 'Alxa Left Banner', intl: false },
+			{ code: 'BPE', zh: '秦皇岛', en: 'Qinhuangdao', intl: false },
+			{ code: 'TVS', zh: '唐山', en: 'Tangshan', intl: false },
+			{ code: 'HDG', zh: '邯郸', en: 'Handan', intl: false },
+			{ code: 'ZQZ', zh: '张家口', en: 'Zhangjiakou', intl: false },
+			{ code: 'CDE', zh: '承德', en: 'Chengde', intl: false },
+			{ code: 'DDG', zh: '丹东', en: 'Dandong', intl: false },
+			{ code: 'JNZ', zh: '锦州', en: 'Jinzhou', intl: false },
+			{ code: 'CHG', zh: '朝阳', en: 'Chaoyang', intl: false },
+			{ code: 'AOG', zh: '鞍山', en: 'Anshan', intl: false, alias: { zh: ['腾鳌'] } },
+			{ code: 'CNI', zh: '长海', en: 'Changhai', intl: false },
+			{ code: 'YNJ', zh: '延吉', en: 'Yanji', intl: false },
+			{ code: 'TNH', zh: '通化', en: 'Tonghua', intl: false },
+			{ code: 'NBS', zh: '长白山', en: 'Changbaishan', intl: false },
+			{ code: 'DBC', zh: '白城', en: 'Baicheng', intl: false },
+			{ code: 'NDG', zh: '齐齐哈尔', en: 'Qiqihar', intl: false },
+			{ code: 'MDG', zh: '牡丹江', en: 'Mudanjiang', intl: false },
+			{ code: 'JMU', zh: '佳木斯', en: 'Jiamusi', intl: false },
+			{ code: 'DQA', zh: '大庆', en: 'Daqing', intl: false },
+			{ code: 'JXA', zh: '鸡西', en: 'Jixi', intl: false },
+			{ code: 'LDS', zh: '伊春', en: 'Yichun (Heilongjiang)', intl: false },
+			{ code: 'OHE', zh: '漠河', en: 'Mohe', intl: false },
+			{ code: 'HEK', zh: '黑河', en: 'Heihe', intl: false },
+			{ code: 'JGD', zh: '加格达奇', en: 'Jiagedaqi', intl: false },
+			{ code: 'UYN', zh: '榆林', en: 'Yulin (Shaanxi)', intl: false },
+			{ code: 'ENY', zh: '延安', en: "Yan'an", intl: false },
+			{ code: 'HZG', zh: '汉中', en: 'Hanzhong', intl: false },
+			{ code: 'AKA', zh: '安康', en: 'Ankang', intl: false },
+			{ code: 'DNH', zh: '敦煌', en: 'Dunhuang', intl: false },
+			{ code: 'JGN', zh: '嘉峪关', en: 'Jiayuguan', intl: false },
+			{ code: 'YZY', zh: '张掖', en: 'Zhangye', intl: false },
+			{ code: 'IQN', zh: '庆阳', en: 'Qingyang', intl: false },
+			{ code: 'THQ', zh: '天水', en: 'Tianshui', intl: false },
+			{ code: 'JIC', zh: '金昌', en: 'Jinchang', intl: false },
+			{ code: 'LNL', zh: '陇南', en: 'Longnan', intl: false },
+			{ code: 'GXH', zh: '夏河', en: 'Xiahe', intl: false },
+			{ code: 'GOQ', zh: '格尔木', en: 'Golmud', intl: false },
+			{ code: 'YUS', zh: '玉树', en: 'Yushu', intl: false },
+			{ code: 'GMQ', zh: '果洛', en: 'Golog', intl: false },
+			{ code: 'HTT', zh: '花土沟', en: 'Huatugou', intl: false },
+			{ code: 'HXD', zh: '德令哈', en: 'Delingha', intl: false },
+			{ code: 'ZHY', zh: '中卫', en: 'Zhongwei', intl: false, alias: { zh: ['沙坡头'] } },
+			{ code: 'GYU', zh: '固原', en: 'Guyuan', intl: false },
+			{ code: 'KHG', zh: '喀什', en: 'Kashgar', intl: false },
+			{ code: 'YIN', zh: '伊宁', en: 'Yining', intl: false },
+			{ code: 'KRL', zh: '库尔勒', en: 'Korla', intl: false },
+			{ code: 'AKU', zh: '阿克苏', en: 'Aksu', intl: false },
+			{ code: 'HTN', zh: '和田', en: 'Hotan', intl: false },
+			{ code: 'KRY', zh: '克拉玛依', en: 'Karamay', intl: false },
+			{ code: 'AAT', zh: '阿勒泰', en: 'Altay', intl: false },
+			{ code: 'TCG', zh: '塔城', en: 'Tacheng', intl: false },
+			{ code: 'KCA', zh: '库车', en: 'Kuqa', intl: false },
+			{ code: 'HMI', zh: '哈密', en: 'Hami', intl: false },
+			{ code: 'TLQ', zh: '吐鲁番', en: 'Turpan', intl: false },
+			{ code: 'BPL', zh: '博乐', en: 'Bole', intl: false },
+			{ code: 'FYN', zh: '富蕴', en: 'Fuyun', intl: false },
+			{ code: 'KJI', zh: '布尔津', en: 'Burqin', intl: false, alias: { zh: ['喀纳斯'] } },
+			{ code: 'RKZ', zh: '日喀则', en: 'Shigatse', intl: false },
+			{ code: 'LZY', zh: '林芝', en: 'Nyingchi', intl: false },
+			{ code: 'BPX', zh: '昌都', en: 'Qamdo', intl: false },
+			{ code: 'NGQ', zh: '阿里', en: 'Ngari', intl: false },
+			{ code: 'MIG', zh: '绵阳', en: 'Mianyang', intl: false },
+			{ code: 'YBP', zh: '宜宾', en: 'Yibin', intl: false },
+			{ code: 'LZO', zh: '泸州', en: 'Luzhou', intl: false },
+			{ code: 'NAO', zh: '南充', en: 'Nanchong', intl: false },
+			{ code: 'DZH', zh: '达州', en: 'Dazhou', intl: false },
+			{ code: 'XIC', zh: '西昌', en: 'Xichang', intl: false },
+			{ code: 'PZI', zh: '攀枝花', en: 'Panzhihua', intl: false },
+			{ code: 'JZH', zh: '九寨沟', en: 'Jiuzhaigou', intl: false },
+			{ code: 'GYS', zh: '广元', en: 'Guangyuan', intl: false },
+			{ code: 'BZX', zh: '巴中', en: 'Bazhong', intl: false },
+			{ code: 'GZG', zh: '甘孜', en: 'Garze', intl: false },
+			{ code: 'DCY', zh: '稻城', en: 'Daocheng', intl: false, alias: { zh: ['亚丁'] } },
+			{ code: 'KGT', zh: '康定', en: 'Kangding', intl: false },
+			{ code: 'WXN', zh: '万州', en: 'Wanzhou', intl: false },
+			{ code: 'JIQ', zh: '黔江', en: 'Qianjiang', intl: false },
+			{ code: 'LJG', zh: '丽江', en: 'Lijiang', intl: false },
+			{ code: 'DLU', zh: '大理', en: 'Dali', intl: false },
+			{ code: 'JHG', zh: '西双版纳', en: 'Xishuangbanna', intl: false, alias: { zh: ['景洪', '版纳'] } },
+			{ code: 'DIG', zh: '香格里拉', en: 'Shangri-La', intl: false, alias: { zh: ['迪庆'] } },
+			{ code: 'TCZ', zh: '腾冲', en: 'Tengchong', intl: false },
+			{ code: 'BSD', zh: '保山', en: 'Baoshan', intl: false },
+			{ code: 'LNJ', zh: '临沧', en: 'Lincang', intl: false },
+			{ code: 'ZAT', zh: '昭通', en: 'Zhaotong', intl: false },
+			{ code: 'WNH', zh: '文山', en: 'Wenshan', intl: false },
+			{ code: 'SYM', zh: '普洱', en: "Pu'er", intl: false, alias: { zh: ['思茅'] } },
+			{ code: 'CWJ', zh: '沧源', en: 'Cangyuan', intl: false },
+			{ code: 'NLH', zh: '泸沽湖', en: 'Lugu Lake', intl: false, alias: { zh: ['宁蒗'] } },
+			{ code: 'ZYI', zh: '遵义', en: 'Zunyi', intl: false },
+			{ code: 'ACX', zh: '兴义', en: 'Xingyi', intl: false },
+			{ code: 'TEN', zh: '铜仁', en: 'Tongren', intl: false },
+			{ code: 'LLB', zh: '荔波', en: 'Libo', intl: false },
+			{ code: 'AVA', zh: '安顺', en: 'Anshun', intl: false },
+			{ code: 'BFJ', zh: '毕节', en: 'Bijie', intl: false },
+			{ code: 'LPF', zh: '六盘水', en: 'Liupanshui', intl: false },
+			{ code: 'HZH', zh: '黎平', en: 'Liping', intl: false },
+			// ── international ─────────────────────────────────────────────────────
+			{ code: 'HKG', zh: '香港', en: 'Hong Kong', intl: true },
+			{ code: 'TPE', zh: '台北', en: 'Taipei', intl: true },
+			{ code: 'TSA', zh: '台北松山', en: 'Taipei Songshan', intl: true, alias: { zh: ['松山'] } },
+			{ code: 'KHH', zh: '高雄', en: 'Kaohsiung', intl: true },
+			{ code: 'NRT', zh: '东京成田', en: 'Tokyo Narita', intl: true, alias: { zh: ['成田'] } },
+			{ code: 'HND', zh: '东京羽田', en: 'Tokyo Haneda', intl: true, alias: { zh: ['羽田'] } },
+			{ code: 'KIX', zh: '大阪关西', en: 'Osaka Kansai', intl: true, alias: { zh: ['关西', '大阪'] } },
+			{ code: 'ICN', zh: '首尔仁川', en: 'Seoul Incheon', intl: true, alias: { zh: ['仁川'] } },
+			{ code: 'GMP', zh: '首尔金浦', en: 'Seoul Gimpo', intl: true, alias: { zh: ['金浦'] } },
+			{ code: 'SIN', zh: '新加坡', en: 'Singapore', intl: true },
+			{ code: 'BKK', zh: '曼谷', en: 'Bangkok', intl: true },
+			{ code: 'KUL', zh: '吉隆坡', en: 'Kuala Lumpur', intl: true },
+			{ code: 'SGN', zh: '胡志明市', en: 'Ho Chi Minh City', intl: true, alias: { zh: ['西贡'] } },
+			{ code: 'HAN', zh: '河内', en: 'Hanoi', intl: true },
+			{ code: 'DAD', zh: '岘港', en: 'Da Nang', intl: true },
+			{ code: 'MNL', zh: '马尼拉', en: 'Manila', intl: true },
+			{ code: 'CGK', zh: '雅加达', en: 'Jakarta', intl: true },
+			{ code: 'DXB', zh: '迪拜', en: 'Dubai', intl: true },
+			{ code: 'LHR', zh: '伦敦', en: 'London', intl: true },
+			{ code: 'CDG', zh: '巴黎', en: 'Paris', intl: true },
+			{ code: 'FRA', zh: '法兰克福', en: 'Frankfurt', intl: true },
+			{ code: 'AMS', zh: '阿姆斯特丹', en: 'Amsterdam', intl: true },
+			{ code: 'ZRH', zh: '苏黎世', en: 'Zurich', intl: true },
+			{ code: 'JFK', zh: '纽约', en: 'New York', intl: true },
+			{ code: 'LAX', zh: '洛杉矶', en: 'Los Angeles', intl: true },
+			{ code: 'SFO', zh: '旧金山', en: 'San Francisco', intl: true },
+			{ code: 'SEA', zh: '西雅图', en: 'Seattle', intl: true },
+			{ code: 'YVR', zh: '温哥华', en: 'Vancouver', intl: true },
+			{ code: 'SYD', zh: '悉尼', en: 'Sydney', intl: true },
+			{ code: 'MEL', zh: '墨尔本', en: 'Melbourne', intl: true },
+			{ code: 'AKL', zh: '奥克兰', en: 'Auckland', intl: true },
+			{ code: 'DEL', zh: '德里', en: 'Delhi', intl: true },
+			{ code: 'IST', zh: '伊斯坦布尔', en: 'Istanbul', intl: true },
+			{ code: 'SVO', zh: '莫斯科', en: 'Moscow', intl: true },
 		];
+		/** `code` → catalog row, and a lowercased search haystack per row. */
+		const CITY_BY_CODE = new Map();
+		const CITY_ROWS = CITIES.map((entry) => {
+			const aliases = entry.alias && Array.isArray(entry.alias.zh) ? entry.alias.zh : [];
+			const row = { code: entry.code, zh: entry.zh, en: entry.en, intl: entry.intl === true, aliases };
+			// Searchable text is the Chinese name plus its aliases; the IATA code is
+			// matched separately and the English name is display-only (typing "shang"
+			// must not silently turn into a city).
+			row.haystack = [row.zh].concat(row.aliases).map((text) => text.toLowerCase());
+			CITY_BY_CODE.set(row.code, row);
+			return row;
+		});
 		// #endregion
 
 		// #region locale bridge
@@ -114,6 +378,8 @@ window.__ModuleLoader__.load({
 
 		const runtime = {
 			t: (key) => key,
+			/** Active host locale; the city catalog keeps a zh and an en name per row. */
+			activeLocale: 'zh',
 			revision: createRevision(),
 		};
 
@@ -196,12 +462,26 @@ window.__ModuleLoader__.load({
 		}
 
 		/** Localised city name from the dictionary, falling back to the raw IATA code. */
+		/** Catalog row for a IATA code, or null when the catalog does not know it. */
+		function cityEntry(code) {
+			const raw = typeof code === 'string' ? code.trim().toUpperCase() : '';
+			return raw === '' ? null : CITY_BY_CODE.get(raw) || null;
+		}
+
+		/** Localised display name for a code (`BJS` → `北京` / `Beijing`); raw code otherwise. */
 		function cityLabel(code) {
 			const raw = typeof code === 'string' ? code.trim().toUpperCase() : '';
 			if (raw === '') return '—';
-			const key = `city.${raw}`;
-			const label = t(key);
-			return label === key ? raw : label;
+			const entry = cityEntry(raw);
+			if (entry === null) return raw;
+			return runtime.activeLocale === 'en' ? entry.en : entry.zh;
+		}
+
+		/** `北京 BJS` — the form the picker writes back into its input. */
+		function citySelectionLabel(code) {
+			const raw = typeof code === 'string' ? code.trim().toUpperCase() : '';
+			if (raw === '') return '';
+			return cityEntry(raw) === null ? raw : `${cityLabel(raw)} ${raw}`;
 		}
 
 		// #endregion
@@ -430,30 +710,73 @@ window.__ModuleLoader__.load({
 			return null;
 		}
 
-		/** Match a typed query against IATA codes and localized city names. */
-		function cityMatches(query) {
+		/**
+		 * Ranked city search: exact code / exact Chinese name / exact alias / name
+		 * prefix / code prefix / substring. Results are grouped domestic-first so the
+		 * picker can render 国内 / 国际; at most nine rows come back.
+		 *
+		 * A three-letter query the catalog does not know also yields a `fallback` row
+		 * (`直接使用 XXX`) so the user can still type an airport we have not listed.
+		 */
+		function citySearch(query) {
 			const raw = typeof query === 'string' ? query.trim() : '';
-			if (raw === '') return [];
 			const lower = raw.toLowerCase();
-			const matches = [];
-			for (const code of CITY_CODES) {
-				const name = cityLabel(code);
-				if (code.toLowerCase().indexOf(lower) === 0 || (name !== code && name.toLowerCase().indexOf(lower) >= 0)) {
-					matches.push({ code, name });
-					if (matches.length >= 8) break;
-				}
+			const fallback = /^[A-Za-z]{3}$/.test(raw) && cityEntry(raw) === null ? { code: raw.toUpperCase(), fallback: true } : null;
+			if (raw === '') {
+				const popular = CITY_ROWS.filter((row) => !row.intl).slice(0, 9);
+				return { results: popular.map(cityRowResult), fallback: null };
 			}
-			return matches;
+			// A finished pick ("北京 BJS") searches by the code it ends with.
+			const tail = /(?:^|\s)([A-Za-z]{3})$/.exec(raw);
+			const codeQuery = tail !== null ? tail[1].toUpperCase() : raw.toUpperCase();
+			const ranked = [];
+			for (const row of CITY_ROWS) {
+				const rank = cityMatchRank(row, lower, codeQuery);
+				if (rank === null) continue;
+				ranked.push({ row, rank });
+			}
+			ranked.sort((left, right) => left.rank - right.rank);
+			const domestic = ranked.filter((item) => item.row.intl !== true);
+			const international = ranked.filter((item) => item.row.intl === true);
+			return { results: domestic.concat(international).slice(0, 9).map((item) => cityRowResult(item.row)), fallback };
 		}
 
-		/** Resolve typed text to a three-letter city code (code or localized name). */
+		function cityRowResult(row) {
+			return { code: row.code, name: runtime.activeLocale === 'en' ? row.en : row.zh, intl: row.intl };
+		}
+
+		function cityMatchRank(row, lower, codeQuery) {
+			if (row.code === codeQuery) return 0;
+			if (row.zh.toLowerCase() === lower) return 1;
+			for (const alias of row.aliases) {
+				if (alias.toLowerCase() === lower) return 2;
+			}
+			for (const text of row.haystack) {
+				if (text.startsWith(lower)) return 3;
+			}
+			if (row.code.startsWith(codeQuery)) return 4;
+			for (const text of row.haystack) {
+				if (text.indexOf(lower) >= 0) return 5;
+			}
+			return null;
+		}
+
+		/**
+		 * Resolve typed text to a three-letter code: `BJS`, `北京 BJS`, an exact Chinese
+		 * name or an alias. A bare three-letter string always resolves (the Host is the
+		 * one that validates it), so an unlisted airport can still be submitted.
+		 */
 		function resolveCity(query) {
 			const raw = typeof query === 'string' ? query.trim() : '';
-			if (/^[A-Za-z]{3}$/.test(raw)) return raw.toUpperCase();
 			if (raw === '') return null;
+			const tail = /(?:^|\s)([A-Za-z]{3})$/.exec(raw);
+			if (tail !== null) return tail[1].toUpperCase();
 			const lower = raw.toLowerCase();
-			for (const code of CITY_CODES) {
-				if (cityLabel(code).toLowerCase() === lower) return code;
+			for (const row of CITY_ROWS) {
+				if (row.zh.toLowerCase() === lower) return row.code;
+				for (const alias of row.aliases) {
+					if (alias.toLowerCase() === lower) return row.code;
+				}
 			}
 			return null;
 		}
@@ -691,7 +1014,10 @@ window.__ModuleLoader__.load({
 			'new.route.title': '航线',
 			'new.from': '出发地',
 			'new.to': '目的地',
-			'new.cityPlaceholder': '三字码或城市名，如 BJS / 北京',
+			'new.cityPlaceholder': '城市名，如 北京 / 上海浦东',
+			'new.cityGroup.domestic': '国内',
+			'new.cityGroup.intl': '国际',
+			'new.cityUseCode': '直接使用 {code}',
 			'new.cityEmpty': '没有匹配的城市',
 			'new.trip.title': '行程',
 			'new.trip.oneway': '单程',
@@ -714,48 +1040,6 @@ window.__ModuleLoader__.load({
 			'new.returnRequired': '往返需要填写返回日。',
 			'new.returnOrder': '返回日必须晚于出发日。',
 			'new.departRequired': '请选择出发日。',
-			'city.BJS': '北京',
-			'city.PEK': '北京首都',
-			'city.PKX': '北京大兴',
-			'city.SHA': '上海',
-			'city.PVG': '上海浦东',
-			'city.CAN': '广州',
-			'city.SZX': '深圳',
-			'city.CTU': '成都',
-			'city.TFU': '成都天府',
-			'city.CKG': '重庆',
-			'city.XIY': '西安',
-			'city.HGH': '杭州',
-			'city.NKG': '南京',
-			'city.WUH': '武汉',
-			'city.CSX': '长沙',
-			'city.TAO': '青岛',
-			'city.XMN': '厦门',
-			'city.TSN': '天津',
-			'city.CGO': '郑州',
-			'city.SYX': '三亚',
-			'city.HAK': '海口',
-			'city.HRB': '哈尔滨',
-			'city.SHE': '沈阳',
-			'city.DLC': '大连',
-			'city.KMG': '昆明',
-			'city.KWE': '贵阳',
-			'city.NNG': '南宁',
-			'city.URC': '乌鲁木齐',
-			'city.FOC': '福州',
-			'city.TNA': '济南',
-			'city.WNZ': '温州',
-			'city.NGB': '宁波',
-			'city.HFE': '合肥',
-			'city.ZUH': '珠海',
-			'city.LHW': '兰州',
-			'city.TYN': '太原',
-			'city.HET': '呼和浩特',
-			'city.SJW': '石家庄',
-			'city.INC': '银川',
-			'city.XNN': '西宁',
-			'city.CGQ': '长春',
-			'city.LXA': '拉萨',
 		};
 
 		const EN = {
@@ -931,7 +1215,10 @@ window.__ModuleLoader__.load({
 			'new.route.title': 'Route',
 			'new.from': 'From',
 			'new.to': 'To',
-			'new.cityPlaceholder': 'IATA code or city name, e.g. BJS / Beijing',
+			'new.cityPlaceholder': 'City name or IATA code, e.g. BJS',
+			'new.cityGroup.domestic': 'Domestic',
+			'new.cityGroup.intl': 'International',
+			'new.cityUseCode': 'Use {code}',
 			'new.cityEmpty': 'No matching city',
 			'new.trip.title': 'Trip',
 			'new.trip.oneway': 'One way',
@@ -954,48 +1241,6 @@ window.__ModuleLoader__.load({
 			'new.returnRequired': 'Round trips need a return date.',
 			'new.returnOrder': 'Return must be after departure.',
 			'new.departRequired': 'Pick a departure date.',
-			'city.BJS': 'Beijing',
-			'city.PEK': 'Beijing Capital',
-			'city.PKX': 'Beijing Daxing',
-			'city.SHA': 'Shanghai',
-			'city.PVG': 'Shanghai Pudong',
-			'city.CAN': 'Guangzhou',
-			'city.SZX': 'Shenzhen',
-			'city.CTU': 'Chengdu',
-			'city.TFU': 'Chengdu Tianfu',
-			'city.CKG': 'Chongqing',
-			'city.XIY': 'Xi\'an',
-			'city.HGH': 'Hangzhou',
-			'city.NKG': 'Nanjing',
-			'city.WUH': 'Wuhan',
-			'city.CSX': 'Changsha',
-			'city.TAO': 'Qingdao',
-			'city.XMN': 'Xiamen',
-			'city.TSN': 'Tianjin',
-			'city.CGO': 'Zhengzhou',
-			'city.SYX': 'Sanya',
-			'city.HAK': 'Haikou',
-			'city.HRB': 'Harbin',
-			'city.SHE': 'Shenyang',
-			'city.DLC': 'Dalian',
-			'city.KMG': 'Kunming',
-			'city.KWE': 'Guiyang',
-			'city.NNG': 'Nanning',
-			'city.URC': 'Urumqi',
-			'city.FOC': 'Fuzhou',
-			'city.TNA': 'Jinan',
-			'city.WNZ': 'Wenzhou',
-			'city.NGB': 'Ningbo',
-			'city.HFE': 'Hefei',
-			'city.ZUH': 'Zhuhai',
-			'city.LHW': 'Lanzhou',
-			'city.TYN': 'Taiyuan',
-			'city.HET': 'Hohhot',
-			'city.SJW': 'Shijiazhuang',
-			'city.INC': 'Yinchuan',
-			'city.XNN': 'Xining',
-			'city.CGQ': 'Changchun',
-			'city.LXA': 'Lhasa',
 		};
 
 		// #endregion
@@ -1205,9 +1450,12 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-notice { display: flex; align-items: center; gap: 8px; color: var(--dsw-alias-state-success-primary); font-size: 12px; }
 /* city combobox */
 .pw-combo { position: relative; }
-.pw-combo-list { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); max-height: 220px; overflow: auto; padding: 4px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-elevation-prominent, none); }
+.pw-combo-list { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); max-height: 260px; overflow: auto; padding: 4px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-elevation-prominent, none); }
 .pw-combo-item { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 6px 8px; border: none; border-radius: var(--dsw-radius-sm, 8px); background: transparent; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .pw-combo-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.pw-combo-item[data-highlight="true"] { background: var(--dsw-alias-interactive-bg-hover); }
+.pw-combo-group { padding: 6px 8px 2px; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-tertiary); }
+.pw-combo-fallback { color: var(--dsw-alias-state-business-primary); }
 .pw-combo-code { color: var(--dsw-alias-label-tertiary); font-size: 11px; }
 /* skeleton, empty, error */
 .pw-skeleton { background: var(--dsw-alias-bg-skeleton, var(--dsw-alias-bg-layer-2)); border-radius: 6px; animation: pw-skeleton-pulse 1600ms ease-in-out infinite; }
@@ -3120,12 +3368,129 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		// #endregion
 
 		// #region new view
-		/** Searchable city input: IATA code or localized city name, with suggestions. */
+		/**
+		 * Keyboard intent for the city picker, kept pure so it can be exercised without
+		 * a DOM: `close`, `open`, `move` the highlight, or `pick` the highlighted row.
+		 */
+		function cityKeyAction(key, open, optionCount, highlight) {
+			if (key === 'Escape') return { type: 'close' };
+			if (key === 'Enter') {
+				if (!open || optionCount === 0) return null;
+				return { type: 'pick', index: Math.min(Math.max(highlight, 0), optionCount - 1) };
+			}
+			if (key !== 'ArrowDown' && key !== 'ArrowUp') return null;
+			if (!open || optionCount === 0) return { type: 'open' };
+			const delta = key === 'ArrowDown' ? 1 : -1;
+			const current = Math.min(Math.max(highlight, 0), optionCount - 1);
+			return { type: 'move', index: (current + delta + optionCount) % optionCount };
+		}
+
+		/**
+		 * City picker: searches the built-in catalog by Chinese name, alias or IATA
+		 * code, groups the hits into 国内 / 国际, and supports ↑ ↓ / Enter / Esc. A
+		 * finished pick is written back as `北京 BJS`; a bare three-letter search the
+		 * catalog does not know also offers a `直接使用 XXX` fallback so unlisted
+		 * airports stay reachable.
+		 */
 		function CityField(props) {
 			const [open, setOpen] = useState(false);
+			const [highlight, setHighlight] = useState(0);
 			const query = typeof props.query === 'string' ? props.query : '';
-			const matches = useMemo(() => (open ? cityMatches(query) : []), [open, query]);
-			const showEmpty = open && query.trim() !== '' && matches.length === 0;
+			const listId = useMemo(() => `pw-city-${Math.random().toString(36).slice(2, 8)}`, []);
+			const search = useMemo(() => (open ? citySearch(query) : { results: [], fallback: null }), [open, query, runtime.revision.get()]);
+			const options = search.fallback === null ? search.results : search.results.concat([search.fallback]);
+			const showEmpty = open && query.trim() !== '' && options.length === 0;
+
+			useEffect(() => {
+				setHighlight(0);
+			}, [query, open]);
+
+			const pick = (code) => {
+				setOpen(false);
+				props.onPick(code);
+			};
+
+			const handleKeyDown = (event) => {
+				const action = cityKeyAction(event.key, open, options.length, highlight);
+				if (action === null) return;
+				if (action.type === 'close') {
+					setOpen(false);
+					return;
+				}
+				if (action.type === 'open') {
+					event.preventDefault();
+					setOpen(true);
+					return;
+				}
+				if (action.type === 'move') {
+					event.preventDefault();
+					setHighlight(action.index);
+					return;
+				}
+				const target = options[action.index];
+				if (target === undefined) return;
+				event.preventDefault();
+				pick(target.code);
+			};
+
+			// Group headers render inline; `optionIndex` keeps the flat keyboard order in
+			// sync with what the user sees.
+			const rows = [];
+			let group = null;
+			let optionIndex = 0;
+			search.results.forEach((result) => {
+				const groupKey = result.intl ? 'intl' : 'domestic';
+				if (group !== groupKey) {
+					group = groupKey;
+					rows.push(h('div', { className: 'pw-combo-group', key: `group-${groupKey}`, role: 'presentation' }, t(result.intl ? 'new.cityGroup.intl' : 'new.cityGroup.domestic')));
+				}
+				const index = optionIndex;
+				optionIndex += 1;
+				rows.push(
+					h(
+						'button',
+						{
+							key: result.code,
+							type: 'button',
+							id: `${listId}-${index}`,
+							className: 'pw-combo-item',
+							role: 'option',
+							'aria-selected': index === highlight ? 'true' : 'false',
+							'data-highlight': index === highlight ? 'true' : 'false',
+							onMouseEnter: () => setHighlight(index),
+							onMouseDown: (event) => {
+								event.preventDefault();
+								pick(result.code);
+							},
+						},
+						h('span', null, result.name),
+						h('span', { className: 'pw-combo-code' }, result.code)
+					)
+				);
+			});
+			if (search.fallback !== null) {
+				const index = optionIndex;
+				rows.push(
+					h(
+						'button',
+						{
+							key: 'fallback',
+							type: 'button',
+							className: 'pw-combo-item pw-combo-fallback',
+							role: 'option',
+							'aria-selected': index === highlight ? 'true' : 'false',
+							'data-highlight': index === highlight ? 'true' : 'false',
+							onMouseEnter: () => setHighlight(index),
+							onMouseDown: (event) => {
+								event.preventDefault();
+								pick(search.fallback.code);
+							},
+						},
+						h('span', null, t('new.cityUseCode', { code: search.fallback.code }))
+					)
+				);
+			}
+
 			return h(
 				'div',
 				{ className: 'pw-combo' },
@@ -3135,39 +3500,22 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					placeholder: t('new.cityPlaceholder'),
 					autoComplete: 'off',
 					spellCheck: false,
+					role: 'combobox',
+					'aria-autocomplete': 'list',
+					'aria-expanded': open ? 'true' : 'false',
+					'aria-controls': open && rows.length > 0 ? listId : undefined,
 					onChange: (event) => {
 						setOpen(true);
 						props.onQuery(event.target.value);
 					},
 					onFocus: () => setOpen(true),
 					onBlur: () => window.setTimeout(() => setOpen(false), 120),
+					onKeyDown: handleKeyDown,
 				}),
-				matches.length === 0
-					? showEmpty
-						? h('div', { className: 'pw-combo-list' }, h('div', { className: 'pw-combo-item', style: { color: 'var(--dsw-alias-label-secondary)' } }, t('new.cityEmpty')))
-						: null
-					: h(
-							'div',
-							{ className: 'pw-combo-list', role: 'listbox' },
-							matches.map((match) =>
-								h(
-									'button',
-									{
-										key: match.code,
-										type: 'button',
-										className: 'pw-combo-item',
-										role: 'option',
-										onMouseDown: (event) => {
-											event.preventDefault();
-											props.onPick(match.code);
-											setOpen(false);
-										},
-									},
-									h('span', null, match.name),
-									h('span', { className: 'pw-combo-code' }, match.code)
-								)
-							)
-						)
+				open && rows.length > 0 ? h('div', { className: 'pw-combo-list', role: 'listbox', id: listId }, rows) : null,
+				showEmpty
+					? h('div', { className: 'pw-combo-list' }, h('div', { className: 'pw-combo-item', style: { color: 'var(--dsw-alias-label-secondary)' } }, t('new.cityEmpty')))
+					: null
 			);
 		}
 
@@ -3415,8 +3763,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						h(
 							'div',
 							{ className: 'pw-form-row' },
-							h(Field, { label: t('new.from') }, h(CityField, { query: depQuery, onQuery: (value) => { setDepQuery(value); setDepCode(resolveCity(value) || ''); }, onPick: (code) => { setDepCode(code); setDepQuery(cityLabel(code)); } })),
-							h(Field, { label: t('new.to') }, h(CityField, { query: arrQuery, onQuery: (value) => { setArrQuery(value); setArrCode(resolveCity(value) || ''); }, onPick: (code) => { setArrCode(code); setArrQuery(cityLabel(code)); } }))
+							h(Field, { label: t('new.from') }, h(CityField, { query: depQuery, onQuery: (value) => { setDepQuery(value); setDepCode(resolveCity(value) || ''); }, onPick: (code) => { setDepCode(code); setDepQuery(citySelectionLabel(code)); } })),
+							h(Field, { label: t('new.to') }, h(CityField, { query: arrQuery, onQuery: (value) => { setArrQuery(value); setArrCode(resolveCity(value) || ''); }, onPick: (code) => { setArrCode(code); setArrQuery(citySelectionLabel(code)); } }))
 						)
 					),
 					h(
@@ -4040,9 +4388,27 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			apply(ctx) {
 				try {
 					runtime.t = ctx.locale.bind(NS);
+					const syncLocale = () => {
+						let active = '';
+						try {
+							const snapshot = ctx.locale.getSnapshot();
+							active = snapshot && typeof snapshot.active === 'string' ? snapshot.active : '';
+						} catch (error) {
+							active = '';
+						}
+						runtime.activeLocale = active.toLowerCase().indexOf('en') === 0 ? 'en' : 'zh';
+					};
+					syncLocale();
 
 					ctx.effect(() => ctx.locale.register(NS, { zh: ZH, en: EN }), 'price-watch: dictionaries');
-					ctx.effect(() => ctx.locale.subscribe(() => runtime.revision.bump()), 'price-watch: locale revisions');
+					ctx.effect(
+						() =>
+							ctx.locale.subscribe(() => {
+								syncLocale();
+								runtime.revision.bump();
+							}),
+						'price-watch: locale revisions'
+					);
 
 					ctx.effect(() => {
 						const node = document.createElement('style');
