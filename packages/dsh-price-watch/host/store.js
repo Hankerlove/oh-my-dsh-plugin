@@ -12,6 +12,12 @@
  *   flights/*.json   latest browser flight list per watch monitor (+ D10 roundTrip)
  *   alerts.jsonl     the delivery log (kept under its historical name)
  *
+ * Storage tools (D-group follow-up): `storageReport()` sizes the data directory
+ * for the settings page and `cleanupStorage()` deletes the `*.removed` leftovers
+ * that `removeMonitor()` keeps as a safety net. The browser profile is never
+ * walked fully (tens of thousands of files) — it is sized with depth/entry caps
+ * and reports `null` when that cap is hit.
+ *
  * JSON documents are written through a temp file + rename so a crash mid-write
  * cannot truncate them. A document that fails to parse is moved aside to
  * `<name>.bak` and replaced by defaults: a corrupted file must degrade the
@@ -54,7 +60,7 @@
  *            bookkeeping (`cooldowns` / `dayFired` / `sides` / `lastDigest`) are
  *            dropped; every field the scheduler and the API still read is kept.
  */
-import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import {
@@ -877,6 +883,161 @@ export function createStore(rootDir) {
   }
   // #endregion
 
+  // #region storage 统计与清理
+  /** 目录读取：不存在 → `[]`；其它错误（权限等）→ `null`，调用方降级。 */
+  async function readDirEntries(dir) {
+    try {
+      return await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      return error?.code === 'ENOENT' ? [] : null;
+    }
+  }
+
+  /**
+   * 一个目录里「直接子文件」的数量与字节数。只统计文件，不递归（目录结构是固定的
+   * 一层：prices/calendar/flights 都是平铺的）。读不到目录 → 0（降级，不抛）。
+   */
+  async function dirStats(dir, accept) {
+    const stats = { files: 0, bytes: 0 };
+    const entries = await readDirEntries(dir);
+    if (!Array.isArray(entries)) return stats;
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (typeof accept === 'function' && !accept(entry.name)) continue;
+      try {
+        const info = await stat(join(dir, entry.name));
+        stats.files += 1;
+        stats.bytes += info.size;
+      } catch {
+        /* 文件在统计过程中消失了：跳过 */
+      }
+    }
+    return stats;
+  }
+
+  /**
+   * `browser-profile/` 的大小。
+   *
+   * 为什么不直接递归：Chrome 的 profile 有几万个文件，面板点一次「存储」就扫一遍
+   * 会把 Host 卡住。这里限制深度 3、条目 6000：正常 profile 能算出一个近似值；
+   * 超限就直接返回 `null`（面板显示「—」），宁可少报也不拖住。
+   */
+  async function profileSize() {
+    const MAX_ENTRIES = 6000;
+    const MAX_DEPTH = 3;
+    const rootProfile = join(rootDir, 'browser-profile');
+    let bytes = 0;
+    let entries = 0;
+    const stack = [{ dir: rootProfile, depth: 0 }];
+    while (stack.length > 0) {
+      const { dir, depth } = stack.pop();
+      const list = await readDirEntries(dir);
+      if (!Array.isArray(list)) return null;
+      for (const entry of list) {
+        entries += 1;
+        if (entries > MAX_ENTRIES) return null;
+        if (entry.isDirectory()) {
+          if (depth < MAX_DEPTH) stack.push({ dir: join(dir, entry.name), depth: depth + 1 });
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        try {
+          bytes += (await stat(join(dir, entry.name))).size;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    return { bytes };
+  }
+
+  /** 所有 `*.removed` 残留（根目录 + 三个数据目录）。 */
+  async function removedStats() {
+    const isRemoved = (name) => name.endsWith('.removed');
+    const parts = await Promise.all([rootDir, pricesDir, calendarDir, flightsDir].map((dir) => dirStats(dir, isRemoved)));
+    return parts.reduce((sum, part) => ({ files: sum.files + part.files, bytes: sum.bytes + part.bytes }), { files: 0, bytes: 0 });
+  }
+
+  /**
+   * `GET /api/storage` 的数据源。任何统计失败都降级成 0 / null，绝不抛——
+   * 存储面板拿不到数字也不该让设置页报错。
+   */
+  async function storageReport() {
+    const stats = { dataDir: rootDir, totalBytes: 0, totalFiles: 0 };
+    try {
+      // 分类统计里排除 `.removed`：残留在 `removed` 桶里单独算，否则总占用会重复计数。
+      const notRemoved = (name) => !name.endsWith('.removed');
+      const rootFiles = await dirStats(rootDir, (name) => /\.(json|jsonl)$/.test(name));
+      const prices = await dirStats(pricesDir, notRemoved);
+      const calendar = await dirStats(calendarDir, notRemoved);
+      const flights = await dirStats(flightsDir, notRemoved);
+      const removed = await removedStats();
+      let profileBytes = null;
+      try {
+        profileBytes = (await profileSize())?.bytes ?? null;
+      } catch {
+        profileBytes = null;
+      }
+      const buckets = { root: rootFiles, prices, calendar, flights };
+      let totalBytes = 0;
+      let totalFiles = 0;
+      for (const part of Object.values(buckets)) {
+        totalBytes += part.bytes;
+        totalFiles += part.files;
+      }
+      // `.removed` 残留不计入上面四个分类桶（避免重复计数），但确实占磁盘，单加成总量。
+      totalBytes += removed.bytes;
+      totalFiles += removed.files;
+      return {
+        ...stats,
+        totalBytes,
+        totalFiles,
+        removed,
+        prices: { files: prices.files, bytes: prices.bytes },
+        calendar: { files: calendar.files, bytes: calendar.bytes },
+        flights: { files: flights.files, bytes: flights.bytes },
+        profileBytes,
+      };
+    } catch {
+      return { ...stats, totalBytes: 0, totalFiles: 0, removed: { files: 0, bytes: 0 }, prices: { files: 0, bytes: 0 }, calendar: { files: 0, bytes: 0 }, flights: { files: 0, bytes: 0 }, profileBytes: null };
+    }
+  }
+
+  /**
+   * `POST /api/storage/cleanup`：删除根目录与三个数据目录里的 `*.removed`。
+   *
+   * 安全约束（写死在这里，路由层不需要也不允许放宽）：
+   *  - 只删文件名以 `.removed` 结尾的**普通文件**，其它一律不碰；
+   *  - 逐个容错：一个删不掉（权限/被占用）只把 failed 加一，继续删下一个；
+   *  - 删除前先取大小，用于汇报「释放了多少字节」。
+   */
+  async function cleanupStorage() {
+    let removed = 0;
+    let freedBytes = 0;
+    let failed = 0;
+    for (const dir of [rootDir, pricesDir, calendarDir, flightsDir]) {
+      const entries = await readDirEntries(dir);
+      if (!Array.isArray(entries)) {
+        failed += 1;
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.removed')) continue;
+        const path = join(dir, entry.name);
+        try {
+          const info = await stat(path);
+          await rm(path, { force: true });
+          removed += 1;
+          freedBytes += info.size;
+        } catch {
+          failed += 1;
+        }
+      }
+    }
+    return { removed, freedBytes, failed };
+  }
+  // #endregion
+
   return {
     rootDir,
     init,
@@ -903,6 +1064,8 @@ export function createStore(rootDir) {
     readAllPoints,
     appendDelivery,
     readDeliveries,
+    storageReport,
+    cleanupStorage,
     today: () => isoDate(),
   };
 }

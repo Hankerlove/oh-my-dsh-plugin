@@ -294,7 +294,6 @@ window.__ModuleLoader__.load({
 			{ code: 'BFJ', zh: '毕节', en: 'Bijie', intl: false },
 			{ code: 'LPF', zh: '六盘水', en: 'Liupanshui', intl: false },
 			{ code: 'HZH', zh: '黎平', en: 'Liping', intl: false },
-			// ── international ─────────────────────────────────────────────────────
 			{ code: 'HKG', zh: '香港', en: 'Hong Kong', intl: true },
 			{ code: 'TPE', zh: '台北', en: 'Taipei', intl: true },
 			{ code: 'TSA', zh: '台北松山', en: 'Taipei Songshan', intl: true, alias: { zh: ['松山'] } },
@@ -329,6 +328,168 @@ window.__ModuleLoader__.load({
 			{ code: 'DEL', zh: '德里', en: 'Delhi', intl: true },
 			{ code: 'IST', zh: '伊斯坦布尔', en: 'Istanbul', intl: true },
 			{ code: 'SVO', zh: '莫斯科', en: 'Moscow', intl: true },
+			// ── international · East Asia ─────────────────────────────────────────
+			{ code: 'NGO', zh: '名古屋', en: 'Nagoya', intl: true },
+			{ code: 'CTS', zh: '札幌', en: 'Sapporo', intl: true, alias: { zh: ['新千岁'] } },
+			{ code: 'FUK', zh: '福冈', en: 'Fukuoka', intl: true },
+			{ code: 'OKA', zh: '冲绳', en: 'Okinawa', intl: true, alias: { zh: ['那霸'] } },
+			{ code: 'SDJ', zh: '仙台', en: 'Sendai', intl: true },
+			{ code: 'HIJ', zh: '广岛', en: 'Hiroshima', intl: true },
+			{ code: 'KOJ', zh: '鹿儿岛', en: 'Kagoshima', intl: true },
+			{ code: 'NGS', zh: '长崎', en: 'Nagasaki', intl: true },
+			{ code: 'KMQ', zh: '小松', en: 'Komatsu', intl: true },
+			{ code: 'FSZ', zh: '静冈', en: 'Shizuoka', intl: true },
+			{ code: 'TAK', zh: '高松', en: 'Takamatsu', intl: true },
+			{ code: 'MYJ', zh: '松山', en: 'Matsuyama', intl: true },
+			{ code: 'PUS', zh: '釜山', en: 'Busan', intl: true },
+			{ code: 'CJU', zh: '济州', en: 'Jeju', intl: true },
+			{ code: 'TAE', zh: '大邱', en: 'Daegu', intl: true },
+			{ code: 'CJJ', zh: '清州', en: 'Cheongju', intl: true },
+			{ code: 'MFM', zh: '澳门', en: 'Macau', intl: true },
+			// ── international · Southeast Asia ────────────────────────────────────
+			{ code: 'CNX', zh: '清迈', en: 'Chiang Mai', intl: true },
+			{ code: 'HKT', zh: '普吉', en: 'Phuket', intl: true },
+			{ code: 'KBV', zh: '甲米', en: 'Krabi', intl: true },
+			{ code: 'USM', zh: '苏梅', en: 'Samui', intl: true },
+			{ code: 'CXR', zh: '芽庄', en: 'Nha Trang', intl: true },
+			{ code: 'PQC', zh: '富国', en: 'Phu Quoc', intl: true },
+			{ code: 'HUI', zh: '顺化', en: 'Hue', intl: true },
+			{ code: 'REP', zh: '暹粒', en: 'Siem Reap', intl: true, alias: { zh: ['吴哥'] } },
+			{ code: 'LPQ', zh: '琅勃拉邦', en: 'Luang Prabang', intl: true },
+			{ code: 'MDL', zh: '曼德勒', en: 'Mandalay', intl: true },
+			{ code: 'RGN', zh: '仰光', en: 'Yangon', intl: true },
+			{ code: 'PNH', zh: '金边', en: 'Phnom Penh', intl: true },
+			{ code: 'VTE', zh: '万象', en: 'Vientiane', intl: true },
+			{ code: 'DPS', zh: '巴厘岛', en: 'Bali', intl: true, alias: { zh: ['登巴萨'] } },
+			{ code: 'SUB', zh: '泗水', en: 'Surabaya', intl: true },
+			{ code: 'KNO', zh: '棉兰', en: 'Medan', intl: true },
+			{ code: 'BKI', zh: '亚庇', en: 'Kota Kinabalu', intl: true, alias: { zh: ['哥打基纳巴卢'] } },
+			{ code: 'KCH', zh: '古晋', en: 'Kuching', intl: true },
+			{ code: 'PEN', zh: '槟城', en: 'Penang', intl: true },
+			{ code: 'BWN', zh: '斯里巴加湾', en: 'Bandar Seri Begawan', intl: true },
+			// ── international · South & Central Asia ─────────────────────────────
+			{ code: 'BOM', zh: '孟买', en: 'Mumbai', intl: true },
+			{ code: 'BLR', zh: '班加罗尔', en: 'Bengaluru', intl: true },
+			{ code: 'MAA', zh: '金奈', en: 'Chennai', intl: true },
+			{ code: 'CCU', zh: '加尔各答', en: 'Kolkata', intl: true },
+			{ code: 'HYD', zh: '海得拉巴', en: 'Hyderabad', intl: true },
+			{ code: 'COK', zh: '科钦', en: 'Kochi', intl: true },
+			{ code: 'KTM', zh: '加德满都', en: 'Kathmandu', intl: true },
+			{ code: 'DAC', zh: '达卡', en: 'Dhaka', intl: true },
+			{ code: 'CMB', zh: '科伦坡', en: 'Colombo', intl: true },
+			{ code: 'MLE', zh: '马累', en: 'Male', intl: true, alias: { zh: ['马尔代夫'] } },
+			{ code: 'KHI', zh: '卡拉奇', en: 'Karachi', intl: true },
+			{ code: 'ISB', zh: '伊斯兰堡', en: 'Islamabad', intl: true },
+			{ code: 'LHE', zh: '拉合尔', en: 'Lahore', intl: true },
+			{ code: 'TAS', zh: '塔什干', en: 'Tashkent', intl: true },
+			{ code: 'ALA', zh: '阿拉木图', en: 'Almaty', intl: true },
+			{ code: 'NQZ', zh: '阿斯塔纳', en: 'Astana', intl: true },
+			{ code: 'FRU', zh: '比什凯克', en: 'Bishkek', intl: true },
+			{ code: 'DYU', zh: '杜尚别', en: 'Dushanbe', intl: true },
+			{ code: 'GYD', zh: '巴库', en: 'Baku', intl: true },
+			{ code: 'TBS', zh: '第比利斯', en: 'Tbilisi', intl: true },
+			{ code: 'EVN', zh: '埃里温', en: 'Yerevan', intl: true },
+			// ── international · Middle East ───────────────────────────────────────
+			{ code: 'AUH', zh: '阿布扎比', en: 'Abu Dhabi', intl: true },
+			{ code: 'DOH', zh: '多哈', en: 'Doha', intl: true },
+			{ code: 'RUH', zh: '利雅得', en: 'Riyadh', intl: true },
+			{ code: 'JED', zh: '吉达', en: 'Jeddah', intl: true },
+			{ code: 'DMM', zh: '达曼', en: 'Dammam', intl: true },
+			{ code: 'MCT', zh: '马斯喀特', en: 'Muscat', intl: true },
+			{ code: 'KWI', zh: '科威特', en: 'Kuwait', intl: true },
+			{ code: 'BAH', zh: '巴林', en: 'Bahrain', intl: true },
+			{ code: 'AMM', zh: '安曼', en: 'Amman', intl: true },
+			{ code: 'BEY', zh: '贝鲁特', en: 'Beirut', intl: true },
+			{ code: 'TLV', zh: '特拉维夫', en: 'Tel Aviv', intl: true },
+			{ code: 'ADB', zh: '伊兹密尔', en: 'Izmir', intl: true },
+			{ code: 'ESB', zh: '安卡拉', en: 'Ankara', intl: true },
+			{ code: 'IKA', zh: '德黑兰', en: 'Tehran', intl: true },
+			{ code: 'BGW', zh: '巴格达', en: 'Baghdad', intl: true },
+			// ── international · Europe ───────────────────────────────────────────
+			{ code: 'LGW', zh: '伦敦盖特威克', en: 'London Gatwick', intl: true },
+			{ code: 'MAN', zh: '曼彻斯特', en: 'Manchester', intl: true },
+			{ code: 'EDI', zh: '爱丁堡', en: 'Edinburgh', intl: true },
+			{ code: 'DUB', zh: '都柏林', en: 'Dublin', intl: true },
+			{ code: 'MUC', zh: '慕尼黑', en: 'Munich', intl: true },
+			{ code: 'BER', zh: '柏林', en: 'Berlin', intl: true },
+			{ code: 'DUS', zh: '杜塞尔多夫', en: 'Dusseldorf', intl: true },
+			{ code: 'HAM', zh: '汉堡', en: 'Hamburg', intl: true },
+			{ code: 'STR', zh: '斯图加特', en: 'Stuttgart', intl: true },
+			{ code: 'GVA', zh: '日内瓦', en: 'Geneva', intl: true },
+			{ code: 'NCE', zh: '尼斯', en: 'Nice', intl: true },
+			{ code: 'FCO', zh: '罗马', en: 'Rome', intl: true },
+			{ code: 'MXP', zh: '米兰', en: 'Milan', intl: true },
+			{ code: 'VCE', zh: '威尼斯', en: 'Venice', intl: true },
+			{ code: 'NAP', zh: '那不勒斯', en: 'Naples', intl: true },
+			{ code: 'MAD', zh: '马德里', en: 'Madrid', intl: true },
+			{ code: 'BCN', zh: '巴塞罗那', en: 'Barcelona', intl: true },
+			{ code: 'LIS', zh: '里斯本', en: 'Lisbon', intl: true },
+			{ code: 'OPO', zh: '波尔图', en: 'Porto', intl: true },
+			{ code: 'BRU', zh: '布鲁塞尔', en: 'Brussels', intl: true },
+			{ code: 'CPH', zh: '哥本哈根', en: 'Copenhagen', intl: true },
+			{ code: 'ARN', zh: '斯德哥尔摩', en: 'Stockholm', intl: true },
+			{ code: 'OSL', zh: '奥斯陆', en: 'Oslo', intl: true },
+			{ code: 'HEL', zh: '赫尔辛基', en: 'Helsinki', intl: true },
+			{ code: 'WAW', zh: '华沙', en: 'Warsaw', intl: true },
+			{ code: 'PRG', zh: '布拉格', en: 'Prague', intl: true },
+			{ code: 'BUD', zh: '布达佩斯', en: 'Budapest', intl: true },
+			{ code: 'ATH', zh: '雅典', en: 'Athens', intl: true },
+			{ code: 'LED', zh: '圣彼得堡', en: 'Saint Petersburg', intl: true },
+			{ code: 'VIE', zh: '维也纳', en: 'Vienna', intl: true },
+			{ code: 'TLL', zh: '塔林', en: 'Tallinn', intl: true },
+			{ code: 'RIX', zh: '里加', en: 'Riga', intl: true },
+			{ code: 'VNO', zh: '维尔纽斯', en: 'Vilnius', intl: true },
+			// ── international · North America ─────────────────────────────────────
+			{ code: 'ORD', zh: '芝加哥', en: 'Chicago', intl: true },
+			{ code: 'BOS', zh: '波士顿', en: 'Boston', intl: true },
+			{ code: 'IAD', zh: '华盛顿', en: 'Washington', intl: true },
+			{ code: 'EWR', zh: '纽瓦克', en: 'Newark', intl: true },
+			{ code: 'ATL', zh: '亚特兰大', en: 'Atlanta', intl: true },
+			{ code: 'DFW', zh: '达拉斯', en: 'Dallas', intl: true },
+			{ code: 'IAH', zh: '休斯敦', en: 'Houston', intl: true },
+			{ code: 'MIA', zh: '迈阿密', en: 'Miami', intl: true },
+			{ code: 'MCO', zh: '奥兰多', en: 'Orlando', intl: true },
+			{ code: 'LAS', zh: '拉斯维加斯', en: 'Las Vegas', intl: true },
+			{ code: 'DEN', zh: '丹佛', en: 'Denver', intl: true },
+			{ code: 'PHX', zh: '菲尼克斯', en: 'Phoenix', intl: true },
+			{ code: 'SAN', zh: '圣迭戈', en: 'San Diego', intl: true },
+			{ code: 'YYZ', zh: '多伦多', en: 'Toronto', intl: true },
+			{ code: 'YUL', zh: '蒙特利尔', en: 'Montreal', intl: true },
+			{ code: 'YYC', zh: '卡尔加里', en: 'Calgary', intl: true },
+			{ code: 'YOW', zh: '渥太华', en: 'Ottawa', intl: true },
+			{ code: 'MEX', zh: '墨西哥城', en: 'Mexico City', intl: true },
+			{ code: 'CUN', zh: '坎昆', en: 'Cancun', intl: true },
+			// ── international · South America ─────────────────────────────────────
+			{ code: 'GRU', zh: '圣保罗', en: 'Sao Paulo', intl: true },
+			{ code: 'GIG', zh: '里约热内卢', en: 'Rio de Janeiro', intl: true },
+			{ code: 'EZE', zh: '布宜诺斯艾利斯', en: 'Buenos Aires', intl: true },
+			{ code: 'LIM', zh: '利马', en: 'Lima', intl: true },
+			{ code: 'SCL', zh: '圣地亚哥', en: 'Santiago', intl: true },
+			{ code: 'BOG', zh: '波哥大', en: 'Bogota', intl: true },
+			{ code: 'UIO', zh: '基多', en: 'Quito', intl: true },
+			{ code: 'MVD', zh: '蒙得维的亚', en: 'Montevideo', intl: true },
+			// ── international · Oceania ───────────────────────────────────────────
+			{ code: 'BNE', zh: '布里斯班', en: 'Brisbane', intl: true },
+			{ code: 'PER', zh: '珀斯', en: 'Perth', intl: true },
+			{ code: 'ADL', zh: '阿德莱德', en: 'Adelaide', intl: true },
+			{ code: 'OOL', zh: '黄金海岸', en: 'Gold Coast', intl: true },
+			{ code: 'CNS', zh: '凯恩斯', en: 'Cairns', intl: true },
+			{ code: 'CHC', zh: '基督城', en: 'Christchurch', intl: true },
+			{ code: 'WLG', zh: '惠灵顿', en: 'Wellington', intl: true },
+			{ code: 'NAN', zh: '楠迪', en: 'Nadi', intl: true, alias: { zh: ['斐济'] } },
+			{ code: 'GUM', zh: '关岛', en: 'Guam', intl: true },
+			// ── international · Africa ────────────────────────────────────────────
+			{ code: 'CAI', zh: '开罗', en: 'Cairo', intl: true },
+			{ code: 'JNB', zh: '约翰内斯堡', en: 'Johannesburg', intl: true },
+			{ code: 'CPT', zh: '开普敦', en: 'Cape Town', intl: true },
+			{ code: 'NBO', zh: '内罗毕', en: 'Nairobi', intl: true },
+			{ code: 'ADD', zh: '亚的斯亚贝巴', en: 'Addis Ababa', intl: true },
+			{ code: 'CMN', zh: '卡萨布兰卡', en: 'Casablanca', intl: true },
+			{ code: 'LOS', zh: '拉各斯', en: 'Lagos', intl: true },
+			{ code: 'ACC', zh: '阿克拉', en: 'Accra', intl: true },
+			{ code: 'DAR', zh: '达累斯萨拉姆', en: 'Dar es Salaam', intl: true },
+			{ code: 'TUN', zh: '突尼斯', en: 'Tunis', intl: true },
+			{ code: 'MRU', zh: '毛里求斯', en: 'Mauritius', intl: true },
 		];
 		/** `code` → catalog row, and a lowercased search haystack per row. */
 		const CITY_BY_CODE = new Map();
@@ -423,6 +584,21 @@ window.__ModuleLoader__.load({
 		function formatMoney(value) {
 			if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
 			return `¥${Math.round(value).toLocaleString()}`;
+		}
+
+		/** `512 B` / `1.2 KB` / `3.4 MB` / `1.0 GB` — one decimal from KB upwards. */
+		function formatBytes(value) {
+			const bytes = numberOrNull(value);
+			if (bytes === null || bytes < 0) return '—';
+			if (bytes < 1024) return `${Math.round(bytes)} B`;
+			const units = ['KB', 'MB', 'GB', 'TB'];
+			let scaled = bytes / 1024;
+			let index = 0;
+			while (scaled >= 1024 && index < units.length - 1) {
+				scaled /= 1024;
+				index += 1;
+			}
+			return `${scaled.toFixed(1)} ${units[index]}`;
 		}
 
 		/** `12/24`, or `—` when the Host sent nothing usable. */
@@ -1009,6 +1185,15 @@ window.__ModuleLoader__.load({
 			'settings.notify.testing': '发送中…',
 			'settings.notify.testOk': '测试消息已发送。',
 			'settings.notify.testFailed': '测试失败：{error}',
+			'settings.storage.title': '存储',
+			'settings.storage.leftover': '已删除监控的残留数据：{files} 个文件 · {size}',
+			'settings.storage.none': '没有残留数据',
+			'settings.storage.cleanup': '清理',
+			'settings.storage.cleaning': '清理中…',
+			'settings.storage.cleaned': '已释放 {size}',
+			'settings.storage.failed': '清理失败：{error}',
+			'settings.storage.total': '数据目录共 {size} · {files} 个文件',
+			'settings.storage.totalUnknown': '数据目录占用暂时读不到',
 			'passengers.title': '乘客',
 			'passengers.manage': '管理乘客',
 			'passengers.new': '新建乘客',
@@ -1224,6 +1409,15 @@ window.__ModuleLoader__.load({
 			'settings.notify.testing': 'Sending…',
 			'settings.notify.testOk': 'Test message sent.',
 			'settings.notify.testFailed': 'Test failed: {error}',
+			'settings.storage.title': 'Storage',
+			'settings.storage.leftover': 'Leftover data from deleted monitors: {files} files · {size}',
+			'settings.storage.none': 'No leftover data',
+			'settings.storage.cleanup': 'Clean up',
+			'settings.storage.cleaning': 'Cleaning…',
+			'settings.storage.cleaned': 'Released {size}',
+			'settings.storage.failed': 'Cleanup failed: {error}',
+			'settings.storage.total': 'Data directory: {size} · {files} files',
+			'settings.storage.totalUnknown': 'Directory usage is not available right now',
 			'passengers.title': 'Passengers',
 			'passengers.manage': 'Manage passengers',
 			'passengers.new': 'New passenger',
@@ -3322,6 +3516,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [settingsError, setSettingsError] = useState(null);
 			const [testing, setTesting] = useState(false);
 			const [testResult, setTestResult] = useState(null);
+			const [cleaning, setCleaning] = useState(false);
+			const [cleanupFreed, setCleanupFreed] = useState(null);
+			const [cleanupError, setCleanupError] = useState(null);
 
 			useEffect(() => {
 				if (props.settings === null || props.settings === undefined) return;
@@ -3404,6 +3601,61 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				if (!confirmed) return;
 				await props.onLogout();
 			};
+
+			/**
+			 * Cleanup only deletes orphaned data; the page then re-reads `/storage` through
+			 * the callback, so the leftover row and the totals stay in sync.
+			 */
+			const runCleanup = async () => {
+				if (cleaning) return;
+				setCleaning(true);
+				setCleanupFreed(null);
+				setCleanupError(null);
+				try {
+					const result = await props.onCleanupStorage();
+					const freed = result && typeof result.freedBytes === 'number' && Number.isFinite(result.freedBytes) ? result.freedBytes : 0;
+					setCleanupFreed(freed);
+				} catch (error) {
+					setCleanupError(error && error.message ? error.message : String(error));
+				} finally {
+					setCleaning(false);
+				}
+			};
+
+			const storageInfo = props.storage && typeof props.storage === 'object' ? props.storage : null;
+			const removedInfo = storageInfo && storageInfo.removed && typeof storageInfo.removed === 'object' ? storageInfo.removed : null;
+			const removedFiles = removedInfo !== null && typeof removedInfo.files === 'number' && Number.isFinite(removedInfo.files) ? Math.max(0, Math.round(removedInfo.files)) : 0;
+			const removedBytes = removedInfo !== null && typeof removedInfo.bytes === 'number' && Number.isFinite(removedInfo.bytes) ? Math.max(0, removedInfo.bytes) : 0;
+			const totalBytes = storageInfo !== null && typeof storageInfo.totalBytes === 'number' && Number.isFinite(storageInfo.totalBytes) ? storageInfo.totalBytes : null;
+			const totalFiles = storageInfo !== null && typeof storageInfo.totalFiles === 'number' && Number.isFinite(storageInfo.totalFiles) ? Math.max(0, Math.round(storageInfo.totalFiles)) : null;
+			const dataDir = storageInfo !== null && typeof storageInfo.dataDir === 'string' ? storageInfo.dataDir : '';
+			const storageBody =
+				props.storageError !== null && props.storageError !== undefined
+					? h(ErrorBar, { key: 'storage-error', message: props.storageError, inline: true, onRetry: props.onReload })
+					: storageInfo === null
+						? h(Skeleton, { key: 'storage-skeleton', height: 44, radius: 12 })
+						: [
+								h(
+									'div',
+									{ className: 'pw-row', style: { gap: 10, alignItems: 'center', flexWrap: 'wrap' }, key: 'leftover' },
+									h('span', { key: 'text' }, removedFiles > 0 ? t('settings.storage.leftover', { files: removedFiles, size: formatBytes(removedBytes) }) : t('settings.storage.none')),
+									h('span', { className: 'pw-grow', key: 'grow' }),
+									h(Button, { key: 'clean', size: 'sm', onClick: () => void runCleanup(), disabled: cleaning || removedFiles === 0 }, cleaning ? t('settings.storage.cleaning') : t('settings.storage.cleanup'))
+								),
+								cleanupError === null
+									? null
+									: h('span', { className: 'pw-test-result', 'data-ok': 'false', role: 'alert', key: 'cleanup-error' }, t('settings.storage.failed', { error: cleanupError })),
+								cleanupFreed === null
+									? null
+									: h('span', { className: 'pw-test-result', 'data-ok': 'true', role: 'status', key: 'cleanup-ok' }, t('settings.storage.cleaned', { size: formatBytes(cleanupFreed) })),
+								h(
+									'span',
+									{ className: 'pw-hint', key: 'total', title: dataDir === '' ? undefined : dataDir },
+									totalBytes === null || totalFiles === null
+										? t('settings.storage.totalUnknown')
+										: t('settings.storage.total', { size: formatBytes(totalBytes), files: totalFiles })
+								),
+							];
 
 			const channel = draft.channel === 'webhook' ? 'webhook' : 'app';
 			const channelPicker = h(
@@ -3548,7 +3800,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					...channelFields,
 					// Same status line as the watch detail footer (A2 §4.5).
 					h(DeliveryLine, { key: 'delivery', delivery: lastDelivery })
-				)
+				),
+				h(Section, { key: 'storage', title: t('settings.storage.title') }, ...(Array.isArray(storageBody) ? storageBody : [storageBody]))
 			);
 		}
 
@@ -4072,6 +4325,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [settings, setSettings] = useState(null);
 			const [error, setError] = useState(null);
 			const [settingsError, setSettingsError] = useState(null);
+			const [storage, setStorage] = useState(null);
+			const [storageError, setStorageError] = useState(null);
 			const [prices, setPrices] = useState(null);
 			const [pricesError, setPricesError] = useState(null);
 			const [flights, setFlights] = useState(null);
@@ -4208,10 +4463,22 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				const seq = auxSeq.current + 1;
 				auxSeq.current = seq;
 				setDataLoading(true);
-				Promise.allSettled([apiFetch('/passengers'), apiFetch('/settings')])
+				// The storage panel only exists on the settings page.
+				const requests = [apiFetch('/passengers'), apiFetch('/settings')];
+				if (auxView === 'settings') requests.push(apiFetch('/storage'));
+				Promise.allSettled(requests)
 					.then((results) => {
 						if (seq !== auxSeq.current) return;
 						let firstError = null;
+						if (requests.length > 2) {
+							if (results[2].status === 'fulfilled') {
+								const data = results[2].value;
+								setStorage(data && typeof data === 'object' ? data : null);
+								setStorageError(null);
+							} else {
+								setStorageError(results[2].reason && results[2].reason.message ? results[2].reason.message : String(results[2].reason));
+							}
+						}
 						if (results[0].status === 'fulfilled') {
 							const data = results[0].value;
 							setPassengers(data && Array.isArray(data.passengers) ? data.passengers : []);
@@ -4234,6 +4501,15 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			}, [auxView, auxReloadKey]);
 
 			const reloadAux = useCallback(() => setAuxReloadKey((value) => value + 1), []);
+
+			/** Delete the orphaned data, then re-read the totals so the panel is truthful. */
+			const cleanupStorage = useCallback(async () => {
+				const result = await apiFetch('/storage/cleanup', { method: 'POST' });
+				const next = await apiFetch('/storage');
+				setStorage(next && typeof next === 'object' ? next : null);
+				setStorageError(null);
+				return result && typeof result === 'object' ? result : null;
+			}, []);
 
 			// Detail views name passengers, and the calendar pin bar may need to pick
 			// one, so the roster is read on demand even if the user never opened the
@@ -4496,6 +4772,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					loginPending,
 					onLogin: startLogin,
 					onLogout: logout,
+					storage,
+					storageError,
+					onCleanupStorage: cleanupStorage,
 				});
 			} else if (view.kind === 'new') {
 				content = h(NewView, {

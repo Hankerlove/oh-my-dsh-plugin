@@ -15,6 +15,10 @@
  * line is gone), and every list item carries `delivery: { at, ok, error } | null`
  * plus `lastError` so the panel never has to join against `/status`.
  *
+ * Storage additions: `GET /api/storage` sizes the data directory (including the
+ * `*.removed` leftovers and a capped browser-profile figure) and
+ * `POST /api/storage/cleanup` deletes only those `.removed` files, one by one.
+ *
  * A2.2 additions: `notify` settings grew a channel selector; `appSecret` is
  * **never** returned (only `appSecretSet`), and an empty `appSecret` in a POST is
  * ignored instead of clearing the stored one. `POST /notify/test` sends one test
@@ -454,6 +458,21 @@ export function createRouter({ store, logger, actions }) {
     // /api/notify/test — 设置页「发送测试消息」（A2.2 §4）
     if (segments[0] === 'notify' && segments[1] === 'test' && method === 'POST') {
       const result = await actions.notifyTest();
+      return sendJson(res, 200, { ok: true, data: result });
+    }
+
+    // /api/storage — 数据目录占用（GET），只统计不删除。
+    if (segments[0] === 'storage' && segments.length === 1 && method === 'GET') {
+      return sendJson(res, 200, { ok: true, data: await store.storageReport() });
+    }
+
+    // /api/storage/cleanup — 只删 *.removed 残留，逐个容错（POST，受 same-origin 校验）。
+    if (segments[0] === 'storage' && segments[1] === 'cleanup' && method === 'POST') {
+      const result = await store.cleanupStorage();
+      logger.info(
+        `存储清理完成：删除 ${result.removed} 个 .removed 残留，释放 ${result.freedBytes} 字节`
+        + (result.failed > 0 ? `（${result.failed} 项清理失败）` : ''),
+      );
       return sendJson(res, 200, { ok: true, data: result });
     }
 
