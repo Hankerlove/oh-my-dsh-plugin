@@ -63,6 +63,14 @@ const READ_ROWS = 25;
 const TOP_N = 10;
 /** How many round-list rows the snapshot keeps for the detail table (D10-B). */
 const ROUND_LIST_ROWS = 10;
+/**
+ * 往返联程组合数：Top N 去程 × Top N 返程，每条都跑一次 checkout 拿真实待支付价。
+ * 3×3 = 9 条是一轮上限；每条 checkout 约 10–25s，一轮真机采集预计 2–4 分钟。
+ */
+const ROUND_OUTBOUND_TOP = 3;
+const ROUND_RETURN_TOP = 3;
+/** 连续这么多次 checkout 失败就中止剩余组合（保留已拿到的），避免白跑十几分钟。 */
+const ROUND_CHECKOUT_FAIL_LIMIT = 2;
 /** Park the window for ten idle minutes before closing it. */
 const IDLE_CLOSE_MS = 10 * 60 * 1000;
 /** Dwell on a page 3–8 s so the traffic still looks human. */
@@ -277,7 +285,9 @@ function taxFromOrderInfo(info) {
 }
 
 /**
- * D10：把「联程」与「两段单买」合成一次往返采集的报告（纯函数，导出以便离线单测）。
+ * D10/D19：把「联程组合」与「两段单买」合成一次往返采集的报告（纯函数，导出以便离线单测）。
+ * D19 起联程不再是一行一个起价，而是 Top3 去程×Top3 返程的组合数组（`round.combos`），
+ * 这里负责把其中**最便宜的一条**当作 `round` 参与比价，并把组合原样带给快照。
  *
  * 口径（用户拍板，2026-11-18）：两者都用**待支付价 / 成交价**——联程用预订页总价，
  * 两段用各自预订页的税费 + 票价；列表裸价只在预订页读不到时兜底，并用
@@ -287,7 +297,7 @@ function taxFromOrderInfo(info) {
  * @param {object} input.monitor
  * @param {Array<{id:string}>} input.passengers
  * @param {object|null} input.round  联程结果：{listTotal, payable, payableSource, checkoutError,
- *                                   flightNo, ..., return, roundList}
+ *                                   flightNo, ..., return, roundList, combos, aborted, incomplete}
  * @param {object|null} input.out    去程单买结果：{flights, tax, orderTotal}
  * @param {object|null} input.back   回程单买结果：同上
  * @param {{round?:string|null,out?:string|null,back?:string|null}} [input.errors]
@@ -392,7 +402,9 @@ export function combineRoundSchemes({ monitor, passengers, round, out, back, err
     : null;
 
   // 只要有一头没有真实到手价（联程是估算、或两段缺一段）就标 partial。
-  const partial = roundEffective === null || onewaySum === null || roundEstimated || roundSource !== 'order';
+  // D19：组合被安全阀截断、或某个去程打不开，整份对比都只能算部分数据。
+  const combosTruncated = round?.aborted === true || round?.incomplete === true;
+  const partial = roundEffective === null || onewaySum === null || roundEstimated || roundSource !== 'order' || combosTruncated;
 
   /** 单程段摘要：该段最便宜的可订航班（快照展示用）。 */
   const legSummary = (flights) => {
@@ -470,6 +482,8 @@ export function combineRoundSchemes({ monitor, passengers, round, out, back, err
     lowest,
     roundTrip: {
       partial,
+      // D19：Top3×Top3 的每条组合（payable 为 null 的排最后），详情页表格用。
+      combos: Array.isArray(round?.combos) ? round.combos : [],
       // D10-B：往返列表前 ≤10 行，详情页「往返航班表」直接渲染这份。
       roundList: Array.isArray(round?.roundList) ? round.roundList : [],
       round: roundEffective === null ? null : {
@@ -508,6 +522,61 @@ export function combineRoundSchemes({ monitor, passengers, round, out, back, err
         back: typeof errors.back === 'string' && errors.back ? errors.back : null,
       },
     },
+  };
+}
+
+/**
+ * 把 N 条往返组合整理成快照里的 `round`（最便宜那条）+ `combos`。
+ * 纯函数、导出以便离线单测：DOM 流程无法在单测里跑，但「哪条最便宜 / null 排最后 /
+ * 中止后如何标 partial」这些规则必须可验证。
+ *
+ * 排序：`payable` 升序，没拿到实价（null）的排最后；同价按 `listTotal` 升序。
+ *
+ * @param {{combos:Array<object>, roundList?:Array<object>, aborted?:boolean, incomplete?:boolean}} input
+ * @returns {object} 与 `combineRoundSchemes` 的 `round` 入参同构，额外带 combos/aborted/incomplete。
+ */
+export function summariseRoundCombos({ combos, roundList = [], aborted = false, incomplete = false }) {
+  const list = (Array.isArray(combos) ? combos : []).filter((combo) => combo && typeof combo === 'object');
+  if (list.length === 0) throw new Error('往返组合一条都没拿到');
+  const sorted = list.slice().sort((left, right) => {
+    const leftPayable = Number.isFinite(left?.payable) ? Number(left.payable) : Number.POSITIVE_INFINITY;
+    const rightPayable = Number.isFinite(right?.payable) ? Number(right.payable) : Number.POSITIVE_INFINITY;
+    if (leftPayable !== rightPayable) return leftPayable - rightPayable;
+    return (Number(left?.listTotal) || Number.POSITIVE_INFINITY) - (Number(right?.listTotal) || Number.POSITIVE_INFINITY);
+  });
+  const best = sorted[0];
+  const hasPrice = Number.isFinite(Number(best?.payable)) && Number(best.payable) > 0;
+  const out = best?.out && typeof best.out === 'object' ? best.out : {};
+  const ret = best?.ret && typeof best.ret === 'object' ? best.ret : {};
+  const listTotal = Number(best?.listTotal) > 0 ? Math.round(Number(best.listTotal)) : 0;
+  const money = (raw) => (Number.isFinite(Number(raw)) && Number(raw) > 0 ? Math.round(Number(raw)) : null);
+  return {
+    listTotal,
+    // 最便宜那条如果没拿到实价，payable 先退回列表价（combine 会再加两段实测税费）。
+    payable: hasPrice ? Math.round(Number(best.payable)) : listTotal,
+    payableSource: hasPrice ? 'order' : 'list',
+    checkoutError: hasPrice ? null : (typeof best?.error === 'string' && best.error ? best.error : '未拿到预订页总价'),
+    flightNo: typeof out.flightNo === 'string' ? out.flightNo : '',
+    airline: typeof out.airline === 'string' ? out.airline : '',
+    craft: typeof out.craft === 'string' ? out.craft : '',
+    depTime: typeof out.depTime === 'string' ? out.depTime : '',
+    arrTime: typeof out.arrTime === 'string' ? out.arrTime : '',
+    depAirport: typeof out.depAirport === 'string' ? out.depAirport : '',
+    arrAirport: typeof out.arrAirport === 'string' ? out.arrAirport : '',
+    seats: Number.isInteger(out.seats) ? out.seats : null,
+    soldOut: out.soldOut === true,
+    return: {
+      flightNo: typeof ret.flightNo === 'string' ? ret.flightNo : '',
+      depTime: typeof ret.depTime === 'string' ? ret.depTime : '',
+      arrTime: typeof ret.arrTime === 'string' ? ret.arrTime : '',
+      depAirport: typeof ret.depAirport === 'string' ? ret.depAirport : '',
+      arrAirport: typeof ret.arrAirport === 'string' ? ret.arrAirport : '',
+      listPrice: money(ret.listPrice),
+    },
+    roundList: Array.isArray(roundList) ? roundList : [],
+    combos: sorted,
+    aborted: aborted === true,
+    incomplete: incomplete === true,
   };
 }
 
@@ -1487,40 +1556,9 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     }
   }
 
-  /**
-   * 联程方案（D10 修复）：往返列表页 → 取「往返总价（起）」最低的一行 → 点「选为去程」
-   * → 回程列表选最便宜的一行 → 点「订票」**就地展开** → 点产品「预订」→ 预订页读
-   * **待支付总价**。
-   *
-   * Best effort 分层：
-   *  - 往返列表行拿不到 → 抛错（上层把联程这一路降级掉）；
-   *  - 回程页/预订页这段失败 → 不抛，只记 `checkoutError`，combine 会用
-   *    「列表裸价 + 两段实测税费」估算 payable 并标 partial。
-   */
-  async function collectRoundScheme(page, monitor, passengers, paxCount, { signal } = {}) {
-    const params = monitor?.params || {};
-    if (signal?.aborted) throw new Error('已取消');
-    await page.goto(roundListUrl({
-      dep: params.dep,
-      arr: params.arr,
-      departDate: params.departDate,
-      returnDate: params.returnDate,
-      cabin: params.cabin,
-    }), { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await waitForFlights(page);
-    await dwell(page);
-    await loadRowWindow(page);
-
-    const rows = await readRowList(page);
-    const roundRows = rows.filter((row) => row.isRoundRow || row.roundTotal != null);
-    const pool = roundRows.length ? roundRows : rows;
-    if (pool.length === 0) throw new Error('往返列表没有解析到航班行');
-    const sortedPool = pool.slice().sort((a, b) => a.listPrice - b.listPrice);
-    const cheapest = sortedPool[0];
-    const outbound = pickFlightInfo(cheapest);
-
-    // D10-B：往返列表前 ≤10 行（按往返总价升序），详情页表格直接用这份数据。
-    const roundList = sortedPool.slice(0, ROUND_LIST_ROWS).map((row) => ({
+  /** 往返列表行 → 详情页「往返航班表」的一行（D10-B 的 roundList）。 */
+  function roundRowSummary(row) {
+    return {
       flightNo: row.flightNo || '',
       airline: row.airline || '',
       craft: row.craft || '',
@@ -1528,66 +1566,276 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       arrTime: row.arrTime || '',
       depAirport: row.depAirport || '',
       arrAirport: row.arrAirport || '',
-      listTotal: Number(row.listPrice) || 0,
+      listTotal: Number(row.listPrice) > 0 ? Math.round(Number(row.listPrice)) : 0,
       seats: Number.isInteger(row.seats) ? row.seats : null,
       soldOut: row.soldOut === true,
-    }));
+    };
+  }
 
-    // 点「选为去程」进入选回程流程。找不到按钮说明页面结构变了：抛错让上层降级。
-    const selected = await clickRowAction(page, cheapest.rowIndex, '选为去程|选择去程|选为去程航班');
-    if (!selected) throw new Error('没有找到「选为去程」按钮');
-    await waitForListOrBooking(page);
+  /** 组合里的「去程」航班（含余票，D19 字段）。 */
+  function comboOutboundInfo(row) {
+    return {
+      flightNo: row.flightNo || '',
+      airline: row.airline || '',
+      craft: row.craft || '',
+      depTime: row.depTime || '',
+      arrTime: row.arrTime || '',
+      depAirport: row.depAirport || '',
+      arrAirport: row.arrAirport || '',
+      seats: Number.isInteger(row.seats) ? row.seats : null,
+      soldOut: row.soldOut === true,
+    };
+  }
 
-    // 回程页 → 预订页（软步骤：失败只影响 payable 是真实价还是估算）。
-    let opened = { checkout: false, error: '回程页未加载', returnFlight: null };
+  /** 组合里的「返程」航班（返程行上带的是这条组合的往返总价，即 listPrice）。 */
+  function comboReturnInfo(row) {
+    return {
+      flightNo: row.flightNo || '',
+      airline: row.airline || '',
+      craft: row.craft || '',
+      depTime: row.depTime || '',
+      arrTime: row.arrTime || '',
+      depAirport: row.depAirport || '',
+      arrAirport: row.arrAirport || '',
+      listPrice: Number(row.listPrice) > 0 ? Math.round(Number(row.listPrice)) : null,
+    };
+  }
+
+  /** 在重新渲染的列表里找回同一趟航班（DOM 行号会变，航班号+时刻不会）。 */
+  function findRoundRow(rows, reference) {
+    if (!reference || !Array.isArray(rows)) return null;
+    const keyOf = (row) => `${row?.flightNo || ''}|${row?.depTime || ''}`;
+    const wanted = keyOf(reference);
+    return rows.find((row) => keyOf(row) === wanted) || null;
+  }
+
+  /**
+   * 从预订页 / 展开态回到返程列表。返回是否恢复成功。
+   * 恢复失败时调用方会跳过该去程剩下的返程组合（下一轮去程会重新 goto，状态干净）。
+   */
+  async function goBackToReturnList(page) {
     try {
-      await waitForFlights(page);
+      await page.goBack({ timeout: 15000 }).catch(() => null);
+      await page.waitForTimeout(1500);
+      await waitForFlights(page, 20000);
       await loadRowWindow(page);
-      const backRows = await readRowList(page);
-      const backCheapest = backRows.slice().sort((a, b) => a.listPrice - b.listPrice)[0] || null;
-      opened = await openRoundCheckout(page, backCheapest, passengers, paxCount, { signal });
+      return true;
     } catch (error) {
       if (isFatal(error)) throw error;
-      opened = { checkout: false, error: String(error?.message || error), returnFlight: null };
-      logger.warn(`联程回程页处理失败，降级为「列表裸价 + 两段实测税费」: ${opened.error}`);
+      return false;
+    }
+  }
+
+  /** 预订页读不到总价时，抓一小段页面线索（文本/附近文案/价格/iframe），写进 error 供排查。 */
+  async function checkoutDiagnostic(page) {
+    return page.evaluate(() => {
+      const text = (document.body.innerText || '').replace(/\s+/g, ' ');
+      const near = [...document.querySelectorAll('*')]
+        .filter((el) => el.children.length === 0 && /总价|合计|应付|订单总额|实付|需支付/.test(el.textContent || ''))
+        .slice(0, 6)
+        .map((el) => (el.textContent || '').trim().slice(0, 40))
+        .join(' | ');
+      const frames = [...document.querySelectorAll('iframe')].map((el) => (el.getAttribute('src') || '').slice(0, 80)).slice(0, 4);
+      const prices = [...new Set((text.match(/[¥￥]\s?[\d,]{2,7}/g) || []))].slice(0, 8);
+      return `${text.slice(0, 120)}${near ? ' || ' + near : ''}${prices.length ? ' || prices=' + prices.join(',') : ''}${frames.length ? ' || frames=' + frames.join(',') : ''}`;
+    }).catch(() => null);
+  }
+
+  /**
+   * 已经在预订页：等渲染 → 读总价 → 做合理性校验。
+   *
+   * 校验规则：预订总价必须 ≥ 这一条组合的列表往返总价，且不能超过它 3 倍 + 500
+   * （多乘客/保险/服务包会抬高，但离谱的数字多半是读到了别的金额）。不合理就当没
+   * 读到，走 list+tax 降级而不是写一个假实价。
+   *
+   * @returns {Promise<{orderTotal:number|null, error:string|null}>}
+   */
+  async function readCheckoutTotal(page, listTotal) {
+    await waitForCheckoutContent(page);
+    const order = await readBookingPage(page);
+    const rawTotal = order?.orderTotal ?? null;
+    const bareFare = Number(listTotal) || 0;
+    const sane = rawTotal !== null && bareFare > 0 && rawTotal >= bareFare && rawTotal <= bareFare * 3 + 500;
+    if (sane) return { orderTotal: rawTotal, error: null };
+    if (rawTotal !== null) return { orderTotal: null, error: `预订页总价不合理（${rawTotal} vs 列表 ${bareFare}）` };
+    const diagnostic = await checkoutDiagnostic(page);
+    return { orderTotal: null, error: diagnostic ? `未读到预订页总价: ${diagnostic}` : '未读到预订页总价' };
+  }
+
+  /**
+   * 联程方案（D19）：Top3 去程 × Top3 返程 = ≤9 条完整组合，每条都真实跑一次
+   * checkout 拿待支付价。
+   *
+   * 为什么每轮都要重新 goto 往返列表：点过「选为去程」/进过 checkout 之后，列表
+   * 页的 DOM 与滚动位置都不可信（携程会重渲染），重新 goto 是最稳的状态复位；
+   * 去程在页内用「航班号 + 起飞时刻」重新定位，避免依赖会变的行号。
+   *
+   * 安全阀（task D19）：
+   *  - 单条 checkout 失败只影响该条：payable 记 null，combine 用「列表裸价 + 两段
+   *    实测税费」估算并标 list+tax；
+   *  - 连续 ROUND_CHECKOUT_FAIL_LIMIT(=2) 条 checkout 失败 → 中止剩余组合（保留
+   *    已拿到的），整体标 partial，避免一次采集白跑十几分钟；
+   *  - BlockedError / AuthError 仍然直接抛给调度器（全局「跳过一轮」）。
+   */
+  async function collectRoundScheme(page, monitor, passengers, paxCount, { signal } = {}) {
+    const params = monitor?.params || {};
+    if (signal?.aborted) throw new Error('已取消');
+    const roundUrl = roundListUrl({
+      dep: params.dep,
+      arr: params.arr,
+      departDate: params.departDate,
+      returnDate: params.returnDate,
+      cabin: params.cabin,
+    });
+
+    // 打开往返列表页并读出去程行（按列表价升序）。
+    const loadOutboundRows = async () => {
+      await page.goto(roundUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await waitForFlights(page);
+      // Human pacing: look at the list for a few seconds, like a person would.
+      await dwell(page);
+      await loadRowWindow(page);
+      const rows = await readRowList(page);
+      const roundRows = rows.filter((row) => row.isRoundRow || row.roundTotal != null);
+      return (roundRows.length ? roundRows : rows).slice().sort((a, b) => a.listPrice - b.listPrice);
+    };
+
+    // 1) 首屏（也为详情页 roundList 留数据）
+    const outboundRows = await loadOutboundRows();
+    if (outboundRows.length === 0) throw new Error('往返列表没有解析到航班行');
+    const roundList = outboundRows.slice(0, ROUND_LIST_ROWS).map(roundRowSummary);
+    const topOutbound = outboundRows.slice(0, ROUND_OUTBOUND_TOP);
+
+    const combos = [];
+    let consecutiveFailures = 0;
+    let aborted = false;
+    let outboundFailures = 0;
+
+    for (let i = 0; i < topOutbound.length && !aborted; i += 1) {
+      const outRow = topOutbound[i];
+      const outLabel = outRow.flightNo || `#${i + 1}`;
+      let returnRows = [];
+      try {
+        // 2a) 每轮重新 goto，再点第 i 条去程的「选为去程」
+        await page.goto(roundUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await waitForFlights(page);
+        await loadRowWindow(page);
+        const freshRows = await readRowList(page);
+        const freshRoundRows = freshRows.filter((row) => row.isRoundRow || row.roundTotal != null);
+        const pool = (freshRoundRows.length ? freshRoundRows : freshRows).slice().sort((a, b) => a.listPrice - b.listPrice);
+        const fresh = findRoundRow(pool, outRow) || pool[i] || null;
+        if (!fresh) throw new Error(`重新加载后找不到去程 ${outLabel}`);
+        const selected = await clickRowAction(page, fresh.rowIndex, '选为去程|选择去程|选为去程航班');
+        if (!selected) throw new Error('没有找到「选为去程」按钮');
+        await waitForListOrBooking(page);
+        // 2b) 返程列表 → 按列表价升序取前 ROUND_RETURN_TOP 条
+        await waitForFlights(page);
+        await loadRowWindow(page);
+        const backRows = await readRowList(page);
+        returnRows = backRows.slice().sort((a, b) => a.listPrice - b.listPrice).slice(0, ROUND_RETURN_TOP);
+      } catch (error) {
+        if (isFatal(error)) throw error;
+        outboundFailures += 1;
+        logger.warn(`联程去程 ${outLabel} 打开返程列表失败，跳过该去程: ${String(error?.message || error)}`);
+        continue;
+      }
+      if (returnRows.length === 0) {
+        outboundFailures += 1;
+        logger.warn(`联程去程 ${outLabel} 没有可用的返程行，跳过`);
+        continue;
+      }
+
+      for (let j = 0; j < returnRows.length && !aborted; j += 1) {
+        const plannedReturn = returnRows[j];
+        let backRow = plannedReturn;
+        // 2c) 第 2 条起：把页面状态复位到「返程列表」，再用航班号+时刻重新定位。
+        // 只有真的进过 checkout 才需要 goBack；checkout 失败时页面还停在返程列表
+        // （只是某行展开了），此时 goBack 会退到往返列表，反而毁掉状态。
+        if (j > 0) {
+          // 每条组合都重新走一遍「往返列表 → 选为去程 → 返程列表」。goBack 看
+          // 起来更省事，但携程的 SPA 从 checkout 返回后经常不恢复列表状态，
+          // 重新导航是唯一可靠的复位（实测 goBack 会让同一条去程只拿到 1 条返程）。
+          try {
+            await page.goto(roundUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await waitForFlights(page);
+            await loadRowWindow(page);
+            const again = await readRowList(page);
+            const againRound = again.filter((row) => row.isRoundRow || row.roundTotal != null);
+            const againPool = (againRound.length ? againRound : again).slice().sort((a, b) => a.listPrice - b.listPrice);
+            const sameOut = findRoundRow(againPool, outRow) || againPool[i] || null;
+            if (!sameOut) throw new Error(`重新加载后找不到去程 ${outLabel}`);
+            const reselected = await clickRowAction(page, sameOut.rowIndex, '选为去程|选择去程|选为去程航班');
+            if (!reselected) throw new Error('没有找到「选为去程」按钮');
+            await waitForListOrBooking(page);
+            await waitForFlights(page);
+            await loadRowWindow(page);
+            const freshBackRows = await readRowList(page);
+            backRow = findRoundRow(freshBackRows, plannedReturn);
+          } catch (error) {
+            if (isFatal(error)) throw error;
+            logger.warn(`联程去程 ${outLabel} 第 ${j + 1} 条返程：重新加载失败，跳过剩余返程: ${String(error?.message || error)}`);
+            break;
+          }
+          if (!backRow) {
+            logger.warn(`联程返程 ${plannedReturn.flightNo || `#${j + 1}`} 复位后找不到该行，跳过剩余返程`);
+            break;
+          }
+        }
+
+        let combo = null;
+        try {
+          const opened = await openRoundCheckout(page, backRow, passengers, paxCount, { signal });
+          let orderTotal = null;
+          let error = opened.error || null;
+          if (opened.checkout) {
+            const total = await readCheckoutTotal(page, backRow.listPrice);
+            orderTotal = total.orderTotal;
+            if (orderTotal === null) error = error || total.error;
+          } else if (!error) {
+            error = '未进入预订页';
+          }
+          combo = {
+            out: comboOutboundInfo(outRow),
+            ret: comboReturnInfo(backRow),
+            listTotal: Number(backRow.listPrice) > 0 ? Math.round(Number(backRow.listPrice)) : 0,
+            payable: orderTotal,
+            payableSource: orderTotal !== null ? 'order' : 'list+tax',
+            error: orderTotal !== null ? null : (error || '未拿到预订页总价'),
+          };
+          consecutiveFailures = orderTotal !== null ? 0 : consecutiveFailures + 1;
+        } catch (error) {
+          if (isFatal(error)) throw error;
+          combo = {
+            out: comboOutboundInfo(outRow),
+            ret: comboReturnInfo(backRow),
+            listTotal: Number(backRow.listPrice) > 0 ? Math.round(Number(backRow.listPrice)) : 0,
+            payable: null,
+            payableSource: 'list+tax',
+            error: String(error?.message || error),
+          };
+          consecutiveFailures += 1;
+        }
+        combos.push(combo);
+        logger.info(
+          `联程组合 ${combos.length}：${combo.out.flightNo} + ${combo.ret.flightNo}`
+          + ` 列表 ¥${combo.listTotal} → ${combo.payable !== null ? `实价 ¥${combo.payable}` : '实价未取到'}`,
+        );
+
+        if (consecutiveFailures >= ROUND_CHECKOUT_FAIL_LIMIT) {
+          aborted = true;
+          logger.warn(`联程连续 ${consecutiveFailures} 条 checkout 失败，中止剩余组合（已拿到 ${combos.length} 条）`);
+        }
+      }
     }
 
-    // 没真正进入预订页就不要去读「当前页总价」——那可能是回程列表上的数字。
-    if (opened.checkout) await waitForCheckoutContent(page);
-    const order = opened.checkout ? await readBookingPage(page) : null;
-    const rawTotal = order?.orderTotal ?? null;
-    const bareFare = Number(cheapest.listPrice) || 0;
-    // A checkout total must at least cover the bare fare and cannot be wildly above it.
-    const orderTotal = rawTotal !== null && bareFare > 0 && rawTotal >= bareFare && rawTotal <= bareFare * 3 + 500
-      ? rawTotal
-      : null;
-    const listTotal = Number(cheapest.listPrice) || 0;
-    // When we did reach the checkout page but could not find the total, keep a short
-    // page excerpt in the error so the panel can explain what the page looked like.
-    let totalDiagnostic = null;
-    if (opened.checkout && orderTotal === null) {
-      totalDiagnostic = await page.evaluate(() => {
-        const text = (document.body.innerText || '').replace(/\s+/g, ' ');
-        const near = [...document.querySelectorAll('*')]
-          .filter((el) => el.children.length === 0 && /总价|合计|应付|订单总额|实付|需支付/.test(el.textContent || ''))
-          .slice(0, 6)
-          .map((el) => (el.textContent || '').trim().slice(0, 40))
-          .join(' | ');
-        const frames = [...document.querySelectorAll('iframe')].map((el) => (el.getAttribute('src') || '').slice(0, 80)).slice(0, 4);
-        const prices = [...new Set((text.match(/[¥￥]\s?[\d,]{2,7}/g) || []))].slice(0, 8);
-        return `${text.slice(0, 120)}${near ? ' || ' + near : ''}${prices.length ? ' || prices=' + prices.join(',') : ''}${frames.length ? ' || frames=' + frames.join(',') : ''}`;
-      }).catch(() => null);
-    }
-    return {
-      listTotal,
-      // 待支付价：预订页总价优先；读不到就退回列表「往返总价（起）」，由 combine 补税费。
-      payable: orderTotal ?? listTotal,
-      payableSource: orderTotal !== null ? 'order' : 'list',
-      checkoutError: orderTotal !== null ? null : (opened.error || (totalDiagnostic ? `未读到预订页总价: ${totalDiagnostic}` : '未读到预订页总价')),
-      ...outbound,
-      return: opened.returnFlight,
-      roundList,
-    };
+    // 3) 合并排序：payable 升序（null 最后），最便宜那条作为 round。
+    const incomplete = aborted || outboundFailures > 0 || combos.length === 0;
+    const summary = summariseRoundCombos({ combos, roundList, aborted, incomplete });
+    logger.info(
+      `联程组合共 ${summary.combos.length} 条，最便宜 ${summary.flightNo} + ${summary.return.flightNo} `
+      + `¥${summary.payable}（${summary.payableSource}）${incomplete ? '，本轮为部分数据' : ''}`,
+    );
+    return summary;
   }
 
   /**

@@ -1130,6 +1130,12 @@ window.__ModuleLoader__.load({
 			'watch.summary.onewayOut': '去程 {flightNo} {depTime} → {arrTime}',
 			'watch.summary.onewayBack': '返程 {flightNo} {depTime} → {arrTime}',
 			'watch.roundTable.title': '联程航班与往返总价',
+			'watch.combos.title': '联程组合（{n} 条）',
+			'watch.combos.help': '去程 Top3 × 返程 Top3，价格取预订页待支付价',
+			'watch.combos.empty': '这次没采到联程组合',
+			'watch.combos.real': '实价',
+			'watch.combos.estimate': '估算',
+			'watch.combos.error': '这条组合没取到价：{error}',
 			'watch.roundTable.price': '往返起价',
 			'watch.roundTable.help': '联程按往返总价升序的前 10 个航班',
 			'watch.backTable.title': '返程航班与待支付价',
@@ -1366,6 +1372,12 @@ window.__ModuleLoader__.load({
 			'watch.summary.onewayOut': 'Outbound {flightNo} {depTime} → {arrTime}',
 			'watch.summary.onewayBack': 'Return {flightNo} {depTime} → {arrTime}',
 			'watch.roundTable.title': 'Through-ticket flights and round-trip price',
+			'watch.combos.title': 'Through-ticket combos ({n})',
+			'watch.combos.help': 'Top 3 outbound × top 3 return, priced at the order-page payable total',
+			'watch.combos.empty': 'No through-ticket combos collected this time',
+			'watch.combos.real': 'Actual',
+			'watch.combos.estimate': 'Estimate',
+			'watch.combos.error': 'No price for this combo: {error}',
 			'watch.roundTable.price': 'Round-trip from',
 			'watch.roundTable.help': 'Top 10 through-ticket options by round-trip price',
 			'watch.backTable.title': 'Return flights and payable price',
@@ -1734,6 +1746,20 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-compare-verdict[data-cheaper="round"], .pw-compare-verdict[data-cheaper="oneway"] { color: var(--dsw-alias-state-success-primary); font-weight: 500; }
 .pw-compare-verdict[data-cheaper="tie"] { color: var(--dsw-alias-label-secondary); }
 .pw-compare-warning { font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-warn-primary); }
+/* round-trip combos: one card per outbound+return pair */
+.pw-trip-list { display: flex; flex-direction: column; gap: 8px; }
+.pw-trip-card { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--dsw-radius-md, 12px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2); }
+.pw-trip-card[data-lowest="true"] { border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 45%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, transparent); box-shadow: inset 3px 0 0 var(--dsw-alias-state-success-primary); }
+.pw-trip-lines { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.pw-trip-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 12px; line-height: 18px; }
+.pw-trip-no { flex: none; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary); }
+.pw-trip-route { color: var(--dsw-alias-label-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pw-trip-error { font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-error-primary); }
+.pw-trip-price-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; flex: none; }
+.pw-trip-price { font-size: 16px; font-weight: 600; line-height: 22px; font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary); }
+.pw-trip-card[data-lowest="true"] .pw-trip-price { color: var(--dsw-alias-state-success-primary); }
+.pw-trip-source { font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary); }
+.pw-trip-source[data-source="estimate"] { color: var(--dsw-alias-label-tertiary); }
 @media (max-width: 640px) { .pw-compare-sides { grid-template-columns: minmax(0, 1fr); } }
 .pw-delivery { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .pw-delivery[data-ok="false"] { color: var(--dsw-alias-state-error-primary); }
@@ -3202,9 +3228,27 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const cheaper = declared !== null ? declared : roundPayable !== null && onewayTotal !== null ? (roundPayable < onewayTotal ? 'round' : roundPayable > onewayTotal ? 'oneway' : 'tie') : null;
 			const errors = roundTrip.errors && typeof roundTrip.errors === 'object' ? roundTrip.errors : {};
 			const rowsOf = (value) => (Array.isArray(value) ? value.filter((row) => row && typeof row === 'object') : []);
+			// `combos` = complete outbound+return pairs from the new Host; older snapshots
+			// only carry the single-row `roundList`, which the page still falls back to.
+			const combos = rowsOf(roundTrip.combos)
+				.map((combo) => ({
+					out: combo.out && typeof combo.out === 'object' ? combo.out : null,
+					ret: combo.ret && typeof combo.ret === 'object' ? combo.ret : null,
+					payable: typeof combo.payable === 'number' && Number.isFinite(combo.payable) ? combo.payable : null,
+					source: typeof combo.payableSource === 'string' ? combo.payableSource : null,
+					error: typeof combo.error === 'string' && combo.error.trim() !== '' ? combo.error.trim() : null,
+				}))
+				.sort((left, right) => {
+					if (left.payable === null && right.payable === null) return 0;
+					if (left.payable === null) return 1;
+					if (right.payable === null) return -1;
+					return left.payable - right.payable;
+				})
+				.slice(0, 9);
 			return {
 				partial: roundTrip.partial === true,
 				// Table feeds: the through-ticket list, plus each one-way leg's own list.
+				combos,
 				roundList: rowsOf(roundTrip.roundList),
 				outFlights: rowsOf(oneway && oneway.outFlights),
 				backFlights: rowsOf(oneway && oneway.backFlights),
@@ -3416,6 +3460,66 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			);
 		}
 
+		/** One line of a combo: `CZ8882  14:00 大兴国际机场 → 16:20 浦东国际机场T2`. */
+		function TripLine(props) {
+			const flight = props.flight;
+			if (flight === null) return h('div', { className: 'pw-trip-line' }, h('span', { className: 'pw-trip-route' }, '—'));
+			return h(
+				'div',
+				{ className: 'pw-trip-line' },
+				h('span', { className: 'pw-trip-no' }, flight.flightNo || '—'),
+				h('span', { className: 'pw-trip-route' }, `${flight.depTime || '—'} ${flight.depAirport || '—'} → ${flight.arrTime || '—'} ${flight.arrAirport || '—'}`)
+			);
+		}
+
+		/**
+		 * 联程组合 (V6): up to nine complete outbound+return pairs, each showing both legs
+		 * on the left and the payable price plus an 实价/估算 tag on the right. The
+		 * cheapest known price is highlighted, `payable === null` sorts last and shows
+		 * `—`, and an empty feed says so instead of failing the page.
+		 */
+		function RoundTripCombos(props) {
+			const combos = Array.isArray(props.combos) ? props.combos : [];
+			const cheapest = combos.find((combo) => combo.payable !== null);
+			return h(
+				Section,
+				{ title: t('watch.combos.title', { n: combos.length }), help: t('watch.combos.help') },
+				combos.length === 0
+					? h('div', { className: 'pw-hint' }, t('watch.combos.empty'))
+					: h(
+							'div',
+							{ className: 'pw-trip-list' },
+							combos.map((combo, index) =>
+								h(
+									'div',
+									{
+										className: 'pw-trip-card',
+										key: `${combo.out && combo.out.flightNo ? combo.out.flightNo : 'out'}-${combo.ret && combo.ret.flightNo ? combo.ret.flightNo : 'ret'}-${index}`,
+										'data-lowest': cheapest !== null && combo === cheapest ? 'true' : 'false',
+									},
+									h(
+										'div',
+										{ className: 'pw-trip-lines' },
+										h(TripLine, { flight: combo.out }),
+										h(TripLine, { flight: combo.ret }),
+										combo.error === null ? null : h('span', { className: 'pw-trip-error' }, t('watch.combos.error', { error: combo.error }))
+									),
+									h(
+										'div',
+										{ className: 'pw-trip-price-cell' },
+										h('span', { className: 'pw-trip-price' }, combo.payable === null ? '—' : formatMoney(combo.payable)),
+										combo.source === 'list+tax'
+											? h('span', { className: 'pw-trip-source', 'data-source': 'estimate' }, t('watch.combos.estimate'))
+											: combo.source === 'order'
+												? h('span', { className: 'pw-trip-source', 'data-source': 'real' }, t('watch.combos.real'))
+												: null
+									)
+								)
+							)
+						)
+			);
+		}
+
 		/**
 		 * The three round-trip tables: the through ticket (往返起价, from `roundList`),
 		 * then each one-way leg's own TOP10 (`oneway.outFlights` / `backFlights`, the
@@ -3426,14 +3530,25 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const helpWith = (base) => (fetchedAt === null ? base : `${base} · ${t('watch.fetchedAt', { when: relativeTime(fetchedAt) })}`);
 			const loading = flightsData === null && noFlightsError === true;
 			const outRows = roundTrip !== null && roundTrip.outFlights.length > 0 ? roundTrip.outFlights : flights;
+			const combos = roundTrip === null ? [] : roundTrip.combos;
+			const legacyRows = roundTrip === null ? [] : roundTrip.roundList;
 			return [
-				h(
-					Section,
-					{ key: 'round-table', title: t('watch.roundTable.title'), help: helpWith(t('watch.roundTable.help')) },
-					loading
-						? h(Skeleton, { height: 180, radius: 12 })
-						: h(FlightTable, { flights: roundTrip === null ? [] : roundTrip.roundList, priceField: 'listTotal', showStatus: false, emptyText: t('watch.tableEmpty') })
-				),
+				loading
+					? h(
+							Section,
+							{ key: 'combos', title: t('watch.combos.title', { n: 0 }) },
+							h(Skeleton, { height: 180, radius: 12 })
+						)
+					: combos.length > 0
+						? h(RoundTripCombos, { key: 'combos', combos })
+						: legacyRows.length > 0
+							? // Old snapshot without combos: keep the single-row through-ticket table.
+								h(
+									Section,
+									{ key: 'combos', title: t('watch.roundTable.title'), help: helpWith(t('watch.roundTable.help')) },
+									h(FlightTable, { flights: legacyRows, priceField: 'listTotal', showStatus: false, emptyText: t('watch.tableEmpty') })
+								)
+							: h(RoundTripCombos, { key: 'combos', combos: [] }),
 				h(
 					Section,
 					{ key: 'out-table', title: t('watch.flightsRound'), help: helpWith(t('watch.flightsRoundHelp')) },

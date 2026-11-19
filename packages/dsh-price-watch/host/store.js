@@ -725,6 +725,51 @@ export function createStore(rootDir) {
   }
 
   /**
+   * D19：往返联程的组合数组（`roundTrip.combos`）。每条 = 一个去程 × 一个返程，
+   * `payable` 为真实待支付价，null 表示该条没跑通（快照里 `error` 有原因）。
+   * 老快照没有这个字段 → 空数组。
+   */
+  function normaliseCombos(list) {
+    if (!Array.isArray(list)) return [];
+    const text = (raw) => (typeof raw === 'string' ? raw : '');
+    const money = (raw) => (Number.isFinite(Number(raw)) && Number(raw) > 0 ? Math.round(Number(raw)) : null);
+    return list
+      .filter((item) => item && typeof item === 'object')
+      .slice(0, 20)
+      .map((combo) => {
+        const out = combo.out && typeof combo.out === 'object' ? combo.out : {};
+        const ret = combo.ret && typeof combo.ret === 'object' ? combo.ret : {};
+        return {
+          out: {
+            flightNo: text(out.flightNo),
+            airline: text(out.airline),
+            craft: text(out.craft),
+            depTime: text(out.depTime),
+            arrTime: text(out.arrTime),
+            depAirport: text(out.depAirport),
+            arrAirport: text(out.arrAirport),
+            seats: Number.isInteger(out.seats) ? out.seats : null,
+            soldOut: out.soldOut === true,
+          },
+          ret: {
+            flightNo: text(ret.flightNo),
+            airline: text(ret.airline),
+            craft: text(ret.craft),
+            depTime: text(ret.depTime),
+            arrTime: text(ret.arrTime),
+            depAirport: text(ret.depAirport),
+            arrAirport: text(ret.arrAirport),
+            listPrice: money(ret.listPrice),
+          },
+          listTotal: money(combo.listTotal),
+          payable: money(combo.payable),
+          payableSource: combo.payableSource === 'order' ? 'order' : 'list+tax',
+          error: text(combo.error) ? text(combo.error).slice(0, 200) : null,
+        };
+      });
+  }
+
+  /**
    * D10-B：往返列表行（详情页「往返航班表」）。字段比单程航班少：没有产品价格，
    * 只有列表「往返总价（起）」与余票。
    */
@@ -754,8 +799,8 @@ export function createStore(rootDir) {
    *
    * 字段全部规范化成数字/字符串/null：快照要能被面板稳定读取，且老客户端遇到
    * 未知字段也不会崩。缺失的一头写 null，`partial` 明确告诉 UI「这不是完整对比」。
-   * 三个表格数组（`roundList` / `oneway.outFlights` / `oneway.backFlights`）在老
-   * 快照里不存在，统一补成空数组，UI 可以直接遍历。
+   * 四个数组（`combos` / `roundList` / `oneway.outFlights` / `oneway.backFlights`）在
+   * 老快照里不存在，统一补成空数组，UI 可以直接遍历。
    */
   function normaliseRoundTrip(value) {
     if (!value || typeof value !== 'object') return null;
@@ -823,6 +868,8 @@ export function createStore(rootDir) {
       : null;
     return {
       partial: value.partial === true,
+      // D19：Top3×Top3 组合；老快照没有这个字段 → 空数组（客户端不用判空）。
+      combos: normaliseCombos(value.combos),
       // D10-B：往返列表前 ≤10 行；老快照没有这个字段 → 空数组（客户端不用判空）。
       roundList: normaliseRoundList(value.roundList),
       round: roundLeg && roundLeg.payable !== null ? roundLeg : null,
