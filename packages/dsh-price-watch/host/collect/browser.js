@@ -61,6 +61,8 @@ const BLOCK_RE = /whaleguard|访问异常|禁止访问|安全验证|请完成验
 const READ_ROWS = 25;
 /** How many of the cheapest rows are expanded and returned (A2 spec §3.2). */
 const TOP_N = 10;
+/** How many round-list rows the snapshot keeps for the detail table (D10-B). */
+const ROUND_LIST_ROWS = 10;
 /** Park the window for ten idle minutes before closing it. */
 const IDLE_CLOSE_MS = 10 * 60 * 1000;
 /** Dwell on a page 3–8 s so the traffic still looks human. */
@@ -284,7 +286,8 @@ function taxFromOrderInfo(info) {
  * @param {object} input
  * @param {object} input.monitor
  * @param {Array<{id:string}>} input.passengers
- * @param {object|null} input.round  联程结果：{listTotal, payable, payableSource, flightNo, ..., return}
+ * @param {object|null} input.round  联程结果：{listTotal, payable, payableSource, checkoutError,
+ *                                   flightNo, ..., return, roundList}
  * @param {object|null} input.out    去程单买结果：{flights, tax, orderTotal}
  * @param {object|null} input.back   回程单买结果：同上
  * @param {{round?:string|null,out?:string|null,back?:string|null}} [input.errors]
@@ -376,7 +379,7 @@ export function combineRoundSchemes({ monitor, passengers, round, out, back, err
   if (roundEffective === null) roundEffective = roundPayable;
 
   const comparison = roundEffective !== null && onewaySum !== null
-    ? (roundPayable === onewaySum
+    ? (roundEffective === onewaySum
       ? { cheaper: 'tie', diff: 0, diffPct: 0, minTotal: roundEffective, maxTotal: onewaySum }
       : {
         cheaper: roundEffective < onewaySum ? 'round' : 'oneway',
@@ -467,9 +470,13 @@ export function combineRoundSchemes({ monitor, passengers, round, out, back, err
     lowest,
     roundTrip: {
       partial,
+      // D10-B：往返列表前 ≤10 行，详情页「往返航班表」直接渲染这份。
+      roundList: Array.isArray(round?.roundList) ? round.roundList : [],
       round: roundEffective === null ? null : {
         payable: roundEffective,
         payableSource: roundEstimated ? 'list+tax' : roundSource,
+        // 预订页为什么没读到：进不去 checkout / 读不到总价，都记下来方便排查。
+        checkoutError: typeof round?.checkoutError === 'string' && round.checkoutError ? round.checkoutError : null,
         listTotal: Number(round?.listTotal) > 0 ? Math.round(Number(round.listTotal)) : null,
         flightNo: round?.flightNo || '',
         airline: round?.airline || '',
@@ -482,11 +489,18 @@ export function combineRoundSchemes({ monitor, passengers, round, out, back, err
         soldOut: round?.soldOut === true,
         return: returnLeg,
       },
-      oneway: onewaySum === null ? null : {
-        out: legSummary(outFlights),
-        back: legSummary(backFlights),
-        sum: onewaySum,
-      },
+      // 只要有一段跑过就把 oneway 写出来（缺一段时 sum 为 null）：详情页仍能展示
+      // 拿到的那一段的 TOP10，而不是整块消失。
+      oneway: (outFlights.length > 0 || backFlights.length > 0)
+        ? {
+          out: legSummary(outFlights),
+          back: legSummary(backFlights),
+          sum: onewaySum,
+          // D10-B：两段单买的 TOP10 原始航班（结构同 flights 数组每项），详情页表格用。
+          outFlights,
+          backFlights,
+        }
+        : null,
       comparison,
       errors: {
         round: typeof errors.round === 'string' && errors.round ? errors.round : null,
@@ -956,12 +970,46 @@ export function createBrowserCollector({ rootDir, logger, store }) {
           const match = text.match(re);
           return match ? Number(String(match[1]).replace(/[^\d]/g, '')) : null;
         };
+        // The checkout page lays the total out differently from the order summary
+        // we used to read: the label may follow the amount, use 需支付/实付, or sit
+        // in a different block. Try both orders and a few label synonyms.
+        const totalPatterns = [
+          /(?:订单总额|应付总额|总价|合计|应付|需支付|实付|支付金额)[^0-9¥￥]{0,14}[¥￥]?\s*([\d,]{2,7})/,
+          /[¥￥]\s*([\d,]{2,7})\s*(?:起)?\s*(?:订单总额|应付总额|总价|合计|需支付|实付)/,
+        ];
+        // The checkout wizard renders the amount and its label in separate blocks, so
+        // the label-neighbourhood regexes miss it. Fall back to reading the largest
+        // amount inside an element whose class looks like a total/pay summary.
+        const totalFromDom = () => {
+          const nodes = [...document.querySelectorAll('[class*="total" i],[class*="amount" i],[class*="pay" i]')];
+          let best = null;
+          for (const node of nodes) {
+            const raw = (node.innerText || node.textContent || '').trim();
+            if (!raw || raw.length > 40) continue;
+            const numbers = [...raw.matchAll(/([\d][\d,]{2,6})/g)]
+              .map((match) => Number(String(match[1]).replace(/[^\d]/g, '')))
+              .filter((value) => Number.isFinite(value) && value > 0);
+            for (const value of numbers) {
+              if (!best || value > best) best = value;
+            }
+          }
+          return best;
+        };
+        const totalOf = () => {
+          for (const re of totalPatterns) {
+            const match = text.match(re);
+            if (!match) continue;
+            const value = Number(String(match[1]).replace(/[^\d]/g, ''));
+            if (Number.isFinite(value) && value > 0) return value;
+          }
+          return totalFromDom();
+        };
         return {
           airportFee: pick(/机建[^¥]{0,10}¥?\s*(\d{1,5})/),
           fuel: pick(/燃油[^¥]{0,10}¥?\s*(\d{1,5})/),
           feeSum: pick(/(?:税费|基建燃油|机建燃油)[^¥]{0,12}¥?\s*(\d{1,5})/),
-          orderTotal: pick(/(?:总价|合计|应付|应付总额|订单总额)[^¥]{0,12}¥?\s*(\d{1,5})/),
-          sawBooking: /乘机人|证件|订单填写|去支付|填写订单/.test(text),
+          orderTotal: totalOf(),
+          sawBooking: /乘机人|证件|订单填写|去支付|填写订单|支付/.test(text),
         };
       }).catch(() => null);
       if (!info || !info.sawBooking) return null;
@@ -1277,37 +1325,6 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     }
   }
 
-  /** 点某一行的预订按钮（回程选择页用，通常会跳到预订页）。 */
-  async function clickRowBook(page, rowIndex) {
-    try {
-      return await page.evaluate((idx) => {
-        const row = Number.isInteger(idx) && idx >= 0 ? document.querySelector('[data-pw-row="' + idx + '"]') : null;
-        const button = row && row.querySelector('.btn-book');
-        if (!button) return false;
-        button.scrollIntoView({ block: 'center' });
-        button.click();
-        return true;
-      }, rowIndex);
-    } catch {
-      return false;
-    }
-  }
-
-  /** 点页面上第一个预订按钮（选择器降级时兜底）。 */
-  async function clickFirstBook(page) {
-    try {
-      return await page.evaluate(() => {
-        const button = document.querySelector('.btn-book');
-        if (!button) return false;
-        button.scrollIntoView({ block: 'center' });
-        button.click();
-        return true;
-      });
-    } catch {
-      return false;
-    }
-  }
-
   /** 等页面变成「航班列表」或「预订页」二选一（选为去程之后不知道会到哪一步）。 */
   async function waitForListOrBooking(page, timeoutMs = 30000) {
     const started = Date.now();
@@ -1326,34 +1343,161 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   }
 
   /**
-   * 从回程列表走到预订页：先点选中那一行，必要时再点一次「下一步/预订」。
-   * 携程的往返流程可能是两步（选回程 → 预订）也可能直接跳预订页，所以这里按
-   * 「页面上有没有乘机人/去支付」判断，最多点两次，不无限试探。
+   * 等浏览器真正进入预订页（D10 修复的核心判断）。
+   *
+   * 为什么用 URL 而不是文案：用户实测点「预订」后跳到
+   * `https://flights.ctrip.com/itinerary/checkout/passenger?tt=…&tx=…&from_sign=…`，
+   * `tt`/`tx` 是会话令牌，**拼不出来、只能靠真实点击到达**；页面文案在中间步骤
+   * （选回程、填单前）也可能出现「去支付」字样，只看文案会误判。
    */
-  async function advanceToBooking(page, rowIndex, { steps = 2 } = {}) {
-    const onBooking = async () => page.evaluate(() => /乘机人|证件|订单填写|去支付|填写订单/.test(document.body.innerText || '')).catch(() => false);
-    for (let step = 0; step < steps; step += 1) {
-      if (await onBooking()) return true;
-      const navigated = page.waitForNavigation({ timeout: 15000 }).catch(() => null);
-      const clicked = step === 0 && Number.isInteger(rowIndex) && rowIndex >= 0
-        ? await clickRowBook(page, rowIndex)
-        : await clickFirstBook(page);
-      await navigated;
-      await page.waitForTimeout(2500 + Math.floor(Math.random() * 1500));
-      if (!clicked) return false;
+  /**
+   * The checkout page is a client-rendered step wizard: the URL changes first and
+   * the passenger form + price summary render a few seconds later. Reading the
+   * body immediately only yields the footer ("乘机信息 / 增值服务 / 支付 / 完成"),
+   * so wait until real content with a price shows up.
+   */
+  async function waitForCheckoutContent(page, timeoutMs = 20000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const ready = await page.evaluate(() => {
+        const text = document.body.innerText || '';
+        return text.length > 300 && /¥\s?\d{2,6}/.test(text);
+      }).catch(() => false);
+      if (ready) return true;
+      await page.waitForTimeout(800);
     }
-    return onBooking();
+    return false;
+  }
+
+  async function waitForCheckout(page, timeoutMs = 25000) {
+    const started = Date.now();
+    const isCheckout = () => {
+      try {
+        return /flights\.ctrip\.com\/itinerary\/checkout\//.test(String(page.url?.() || ''));
+      } catch {
+        return false;
+      }
+    };
+    while (Date.now() - started < timeoutMs) {
+      if (isCheckout()) return true;
+      await page.waitForTimeout(600);
+    }
+    return isCheckout();
   }
 
   /**
-   * 联程方案（D10）：往返列表页 → 取「往返总价（起）」最低的一行 → 点「选为去程」
-   * → 回程列表选最便宜的一行 → 预订页读**待支付总价**。
+   * 点开回程行里「指定裸价」那个票价产品的「预订」。
    *
-   * Best effort：只要拿到列表行就算成功——预订页读不到总价时用列表「¥X起 往返
-   * 总价」兜底，并把 `payableSource` 标成 `'list'`，让上层能给出 partial 结果而
-   * 不是整轮失败。
+   * 用价格做锚点而不是「第几个按钮」：展开后同一行有多个「预订」按钮，DOM 顺序
+   * 和票价排序无关；价格是刚从 `readProducts` 读出来的，能精确对上。
    */
-  async function collectRoundScheme(page, monitor, { signal } = {}) {
+  async function clickProductBook(page, rowIndex, targetPrice) {
+    try {
+      return await page.evaluate(({ idx, target }) => {
+        const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+        const row = Number.isInteger(idx) && idx >= 0
+          ? document.querySelector('[data-pw-row="' + idx + '"]')
+          : document.querySelector('.flight-item.active');
+        if (!row) return false;
+        const candidates = [];
+        for (const button of row.querySelectorAll('.btn-book')) {
+          const label = norm(button.textContent);
+          if (!/预订|选购/.test(label)) continue;
+          let node = button.parentElement;
+          let box = null;
+          for (let depth = 0; depth < 7 && node; depth += 1) {
+            const text = norm(node.innerText);
+            if (/¥\s?\d{2,6}/.test(text) && text.length < 420) {
+              box = node;
+              break;
+            }
+            node = node.parentElement;
+          }
+          if (!box) continue;
+          const price = Number((norm(box.innerText).match(/¥\s?(\d{2,6})/) || [])[1]);
+          if (!Number.isFinite(price) || price <= 0) continue;
+          candidates.push({ button, price });
+        }
+        if (candidates.length === 0) return false;
+        const wanted = Number(target);
+        candidates.sort((left, right) => {
+          if (Number.isFinite(wanted)) {
+            return Math.abs(left.price - wanted) - Math.abs(right.price - wanted) || left.price - right.price;
+          }
+          return left.price - right.price;
+        });
+        const chosen = candidates[0];
+        chosen.button.scrollIntoView({ block: 'center' });
+        chosen.button.click();
+        return true;
+      }, { idx: rowIndex, target: targetPrice });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 回程行 → 预订页（D10 修复）。
+   *
+   * 用户实测的真实交互：
+   *   1) 往返列表点回程行的「订票」**不跳转**，而是就地展开票价产品；
+   *   2) 必须再点具体产品的「预订」才进入 `itinerary/checkout/` 预订页；
+   *   3) 预订页 URL 带 tt/tx 会话令牌，无法自行拼装，只能真实点击到达。
+   *
+   * 失败不抛（除非风控/登录失效）：返回 `{checkout:false, error}`，上层用
+   * 「列表裸价 + 两段实测税费」降级并标 partial。
+   *
+   * @returns {Promise<{checkout:boolean, error:string|null, returnFlight:object|null}>}
+   */
+  async function openRoundCheckout(page, backRow, passengers, paxCount, { signal } = {}) {
+    const returnFlight = backRow ? pickFlightInfo(backRow) : null;
+    try {
+      if (signal?.aborted) throw new Error('已取消');
+      if (!backRow) throw new Error('回程列表没有可用航班行');
+      // 1) 点「订票」→ 等这一行就地展开
+      const expanded = await expandRow(page, backRow.rowIndex);
+      if (!expanded) throw new Error('回程行点「订票」后没有展开票价产品');
+      await waitRowExpanded(page, backRow.rowIndex);
+      await expandAllProducts(page);
+      // 2) 读产品 → 挑该乘客可订的最便宜产品（与单程流程同一套 fareFits 过滤）
+      const snapshot = await readProducts(page, backRow.rowIndex);
+      const hit = chooseFares(snapshot, passengers, paxCount);
+      if (!hit) throw new Error('回程行没有解析到可订的票价产品');
+      const cheapest = hit.chosen.slice().sort((left, right) => left.bare - right.bare)[0];
+      // 3) 点该产品的「预订」
+      const clicked = await clickProductBook(page, backRow.rowIndex, cheapest.bare);
+      if (!clicked) throw new Error('没有找到回程票价产品的「预订」按钮');
+      // 4) 真实点击后等 URL 进入预订页，再读总价（readBookingPage 由调用方执行）
+      const checkout = await waitForCheckout(page);
+      if (!checkout) {
+        let currentUrl = '';
+        try {
+          currentUrl = String(page.url?.() || '').slice(0, 120);
+        } catch {
+          /* ignore */
+        }
+        throw new Error(`点「预订」后没有进入预订页（当前 URL: ${currentUrl}）`);
+      }
+      return { checkout: true, error: null, returnFlight };
+    } catch (error) {
+      if (isFatal(error)) throw error;
+      const message = String(error?.message || error);
+      logger.warn(`联程回程进预订页失败，降级为「列表裸价 + 两段实测税费」: ${message}`);
+      return { checkout: false, error: message, returnFlight };
+    }
+  }
+
+  /**
+   * 联程方案（D10 修复）：往返列表页 → 取「往返总价（起）」最低的一行 → 点「选为去程」
+   * → 回程列表选最便宜的一行 → 点「订票」**就地展开** → 点产品「预订」→ 预订页读
+   * **待支付总价**。
+   *
+   * Best effort 分层：
+   *  - 往返列表行拿不到 → 抛错（上层把联程这一路降级掉）；
+   *  - 回程页/预订页这段失败 → 不抛，只记 `checkoutError`，combine 会用
+   *    「列表裸价 + 两段实测税费」估算 payable 并标 partial。
+   */
+  async function collectRoundScheme(page, monitor, passengers, paxCount, { signal } = {}) {
     const params = monitor?.params || {};
     if (signal?.aborted) throw new Error('已取消');
     await page.goto(roundListUrl({
@@ -1371,42 +1515,78 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     const roundRows = rows.filter((row) => row.isRoundRow || row.roundTotal != null);
     const pool = roundRows.length ? roundRows : rows;
     if (pool.length === 0) throw new Error('往返列表没有解析到航班行');
-    const cheapest = pool.slice().sort((a, b) => a.listPrice - b.listPrice)[0];
+    const sortedPool = pool.slice().sort((a, b) => a.listPrice - b.listPrice);
+    const cheapest = sortedPool[0];
     const outbound = pickFlightInfo(cheapest);
 
-    // 点「选为去程」进入选回程/预订流程。找不到按钮说明页面结构变了：抛错让上层降级。
+    // D10-B：往返列表前 ≤10 行（按往返总价升序），详情页表格直接用这份数据。
+    const roundList = sortedPool.slice(0, ROUND_LIST_ROWS).map((row) => ({
+      flightNo: row.flightNo || '',
+      airline: row.airline || '',
+      craft: row.craft || '',
+      depTime: row.depTime || '',
+      arrTime: row.arrTime || '',
+      depAirport: row.depAirport || '',
+      arrAirport: row.arrAirport || '',
+      listTotal: Number(row.listPrice) || 0,
+      seats: Number.isInteger(row.seats) ? row.seats : null,
+      soldOut: row.soldOut === true,
+    }));
+
+    // 点「选为去程」进入选回程流程。找不到按钮说明页面结构变了：抛错让上层降级。
     const selected = await clickRowAction(page, cheapest.rowIndex, '选为去程|选择去程|选为去程航班');
     if (!selected) throw new Error('没有找到「选为去程」按钮');
     await waitForListOrBooking(page);
 
-    // 回程页：滚动加载 → 取最便宜的一行 → 点进预订页。失败不致命（总价也许已经能读到）。
-    let ret = null;
+    // 回程页 → 预订页（软步骤：失败只影响 payable 是真实价还是估算）。
+    let opened = { checkout: false, error: '回程页未加载', returnFlight: null };
     try {
       await waitForFlights(page);
       await loadRowWindow(page);
       const backRows = await readRowList(page);
       const backCheapest = backRows.slice().sort((a, b) => a.listPrice - b.listPrice)[0] || null;
-      if (backCheapest) {
-        ret = pickFlightInfo(backCheapest);
-        await advanceToBooking(page, backCheapest.rowIndex);
-      } else {
-        await advanceToBooking(page, null);
-      }
+      opened = await openRoundCheckout(page, backCheapest, passengers, paxCount, { signal });
     } catch (error) {
       if (isFatal(error)) throw error;
-      logger.warn(`联程回程选择失败，尝试直接读当前页总价: ${String(error?.message || error)}`);
+      opened = { checkout: false, error: String(error?.message || error), returnFlight: null };
+      logger.warn(`联程回程页处理失败，降级为「列表裸价 + 两段实测税费」: ${opened.error}`);
     }
 
-    const order = await readBookingPage(page);
-    const orderTotal = order?.orderTotal ?? null;
+    // 没真正进入预订页就不要去读「当前页总价」——那可能是回程列表上的数字。
+    if (opened.checkout) await waitForCheckoutContent(page);
+    const order = opened.checkout ? await readBookingPage(page) : null;
+    const rawTotal = order?.orderTotal ?? null;
+    const bareFare = Number(cheapest.listPrice) || 0;
+    // A checkout total must at least cover the bare fare and cannot be wildly above it.
+    const orderTotal = rawTotal !== null && bareFare > 0 && rawTotal >= bareFare && rawTotal <= bareFare * 3 + 500
+      ? rawTotal
+      : null;
     const listTotal = Number(cheapest.listPrice) || 0;
+    // When we did reach the checkout page but could not find the total, keep a short
+    // page excerpt in the error so the panel can explain what the page looked like.
+    let totalDiagnostic = null;
+    if (opened.checkout && orderTotal === null) {
+      totalDiagnostic = await page.evaluate(() => {
+        const text = (document.body.innerText || '').replace(/\s+/g, ' ');
+        const near = [...document.querySelectorAll('*')]
+          .filter((el) => el.children.length === 0 && /总价|合计|应付|订单总额|实付|需支付/.test(el.textContent || ''))
+          .slice(0, 6)
+          .map((el) => (el.textContent || '').trim().slice(0, 40))
+          .join(' | ');
+        const frames = [...document.querySelectorAll('iframe')].map((el) => (el.getAttribute('src') || '').slice(0, 80)).slice(0, 4);
+        const prices = [...new Set((text.match(/[¥￥]\s?[\d,]{2,7}/g) || []))].slice(0, 8);
+        return `${text.slice(0, 120)}${near ? ' || ' + near : ''}${prices.length ? ' || prices=' + prices.join(',') : ''}${frames.length ? ' || frames=' + frames.join(',') : ''}`;
+      }).catch(() => null);
+    }
     return {
       listTotal,
-      // 待支付价：预订页总价优先；读不到才退回列表「往返总价（起）」并标注。
+      // 待支付价：预订页总价优先；读不到就退回列表「往返总价（起）」，由 combine 补税费。
       payable: orderTotal ?? listTotal,
       payableSource: orderTotal !== null ? 'order' : 'list',
+      checkoutError: orderTotal !== null ? null : (opened.error || (totalDiagnostic ? `未读到预订页总价: ${totalDiagnostic}` : '未读到预订页总价')),
       ...outbound,
-      return: ret,
+      return: opened.returnFlight,
+      roundList,
     };
   }
 
@@ -1432,7 +1612,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       }
     };
 
-    const round = await attempt('round', () => collectRoundScheme(page, monitor, { signal }));
+    const round = await attempt('round', () => collectRoundScheme(page, monitor, passengers, paxCount, { signal }));
     const out = await attempt('out', () => collectListFlights(
       page,
       onewayListUrl({ dep: params.dep, arr: params.arr, date: params.departDate, cabin: params.cabin }),

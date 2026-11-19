@@ -666,7 +666,10 @@ export function createStore(rootDir) {
   }
 
   async function readFlightsSnapshot(id) {
-    return (await readJson(join(flightsDir, `${id}.json`), null)).value;
+    const doc = (await readJson(join(flightsDir, `${id}.json`), null)).value;
+    if (!doc || typeof doc !== 'object') return doc;
+    // 老快照没有 D10-B 的表格数组：读取时也补成空数组，接口契约对客户端保持稳定。
+    return { ...doc, roundTrip: normaliseRoundTrip(doc.roundTrip) };
   }
 
   /**
@@ -685,10 +688,74 @@ export function createStore(rootDir) {
   }
 
   /**
+   * 往返快照里的航班数组规范化（`oneway.outFlights` / `backFlights`，结构与
+   * 主 `flights` 数组每项一致）。老快照没有这些字段 → 空数组。
+   */
+  function normaliseTripFlights(list) {
+    if (!Array.isArray(list)) return [];
+    const text = (raw) => (typeof raw === 'string' ? raw : '');
+    const money = (raw) => (Number.isFinite(Number(raw)) && Number(raw) > 0 ? Math.round(Number(raw)) : null);
+    return list
+      .filter((item) => item && typeof item === 'object')
+      .slice(0, 20)
+      .map((flight) => ({
+        no: text(flight.no),
+        airline: text(flight.airline),
+        craft: text(flight.craft),
+        depTime: text(flight.depTime),
+        arrTime: text(flight.arrTime),
+        depAirport: text(flight.depAirport),
+        arrAirport: text(flight.arrAirport),
+        listPrice: money(flight.listPrice),
+        taxIncluded: money(flight.taxIncluded),
+        seats: Number.isInteger(flight.seats) ? flight.seats : null,
+        soldOut: flight.soldOut === true,
+        expanded: flight.expanded === true,
+        prices: Array.isArray(flight.prices)
+          ? flight.prices
+            .filter((price) => price && typeof price === 'object')
+            .map((price) => ({
+              passengerId: text(price.passengerId),
+              bare: money(price.bare),
+              total: money(price.total),
+              fareLabel: text(price.fareLabel).slice(0, 40),
+            }))
+          : [],
+      }));
+  }
+
+  /**
+   * D10-B：往返列表行（详情页「往返航班表」）。字段比单程航班少：没有产品价格，
+   * 只有列表「往返总价（起）」与余票。
+   */
+  function normaliseRoundList(list) {
+    if (!Array.isArray(list)) return [];
+    const text = (raw) => (typeof raw === 'string' ? raw : '');
+    const money = (raw) => (Number.isFinite(Number(raw)) && Number(raw) > 0 ? Math.round(Number(raw)) : null);
+    return list
+      .filter((item) => item && typeof item === 'object')
+      .slice(0, 20)
+      .map((row) => ({
+        flightNo: text(row.flightNo),
+        airline: text(row.airline),
+        craft: text(row.craft),
+        depTime: text(row.depTime),
+        arrTime: text(row.arrTime),
+        depAirport: text(row.depAirport),
+        arrAirport: text(row.arrAirport),
+        listTotal: money(row.listTotal),
+        seats: Number.isInteger(row.seats) ? row.seats : null,
+        soldOut: row.soldOut === true,
+      }));
+  }
+
+  /**
    * D10 往返对比（`flights/<id>.json` 的 `roundTrip`）。
    *
    * 字段全部规范化成数字/字符串/null：快照要能被面板稳定读取，且老客户端遇到
    * 未知字段也不会崩。缺失的一头写 null，`partial` 明确告诉 UI「这不是完整对比」。
+   * 三个表格数组（`roundList` / `oneway.outFlights` / `oneway.backFlights`）在老
+   * 快照里不存在，统一补成空数组，UI 可以直接遍历。
    */
   function normaliseRoundTrip(value) {
     if (!value || typeof value !== 'object') return null;
@@ -720,6 +787,10 @@ export function createStore(rootDir) {
         arrTime: text(value.round.arrTime),
         depAirport: text(value.round.depAirport),
         arrAirport: text(value.round.arrAirport),
+        // 预订页为什么没读到（进不去 checkout / 读不到总价）：给排查用的原始原因。
+        checkoutError: typeof value.round.checkoutError === 'string' && value.round.checkoutError
+          ? value.round.checkoutError.slice(0, 200)
+          : null,
         seats: Number.isInteger(value.round.seats) ? value.round.seats : null,
         soldOut: value.round.soldOut === true,
         return: value.round.return && typeof value.round.return === 'object'
@@ -736,8 +807,10 @@ export function createStore(rootDir) {
       : null;
     const outLeg = leg(value.oneway?.out);
     const backLeg = leg(value.oneway?.back);
-    const oneway = outLeg || backLeg
-      ? { out: outLeg, back: backLeg, sum: round(value.oneway?.sum) }
+    const outFlights = normaliseTripFlights(value.oneway?.outFlights);
+    const backFlights = normaliseTripFlights(value.oneway?.backFlights);
+    const oneway = outLeg || backLeg || outFlights.length > 0 || backFlights.length > 0
+      ? { out: outLeg, back: backLeg, sum: round(value.oneway?.sum), outFlights, backFlights }
       : null;
     const comparison = value.comparison && typeof value.comparison === 'object'
       ? {
@@ -750,6 +823,8 @@ export function createStore(rootDir) {
       : null;
     return {
       partial: value.partial === true,
+      // D10-B：往返列表前 ≤10 行；老快照没有这个字段 → 空数组（客户端不用判空）。
+      roundList: normaliseRoundList(value.roundList),
       round: roundLeg && roundLeg.payable !== null ? roundLeg : null,
       oneway,
       comparison,

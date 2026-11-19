@@ -1124,6 +1124,17 @@ window.__ModuleLoader__.load({
 			'watch.scheme.oneway': '两段单买',
 			'watch.scheme.listPrice': '列表起价',
 			'watch.scheme.estimated': '含税费估算',
+			'watch.scheme.order': '预订页实价',
+			'watch.summary.roundOut': '去程 {flightNo} {depTime} {depAirport} → {arrTime} {arrAirport}',
+			'watch.summary.roundBack': '返程 {flightNo} {depTime} {depAirport} → {arrTime} {arrAirport}',
+			'watch.summary.onewayOut': '去程 {flightNo} {depTime} → {arrTime}',
+			'watch.summary.onewayBack': '返程 {flightNo} {depTime} → {arrTime}',
+			'watch.roundTable.title': '联程航班与往返总价',
+			'watch.roundTable.price': '往返起价',
+			'watch.roundTable.help': '联程按往返总价升序的前 10 个航班',
+			'watch.backTable.title': '返程航班与待支付价',
+			'watch.backTable.help': '返程单买按待支付价升序的前 10 个航班',
+			'watch.tableEmpty': '这次没采到',
 			'watch.compare.title': '两种买法对比',
 			'watch.compare.partial': '部分数据缺失：{sides}',
 			'watch.compare.partialGeneric': '部分数据缺失',
@@ -1349,6 +1360,17 @@ window.__ModuleLoader__.load({
 			'watch.scheme.oneway': 'Two one-ways',
 			'watch.scheme.listPrice': 'List price',
 			'watch.scheme.estimated': 'Estimated with taxes',
+			'watch.scheme.order': 'Order-page price',
+			'watch.summary.roundOut': 'Outbound {flightNo} {depTime} {depAirport} → {arrTime} {arrAirport}',
+			'watch.summary.roundBack': 'Return {flightNo} {depTime} {depAirport} → {arrTime} {arrAirport}',
+			'watch.summary.onewayOut': 'Outbound {flightNo} {depTime} → {arrTime}',
+			'watch.summary.onewayBack': 'Return {flightNo} {depTime} → {arrTime}',
+			'watch.roundTable.title': 'Through-ticket flights and round-trip price',
+			'watch.roundTable.price': 'Round-trip from',
+			'watch.roundTable.help': 'Top 10 through-ticket options by round-trip price',
+			'watch.backTable.title': 'Return flights and payable price',
+			'watch.backTable.help': 'Top 10 return one-way flights by payable price',
+			'watch.tableEmpty': 'Not collected this time',
 			'watch.compare.title': 'Ticket options compared',
 			'watch.compare.partial': 'Some data is missing: {sides}',
 			'watch.compare.partialGeneric': 'Some data is missing',
@@ -3179,15 +3201,20 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const diff = comparison && typeof comparison.diff === 'number' && Number.isFinite(comparison.diff) ? comparison.diff : roundPayable !== null && onewayTotal !== null ? Math.abs(roundPayable - onewayTotal) : null;
 			const cheaper = declared !== null ? declared : roundPayable !== null && onewayTotal !== null ? (roundPayable < onewayTotal ? 'round' : roundPayable > onewayTotal ? 'oneway' : 'tie') : null;
 			const errors = roundTrip.errors && typeof roundTrip.errors === 'object' ? roundTrip.errors : {};
+			const rowsOf = (value) => (Array.isArray(value) ? value.filter((row) => row && typeof row === 'object') : []);
 			return {
 				partial: roundTrip.partial === true,
+				// Table feeds: the through-ticket list, plus each one-way leg's own list.
+				roundList: rowsOf(roundTrip.roundList),
+				outFlights: rowsOf(oneway && oneway.outFlights),
+				backFlights: rowsOf(oneway && oneway.backFlights),
 				round: {
 					payable: roundPayable,
 					source: round !== null && typeof round.payableSource === 'string' ? round.payableSource : null,
 					flight: round,
 					returnLeg: round !== null && round.return && typeof round.return === 'object' ? round.return : null,
 				},
-				oneway: { total: onewayTotal, outPayable, backPayable },
+				oneway: { total: onewayTotal, outPayable, backPayable, out, back },
 				cheaper,
 				diff,
 				roundMissing: roundPayable === null || errors.round !== null,
@@ -3302,29 +3329,54 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			return { text: t('watch.seatsLeft', { n: seats }), tone: seats <= 3 ? 'few' : 'normal' };
 		}
 
+		/** Row helpers shared by the three tables: IATA/no field, price field, seats. */
+		function flightNumberOf(flight) {
+			if (!flight || typeof flight !== 'object') return '';
+			if (typeof flight.no === 'string' && flight.no !== '') return flight.no;
+			if (typeof flight.flightNo === 'string' && flight.flightNo !== '') return flight.flightNo;
+			return '';
+		}
+
+		/** Price a table sorts by: `listTotal` for the through-ticket list, `taxIncluded` otherwise. */
+		function flightPriceOf(flight, field) {
+			if (!flight || typeof flight !== 'object') return null;
+			const value = field === 'listTotal' ? flight.listTotal : flight.taxIncluded;
+			return typeof value === 'number' && Number.isFinite(value) ? value : null;
+		}
+
 		/**
-		 * TOP10 flights: 航班号 / 航司 / 时刻 / 机场 / 机型 / 待支付价 / 余票 / 状态,
-		 * cheapest first with unpriced rows last. The cheapest row is highlighted; an
-		 * unpriced row shows `—` and explains itself in its `title`. The 机型 column
-		 * is hidden on narrow panels so the 余票 column never squeezes the table.
+		 * TOP10 flights, used for all three round-trip tables and the one-way snapshot:
+		 * 航班号 / 航司 / 时刻 / 机场 / 机型 / 价格 / 余票 [/ 状态]. Cheapest first with
+		 * unpriced rows last; the cheapest row is highlighted; an unpriced row shows `—`
+		 * and explains itself in its `title`. The 机型 column is hidden on narrow panels
+		 * so the price and seat columns never squeeze the table.
+		 *
+		 * `priceField` = `listTotal` switches to the through-ticket list (往返起价, no
+		 * status column); `emptyText` lets the round-trip page say 这次没采到 per table.
 		 */
 		function FlightTable(props) {
 			const flights = Array.isArray(props.flights) ? props.flights.filter((flight) => flight && typeof flight === 'object') : [];
-			if (flights.length === 0) return h('div', { className: 'pw-hint' }, t('watch.flightsEmpty'));
+			if (flights.length === 0) return h('div', { className: 'pw-hint' }, props.emptyText === undefined ? t('watch.flightsEmpty') : props.emptyText);
+			const priceField = props.priceField === 'listTotal' ? 'listTotal' : 'taxIncluded';
+			const showStatus = props.showStatus !== false;
 			const sorted = flights
 				.slice()
 				.sort((left, right) => {
-					const a = payableOf(left);
-					const b = payableOf(right);
+					const a = flightPriceOf(left, priceField);
+					const b = flightPriceOf(right, priceField);
 					if (a === null && b === null) return 0;
 					if (a === null) return 1;
 					if (b === null) return -1;
 					return a - b;
 				})
 				.slice(0, 10);
-			const cheapest = payableOf(sorted[0]);
-			const headers = [t('watch.flightNo'), t('watch.airline'), t('watch.time'), t('watch.airport'), t('watch.craft'), t('watch.taxIncluded'), t('watch.seats'), t('watch.status')];
-			const headerClass = (index) => (index === 5 ? 'pw-num' : index === 4 ? 'pw-craft' : index === 6 ? 'pw-seats' : undefined);
+			const cheapest = flightPriceOf(sorted[0], priceField);
+			const priceLabel = priceField === 'listTotal' ? t('watch.roundTable.price') : t('watch.taxIncluded');
+			const headers = [t('watch.flightNo'), t('watch.airline'), t('watch.time'), t('watch.airport'), t('watch.craft'), priceLabel, t('watch.seats')];
+			if (showStatus) headers.push(t('watch.status'));
+			const priceIndex = 5;
+			const seatsIndex = 6;
+			const headerClass = (index) => (index === priceIndex ? 'pw-num' : index === 4 ? 'pw-craft' : index === seatsIndex ? 'pw-seats' : undefined);
 			return h(
 				'div',
 				{ className: 'pw-table-wrap' },
@@ -3336,27 +3388,63 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						'tbody',
 						null,
 						sorted.map((flight, index) => {
-							const total = payableOf(flight);
+							const total = flightPriceOf(flight, priceField);
 							const prices = Array.isArray(flight.prices) ? flight.prices : [];
 							const fareLabel = prices.map((item) => (item && typeof item.fareLabel === 'string' ? item.fareLabel : '')).find((label) => label !== '') || '';
 							const isCheapest = total !== null && total === cheapest;
 							const seats = seatsInfo(flight);
+							const cells = [
+								h('td', { className: 'pw-mono pw-nowrap', key: 'no' }, flightNumberOf(flight) || '—'),
+								h('td', { key: 'airline' }, flight.airline || '—'),
+								h('td', { className: 'pw-mono pw-nowrap', key: 'time' }, `${flight.depTime || '—'} – ${flight.arrTime || '—'}`),
+								h('td', { key: 'airport' }, `${flight.depAirport || '—'} → ${flight.arrAirport || '—'}`),
+								h('td', { className: 'pw-craft', key: 'craft' }, flight.craft || '—'),
+								h('td', { className: 'pw-num', key: 'price' }, total === null ? '—' : formatMoney(total)),
+								h('td', { className: 'pw-seats', 'data-tone': seats.tone, key: 'seats' }, seats.text),
+							];
+							if (showStatus) {
+								cells.push(h('td', { className: 'pw-nowrap', key: 'status' }, total === null ? h('span', { className: 'pw-hint' }, t('watch.noPrice')) : fareLabel !== '' ? h('span', { className: 'pw-hint' }, fareLabel) : h('span', { className: 'pw-hint' }, t('watch.bookable'))));
+							}
 							return h(
 								'tr',
-								{ key: `${flight.no || 'flight'}-${index}`, 'data-cheapest': isCheapest ? 'true' : 'false', title: total === null ? t('watch.priceMissingHint') : undefined },
-								h('td', { className: 'pw-mono pw-nowrap' }, flight.no || '—'),
-								h('td', null, flight.airline || '—'),
-								h('td', { className: 'pw-mono pw-nowrap' }, `${flight.depTime || '—'} – ${flight.arrTime || '—'}`),
-								h('td', null, `${flight.depAirport || '—'} → ${flight.arrAirport || '—'}`),
-								h('td', { className: 'pw-craft' }, flight.craft || '—'),
-								h('td', { className: 'pw-num' }, total === null ? '—' : formatMoney(total)),
-								h('td', { className: 'pw-seats', 'data-tone': seats.tone }, seats.text),
-								h('td', { className: 'pw-nowrap' }, total === null ? h('span', { className: 'pw-hint' }, t('watch.noPrice')) : fareLabel !== '' ? h('span', { className: 'pw-hint' }, fareLabel) : h('span', { className: 'pw-hint' }, t('watch.bookable')))
+								{ key: `${flightNumberOf(flight) || 'flight'}-${index}`, 'data-cheapest': isCheapest ? 'true' : 'false', title: total === null ? t('watch.priceMissingHint') : undefined },
+								cells
 							);
 						})
 					)
 				)
 			);
+		}
+
+		/**
+		 * The three round-trip tables: the through ticket (往返起价, from `roundList`),
+		 * then each one-way leg's own TOP10 (`oneway.outFlights` / `backFlights`, the
+		 * outbound falling back to the snapshot's `flights`). A table with no feed says
+		 * 这次没采到 instead of taking the page down.
+		 */
+		function roundTripTables(roundTrip, flights, flightsData, fetchedAt, noFlightsError) {
+			const helpWith = (base) => (fetchedAt === null ? base : `${base} · ${t('watch.fetchedAt', { when: relativeTime(fetchedAt) })}`);
+			const loading = flightsData === null && noFlightsError === true;
+			const outRows = roundTrip !== null && roundTrip.outFlights.length > 0 ? roundTrip.outFlights : flights;
+			return [
+				h(
+					Section,
+					{ key: 'round-table', title: t('watch.roundTable.title'), help: helpWith(t('watch.roundTable.help')) },
+					loading
+						? h(Skeleton, { height: 180, radius: 12 })
+						: h(FlightTable, { flights: roundTrip === null ? [] : roundTrip.roundList, priceField: 'listTotal', showStatus: false, emptyText: t('watch.tableEmpty') })
+				),
+				h(
+					Section,
+					{ key: 'out-table', title: t('watch.flightsRound'), help: helpWith(t('watch.flightsRoundHelp')) },
+					loading ? h(Skeleton, { height: 180, radius: 12 }) : h(FlightTable, { flights: outRows, emptyText: t('watch.tableEmpty') })
+				),
+				h(
+					Section,
+					{ key: 'back-table', title: t('watch.backTable.title'), help: helpWith(t('watch.backTable.help')) },
+					loading ? h(Skeleton, { height: 180, radius: 12 }) : h(FlightTable, { flights: roundTrip === null ? [] : roundTrip.backFlights, emptyText: t('watch.tableEmpty') })
+				),
+			];
 		}
 
 		/**
@@ -3388,8 +3476,65 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const schemeLabel =
 				!roundMode || lowest === null || lowest.scheme === null ? null : lowest.scheme === 'round' ? t('watch.scheme.round') : lowest.scheme === 'oneway' ? t('watch.scheme.oneway') : null;
 			const roundSource = roundMode && roundTrip !== null ? roundTrip.round.source : null;
-			const priceNoteKey =
-				lowest === null || lowest.scheme !== 'round' ? null : roundSource === 'list' ? 'watch.scheme.listPrice' : roundSource === 'list+tax' ? 'watch.scheme.estimated' : null;
+			const sourceNoteKey =
+				lowest === null || lowest.scheme !== 'round'
+					? null
+					: roundSource === 'order'
+						? 'watch.scheme.order'
+						: roundSource === 'list'
+							? 'watch.scheme.listPrice'
+							: roundSource === 'list+tax'
+								? 'watch.scheme.estimated'
+								: null;
+
+			// Two flight lines under the price: the through ticket shows both legs with
+			// airports, the two-one-way option only has to show numbers and times.
+			const summaryLegs = [];
+			if (roundMode && roundTrip !== null) {
+				if (lowest !== null && lowest.scheme === 'oneway') {
+					if (roundTrip.oneway.out !== null) {
+						summaryLegs.push(
+							t('watch.summary.onewayOut', {
+								flightNo: roundTrip.oneway.out.flightNo || '—',
+								depTime: roundTrip.oneway.out.depTime || '—',
+								arrTime: roundTrip.oneway.out.arrTime || '—',
+							})
+						);
+					}
+					if (roundTrip.oneway.back !== null) {
+						summaryLegs.push(
+							t('watch.summary.onewayBack', {
+								flightNo: roundTrip.oneway.back.flightNo || '—',
+								depTime: roundTrip.oneway.back.depTime || '—',
+								arrTime: roundTrip.oneway.back.arrTime || '—',
+							})
+						);
+					}
+				} else {
+					if (roundTrip.round.flight !== null) {
+						summaryLegs.push(
+							t('watch.summary.roundOut', {
+								flightNo: roundTrip.round.flight.flightNo || '—',
+								depTime: roundTrip.round.flight.depTime || '—',
+								depAirport: roundTrip.round.flight.depAirport || '—',
+								arrTime: roundTrip.round.flight.arrTime || '—',
+								arrAirport: roundTrip.round.flight.arrAirport || '—',
+							})
+						);
+					}
+					if (roundTrip.round.returnLeg !== null) {
+						summaryLegs.push(
+							t('watch.summary.roundBack', {
+								flightNo: roundTrip.round.returnLeg.flightNo || '—',
+								depTime: roundTrip.round.returnLeg.depTime || '—',
+								depAirport: roundTrip.round.returnLeg.depAirport || '—',
+								arrTime: roundTrip.round.returnLeg.arrTime || '—',
+								arrAirport: roundTrip.round.returnLeg.arrAirport || '—',
+							})
+						);
+					}
+				}
+			}
 			const latestPoint = minSeries.length > 0 ? minSeries[minSeries.length - 1] : null;
 			const previousPoint = minSeries.length > 1 ? minSeries[minSeries.length - 2] : null;
 			const deltaPercent = latestPoint !== null && previousPoint !== null && previousPoint.total > 0 ? ((latestPoint.total - previousPoint.total) / previousPoint.total) * 100 : null;
@@ -3415,10 +3560,14 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								'div',
 								{ className: 'pw-summary-scheme' },
 								h(Chip, { tone: 'brand' }, schemeLabel),
-								priceNoteKey === null ? null : h('span', { className: 'pw-hint' }, t(priceNoteKey))
+								sourceNoteKey === null ? null : h('span', { className: 'pw-hint' }, t(sourceNoteKey))
 							),
 					deltaText === null ? null : h('span', { className: 'pw-summary-delta', 'data-tone': deltaTone }, t('watch.vsLast', { percent: deltaText, price: formatMoney(previousPoint.total) })),
-					lowestFlight === null ? null : h('span', { className: 'pw-summary-route' }, flightRouteLine(lowestFlight))
+					summaryLegs.length > 0
+						? summaryLegs.map((line, index) => h('span', { className: 'pw-summary-route', key: `leg-${index}` }, line))
+						: lowestFlight === null
+							? null
+							: h('span', { className: 'pw-summary-route' }, flightRouteLine(lowestFlight))
 				),
 				h(Button, { variant: 'primary', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: busy }, t('detail.refresh'))
 			);
@@ -3447,23 +3596,24 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				props.pricesError ? h(ErrorBar, { key: 'prices-error', message: props.pricesError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
 				props.flightsError ? h(ErrorBar, { key: 'flights-error', message: props.flightsError, inline: true, onRetry: () => props.onRefresh(monitor.id) }) : null,
 				conclusion,
-				roundTrip === null ? null : h(RoundTripCompare, { key: 'compare', info: roundTrip }),
 				h(
 					Section,
 					{ key: 'trend', title: t('watch.trendTitle') },
 					prices === null && props.pricesError === null ? h(Skeleton, { height: 150, radius: 12 }) : h(PriceChart, { points: prices && prices.min, emptyText: t('watch.trendEmpty') })
 				),
-				h(
+				roundTrip === null ? null : h(RoundTripCompare, { key: 'compare', info: roundTrip }),
+				// Round-trip monitors split the snapshot into three tables: the through
+				// ticket, then each one-way leg. A table whose feed is empty says so
+				// instead of failing the page; a one-way monitor keeps its old single one.
+				roundMode ? roundTripTables(roundTrip, flights, flightsData, flightsFetchedAt, props.flightsError === null) : h(
 					Section,
 					{
 						key: 'flights',
-						title: roundMode ? t('watch.flightsRound') : t('watch.flights'),
+						title: t('watch.flights'),
 						help:
 							flightsFetchedAt === null
-								? roundMode
-									? t('watch.flightsRoundHelp')
-									: t('watch.flightsHelp')
-								: `${roundMode ? t('watch.flightsRoundHelp') : t('watch.flightsHelp')} · ${t('watch.fetchedAt', { when: relativeTime(flightsFetchedAt) })}`,
+								? t('watch.flightsHelp')
+								: `${t('watch.flightsHelp')} · ${t('watch.fetchedAt', { when: relativeTime(flightsFetchedAt) })}`,
 					},
 					flightsData === null && props.flightsError === null ? h(Skeleton, { height: 180, radius: 12 }) : h(FlightTable, { flights })
 				),
