@@ -161,7 +161,10 @@ export function apply(ctx) {
    * upload, or when there are not enough points to draw anything).
    */
   function buildCardFor(monitor, report, imageKey = null) {
-    if (report.kind === 'failure') return buildFailureCard({ monitor, error: report.error });
+    // 页脚时间用「这次采集的时间」而不是投递那一刻：两者只差几秒，但报告要对得上
+    // 面板里的「采集于 …」。
+    const at = report.at || (report.snapshot && report.snapshot.fetchedAt) || undefined;
+    if (report.kind === 'failure') return buildFailureCard({ monitor, error: report.error, at });
     if (report.kind === 'watch') {
       const lowest = report.lowest || null;
       const lowestFlight = (Array.isArray(report.flights) ? report.flights : [])
@@ -175,6 +178,7 @@ export function apply(ctx) {
         // D10：往返监控多两行对比（联程 / 两段单买 / 谁更便宜）；单程为 null。
         roundTrip: report.roundTrip || null,
         imageKey,
+        at,
       });
     }
     return buildCalendarCard({
@@ -183,6 +187,7 @@ export function apply(ctx) {
       back: report.snapshot?.back || null,
       previous: report.previous,
       imageKey,
+      at,
     });
   }
 
@@ -506,6 +511,7 @@ export function apply(ctx) {
       const minSeriesTotals = minSeries(history).slice(-20).map((entry) => entry.total);
       const delivery = await deliverReport(monitor, {
         kind: 'watch',
+        at,
         flights,
         lowest,
         roundTrip,

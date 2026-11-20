@@ -8,6 +8,10 @@
  * on `node:zlib` for compression. No text: every number the reader needs is in
  * the card's markdown, the image only has to show the shape.
  *
+ * 卡片口径：每个采集点一个小圆点，**最低点绿、最高点红**（跌绿涨红），所以读者
+ * 不用读数字就能看出这轮价格是创了新低还是新高。颜色都是 `options` 可覆盖的，
+ * 旧的 `renderTrendPng(values)` 调用不用改。
+ *
  * Rendering is supersampled (2×) and box-filtered down, which is the cheapest
  * way to get lines that do not look like stairs at 640px wide.
  */
@@ -170,11 +174,25 @@ function downsample(canvas, factor) {
 }
 // #endregion
 
+/** 默认标记色（`[r,g,b]`）：采集中性点 / 最低点绿 / 最高点红。 */
+const LOW_COLOR = [26, 117, 38]; // 最低点：绿（跌绿，和卡片 header 的语义一致）
+const HIGH_COLOR = [192, 42, 38]; // 最高点：红（涨红）
+const DOT_COLOR = [47, 107, 255]; // 普通采集点：跟着折线的主色走
+
 /**
  * Draw a trend line.
  *
+ * 卡片口径（用户 2026-11-20 要求）：最低点绿、最高点红，并给每个采集点画小圆点。
+ * 这些都是**默认值**，因此旧的 `renderTrendPng(values)` 调用（`host/index.js`）
+ * 不用改就会得到新的标记；需要旧行为时传 `points:false` 或显式颜色即可。
+ *
  * @param {number[]} values  oldest → newest, at least 2 finite numbers
  * @param {object}  [options]
+ * @param {string}  [options.lowlight]   最低点颜色，默认绿
+ * @param {string}  [options.highlight]  最高点颜色，默认红
+ * @param {string}  [options.dot]        普通采集点颜色，默认同折线色
+ * @param {boolean} [options.points]     是否画每个采集点的小圆点，默认 true
+ * @param {number}  [options.pointRadius] 小圆点半径（css px），默认 1.9
  * @returns {Buffer} PNG bytes
  */
 export function renderTrendPng(values, options = {}) {
@@ -184,7 +202,11 @@ export function renderTrendPng(values, options = {}) {
   const grid = parseColor(options.grid, [232, 234, 238]);
   const stroke = parseColor(options.line, [47, 107, 255]);
   const fill = parseColor(options.fill, [47, 107, 255]);
-  const low = parseColor(options.lowlight, [234, 74, 74]);
+  const low = parseColor(options.lowlight, LOW_COLOR);
+  const high = parseColor(options.highlight, HIGH_COLOR);
+  const point = parseColor(options.dot, DOT_COLOR);
+  const showPoints = options.points !== false;
+  const pointRadius = Math.min(6, Math.max(0.8, Number(options.pointRadius) || 1.9));
 
   const numbers = (Array.isArray(values) ? values : []).map(Number).filter((value) => Number.isFinite(value));
   if (numbers.length < 2) return renderBlankPng({ width, height, background, grid });
@@ -233,13 +255,44 @@ export function renderTrendPng(values, options = {}) {
     canvas.line(toX(i - 1), toY(numbers[i - 1]), toX(i), toY(numbers[i]), stroke, 1.6 * SS, 1);
   }
 
-  // Mark the lowest point with a dot.
-  const lowest = numbers.indexOf(Math.min(...numbers));
-  const dotR = 3 * SS;
-  for (let oy = -dotR; oy <= dotR; oy += 1) {
-    for (let ox = -dotR; ox <= dotR; ox += 1) {
-      if (ox * ox + oy * oy <= dotR * dotR) canvas.set(toX(lowest) + ox, toY(numbers[lowest]) + oy, low);
+  /**
+   * Round dot with a background-coloured halo: without the halo a 2px dot on a
+   * 1.6px line reads as a bulge; with it the collection point looks deliberate
+   * and stays legible where the line is steep.
+   */
+  const dotAt = (x, y, radius, colour) => {
+    const cx = Math.round(x);
+    const cy = Math.round(y);
+    const r = Math.max(1, Math.round(radius));
+    const halo = r + Math.max(1, Math.round(0.8 * SS));
+    for (let oy = -halo; oy <= halo; oy += 1) {
+      for (let ox = -halo; ox <= halo; ox += 1) {
+        if (ox * ox + oy * oy <= halo * halo) canvas.set(cx + ox, cy + oy, background);
+      }
     }
+    for (let oy = -r; oy <= r; oy += 1) {
+      for (let ox = -r; ox <= r; ox += 1) {
+        if (ox * ox + oy * oy <= r * r) canvas.set(cx + ox, cy + oy, colour);
+      }
+    }
+  };
+
+  // 每次采集一个小圆点；最低 / 最高点另用绿 / 红强调（最后画，保证在最上层）。
+  // 全部数值相同（首几次采集常见）时没有「最低/最高」可言，只留中性色圆点，
+  // 避免绿色被红色盖住、看起来像一处莫名其妙的红斑。
+  const lowest = numbers.indexOf(Math.min(...numbers));
+  const highest = numbers.indexOf(Math.max(...numbers));
+  const flat = lowest === highest;
+  if (showPoints) {
+    for (let i = 0; i < numbers.length; i += 1) {
+      if (!flat && (i === lowest || i === highest)) continue;
+      dotAt(toX(i), toY(numbers[i]), Math.round(pointRadius * SS), point);
+    }
+  }
+  if (!flat) {
+    const markR = Math.max(2 * SS, Math.round(pointRadius * SS) + SS);
+    dotAt(toX(lowest), toY(numbers[lowest]), markR, low);
+    dotAt(toX(highest), toY(numbers[highest]), markR, high);
   }
 
   const small = downsample(canvas, SS);

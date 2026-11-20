@@ -27,7 +27,7 @@
  * Write requests pass a same-origin check because plugin routes are not behind
  * the Host web token. Bodies are capped and destroyed when oversized.
  */
-import { MAX_BODY_BYTES, minSeries } from './util.js';
+import { MAX_BODY_BYTES, isoNow, minSeries } from './util.js';
 import { renderPage } from './page.js';
 
 const API = '/api';
@@ -364,10 +364,16 @@ export function createRouter({ store, logger, actions }) {
           if (body.cadence !== undefined) {
             // A cadence edit has to take effect now: the scheduler only compares
             // `nextDue`, so a stale entry would keep the old rhythm until the
-            // previous interval expired. Dropping it makes the next tick collect.
+            // previous interval expired.
+            //
+            // Write "now" instead of deleting the entry: the scheduler treats a
+            // past `nextDue` exactly like a missing one (collect on the next
+            // heartbeat), but the list/detail response can still carry a concrete
+            // time — deleting it made the panel answer 「下次采集时间待定」 right
+            // after the user changed the interval.
             const state = store.getState();
             const nextDue = { ...(state.nextDue || {}) };
-            delete nextDue[id];
+            nextDue[id] = isoNow();
             await store.saveState({ nextDue });
           }
           return sendJson(res, 200, { ok: true, data: { monitor: await monitorListItem(next) } });

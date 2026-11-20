@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { chromeUserAgent, fareFits, parseFareRules, parseRowText, parseSeatInfo } from '../host/collect/browser.js';
+import { chromeUserAgent, fareFits, parseFareRules, parseFlightNumber, parseRowText, parseSeatInfo, shortAirline } from '../host/collect/browser.js';
 
 test('多人特惠：限至少3人 + 55岁及以上 都能解析出来', () => {
   const rules = parseFareRules('限至少3人(儿童不计)，55岁及以上乘客预订去经济舱2.2折 返经济舱1.5折 多人特惠');
@@ -61,6 +61,32 @@ test('往返列表行：按列表价 + 往返总价解析', () => {
   assert.equal(row.depTime, '21:20');
   assert.equal(row.listPrice, 730);
   assert.equal(row.isRoundRow, true);
+});
+
+// 2026-11-20 联程 bug：最便宜的去程全是春秋（9C 开头），旧正则只认两个字母，
+// 于是九条组合的 out.flightNo 全是空串，界面上去程航班号就不见了。
+test('数字开头的二字码（春秋 9C / 川航 3U）也能解析出航班号', () => {
+  const row = parseRowText(
+    '春秋航空 9C8801 空客321 07:30 虹桥国际机场T1 10:10 宝安国际机场T3 '
+    + '经济舱2.1折 ¥510起 剩 3 张',
+  );
+  assert.equal(row.flightNo, '9C8801');
+  assert.equal(row.airline, '春秋航空');
+  assert.equal(row.depTime, '07:30');
+  assert.equal(parseFlightNumber('四川航空 3U8888'), '3U8888');
+});
+
+test('航班号正则不会误吃机型、航站楼或时间', () => {
+  assert.equal(parseFlightNumber('空客321 07:30 宝安国际机场T3 10:10 浦东国际机场T2'), '');
+  assert.equal(parseFlightNumber('波音738 08:00 大兴国际机场'), '');
+  assert.equal(parseFlightNumber('MU5332 07:15 宝安国际机场T3'), 'MU5332');
+});
+
+test('航司简称：东方航空→东方、中国国航→国航、春秋航空→春秋', () => {
+  assert.equal(shortAirline('东方航空'), '东方');
+  assert.equal(shortAirline('中国国航'), '国航');
+  assert.equal(shortAirline('春秋航空'), '春秋');
+  assert.equal(shortAirline(''), '');
 });
 
 // 无头浏览器（2026-11-20）：携程 whaleguard 只认 UA 里的 HeadlessChrome，

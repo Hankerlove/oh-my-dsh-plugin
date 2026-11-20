@@ -193,6 +193,68 @@ export function resolveSeatInfo(row, product) {
 }
 
 /**
+ * IATA 航班号，包含**航司二字码以数字开头**的那些（春秋 9C、川航 3U、西部 PN…）。
+ *
+ * 旧正则 `\b[A-Z]{2}\d{3,4}\b` 只认「两个字母」开头的代码，春秋航空的 `9C8801`
+ * 全部解析成空串 —— 2026-11-20 的联程 bug（组合里没有去程航班号）就是它：
+ * 最便宜的去程全是春秋，于是九条组合的 out.flightNo 全空。
+ *
+ * 允许的二字码：AA / 9C / C8（两个字母、数字+字母、字母+数字）。`\b` 边界保证
+ * 「波音738」「空客321」「T3」这类不会被当成航班号（`A321` 只有一位字母，
+ * `BOEING738` 里的 `NG738` 前面没有词边界）。
+ */
+const FLIGHT_NUMBER_PATTERN = /\b(?:[A-Z]{2}|[0-9][A-Z]|[A-Z][0-9])\d{3,4}\b/;
+
+/** 从任意行文本里取第一个 IATA 航班号（没有就返回空串）。 */
+export function parseFlightNumber(text) {
+  const norm = String(text || '').toUpperCase();
+  const match = norm.match(FLIGHT_NUMBER_PATTERN);
+  return match ? match[0] : '';
+}
+
+/** 航司简称：`东方航空` → `东方`、`中国国航` → `国航`；认不出来时去掉「航空」。 */
+const AIRLINE_SHORT_NAMES = {
+  中国国航: '国航',
+  中国东航: '东航',
+  中国南航: '南航',
+  中国联航: '联航',
+  东方航空: '东方',
+  南方航空: '南航',
+  海南航空: '海航',
+  厦门航空: '厦航',
+  四川航空: '川航',
+  深圳航空: '深航',
+  山东航空: '山航',
+  上海航空: '上航',
+  吉祥航空: '吉祥',
+  春秋航空: '春秋',
+  天津航空: '天津',
+  首都航空: '首都',
+  成都航空: '成都',
+  华夏航空: '华夏',
+  长龙航空: '长龙',
+  昆明航空: '昆明',
+  青岛航空: '青岛',
+  西藏航空: '西藏',
+  河北航空: '河北',
+  奥凯航空: '奥凯',
+  东海航空: '东海',
+  瑞丽航空: '瑞丽',
+  西部航空: '西部',
+  祥鹏航空: '祥鹏',
+  长安航空: '长安',
+  湖南航空: '湖南',
+  桂林航空: '桂林',
+  龙江航空: '龙江',
+};
+
+export function shortAirline(name) {
+  const text = String(name || '').trim();
+  if (text === '') return '';
+  return AIRLINE_SHORT_NAMES[text] || text.replace(/航空$/, '');
+}
+
+/**
  * 解析一条航班列表行文本（单程行与往返行通用；导出以便离线单测）。
  *
  * 单程行示例：
@@ -206,7 +268,7 @@ export function resolveSeatInfo(row, product) {
  */
 export function parseRowText(text) {
   const norm = String(text || '').replace(/\s+/g, ' ').trim();
-  const flightNo = (norm.match(/\b[A-Z]{2}\d{3,4}\b/) || [])[0] || '';
+  const flightNo = parseFlightNumber(norm);
   // 「中国国航」这类航司名不带「航空」二字，先试「XX航空」，再试常见简称。
   const airline = (norm.match(/([\u4e00-\u9fa5]{2,8}航空)/) || [])[1]
     || (norm.match(/(中国国航|中国东航|中国南航|中国联航|国航|东航|南航|海航|厦航|川航|深航|山航|吉祥航空|春秋航空)/) || [])[1]
@@ -1050,7 +1112,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
         || document.querySelector('.flight-item.active');
       if (!row) return null;
       const header = norm(row.innerText);
-      const flightNo = (header.match(/\b[A-Z]{2}\d{3,4}\b/) || [])[0] || '';
+      const flightNo = (header.match(/\b(?:[A-Z]{2}|[0-9][A-Z]|[A-Z][0-9])\d{3,4}\b/) || [])[0] || '';
       const airline = (header.match(/([\u4e00-\u9fa5]{2,8}航空)/) || [])[1] || '';
       const craft = (header.match(/((?:空客|波音|商飞)\s?[A-Z0-9]{2,4})/) || [])[1] || '';
       const times = header.match(/\b\d{2}:\d{2}\b/g) || [];

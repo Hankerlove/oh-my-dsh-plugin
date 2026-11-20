@@ -1082,7 +1082,9 @@ window.__ModuleLoader__.load({
 			'cadence.every': '每 {value}',
 			'cadence.title': '采集节奏',
 			'cadence.next': '下次采集 {when}',
-			'cadence.nextUnknown': '下次采集时间待定',
+			'cadence.waiting': '等待下一轮采集',
+			'cadence.dueNow': '即将开始采集',
+			'cadence.paused': '监控已暂停，启用后继续采集',
 			'cadence.inherit': '跟随全局默认',
 			'cadence.lastError': '上次采集失败：{message}',
 			'cadence.interval': '间隔',
@@ -1116,11 +1118,11 @@ window.__ModuleLoader__.load({
 			'calendar.stat.avg': '平均',
 			'calendar.stat.minDay': '最低日',
 			'calendar.dayHint': '{date} · {price}',
-			'watch.flights': '航班与待支付价',
-			'watch.flightsRound': '去程航班与待支付价',
-			'watch.flightsRoundHelp': '去程单买按待支付价升序的前 10 个航班',
+			'watch.flights': '航班与实价',
+			'watch.flightsRound': '去程航班与实价',
+			'watch.flightsRoundHelp': '去程单买按实价升序的前 10 个航班',
 			'watch.flightsEmpty': '还没有航班快照，点「立即采集」试试',
-			'watch.scheme.round': '联程',
+			'watch.scheme.round': '联程组合',
 			'watch.scheme.oneway': '两段单买',
 			'watch.scheme.listPrice': '列表起价',
 			'watch.scheme.estimated': '含税费估算',
@@ -1131,21 +1133,20 @@ window.__ModuleLoader__.load({
 			'watch.summary.onewayBack': '返程 {flightNo} {depTime} → {arrTime}',
 			'watch.roundTable.title': '联程航班与往返总价',
 			'watch.combos.title': '联程组合（{n} 条）',
-			'watch.combos.help': '去程 Top3 × 返程 Top3，价格取预订页待支付价',
+			'watch.combos.help': '去程 Top3 × 返程 Top3，价格取预订页实价',
 			'watch.combos.empty': '这次没采到联程组合',
 			'watch.combos.real': '实价',
 			'watch.combos.estimate': '估算',
 			'watch.combos.error': '这条组合没取到价：{error}',
 			'watch.roundTable.price': '往返起价',
 			'watch.roundTable.help': '联程按往返总价升序的前 10 个航班',
-			'watch.backTable.title': '返程航班与待支付价',
-			'watch.backTable.help': '返程单买按待支付价升序的前 10 个航班',
+			'watch.backTable.title': '返程航班与实价',
+			'watch.backTable.help': '返程单买按实价升序的前 10 个航班',
 			'watch.tableEmpty': '这次没采到',
 			'watch.compare.title': '两种买法对比',
 			'watch.compare.partial': '部分数据缺失：{sides}',
 			'watch.compare.partialGeneric': '部分数据缺失',
 			'watch.compare.join': '、',
-			'watch.compare.returnLeg': '回程 {flightNo} {depTime}→{arrTime}',
 			'watch.compare.split': '{outLabel} {outPrice} + {backLabel} {backPrice}',
 			'watch.compare.roundCheaper': '联程省 {amount}',
 			'watch.compare.onewayCheaper': '两段单买省 {amount}',
@@ -1154,7 +1155,7 @@ window.__ModuleLoader__.load({
 			'watch.vsLast': '比上次 {percent}（上次 {price}）',
 			'watch.trendTitle': '最低可订价走势',
 			'watch.trendEmpty': '还没有采集到实付价，登录携程后点「立即采集」',
-			'watch.taxIncluded': '待支付价',
+			'watch.taxIncluded': '实价',
 			'watch.seats': '余票',
 			'watch.soldOut': '售罄',
 			'watch.seatsLeft': '剩 {n} 张',
@@ -1162,7 +1163,7 @@ window.__ModuleLoader__.load({
 			'watch.noPrice': '未采到价格',
 			'watch.bookable': '可订',
 			'watch.priceMissingHint': '该航班未采到价格',
-			'watch.flightsHelp': '按待支付价升序的前 10 个航班',
+			'watch.flightsHelp': '按实价升序的前 10 个航班',
 			'delivery.ok': '上次投递：成功 {when}',
 			'delivery.failed': '上次投递失败：{error}',
 			'delivery.none': '还没有投递记录',
@@ -1204,14 +1205,19 @@ window.__ModuleLoader__.load({
 			'settings.notify.testOk': '测试消息已发送。',
 			'settings.notify.testFailed': '测试失败：{error}',
 			'settings.storage.title': '存储',
-			'settings.storage.leftover': '已删除监控的残留数据：{files} 个文件 · {size}',
 			'settings.storage.none': '没有残留数据',
 			'settings.storage.cleanup': '清理',
 			'settings.storage.cleaning': '清理中…',
 			'settings.storage.cleaned': '已释放 {size}',
 			'settings.storage.failed': '清理失败：{error}',
-			'settings.storage.total': '数据目录共 {size} · {files} 个文件',
 			'settings.storage.totalUnknown': '数据目录占用暂时读不到',
+			'settings.storage.dirTitle': '数据目录',
+			'settings.storage.filesCount': '{n} 个文件',
+			'settings.storage.leftoverTitle': '可清理的残留',
+			'settings.storage.ready': '{files} 个文件 · {size}',
+			'settings.storage.nothingToClean': '无需清理',
+			'settings.storage.cleanedZero': '没有可清理的数据',
+			'settings.storage.cleanupHint': '只删除已删除监控的残留快照，现有监控的历史不受影响。',
 			'passengers.title': '乘客',
 			'passengers.manage': '管理乘客',
 			'passengers.new': '新建乘客',
@@ -1324,7 +1330,9 @@ window.__ModuleLoader__.load({
 			'cadence.every': 'Every {value}',
 			'cadence.title': 'Collection rhythm',
 			'cadence.next': 'Next run {when}',
-			'cadence.nextUnknown': 'Next run not scheduled',
+			'cadence.waiting': 'Waiting for the next round',
+			'cadence.dueNow': 'Collection starting soon',
+			'cadence.paused': 'Paused — enable the monitor to collect again',
 			'cadence.inherit': 'Uses the global default',
 			'cadence.lastError': 'Last collection failed: {message}',
 			'cadence.interval': 'Interval',
@@ -1358,11 +1366,11 @@ window.__ModuleLoader__.load({
 			'calendar.stat.avg': 'Average',
 			'calendar.stat.minDay': 'Cheapest day',
 			'calendar.dayHint': '{date} · {price}',
-			'watch.flights': 'Flights and payable price',
-			'watch.flightsRound': 'Outbound flights and payable price',
-			'watch.flightsRoundHelp': 'Top 10 outbound one-way flights by payable price',
+			'watch.flights': 'Flights and actual price',
+			'watch.flightsRound': 'Outbound flights and actual price',
+			'watch.flightsRoundHelp': 'Top 10 outbound one-way flights by actual price',
 			'watch.flightsEmpty': 'No flight snapshot yet. Try "Collect now".',
-			'watch.scheme.round': 'Through ticket',
+			'watch.scheme.round': 'Through combo',
 			'watch.scheme.oneway': 'Two one-ways',
 			'watch.scheme.listPrice': 'List price',
 			'watch.scheme.estimated': 'Estimated with taxes',
@@ -1373,21 +1381,20 @@ window.__ModuleLoader__.load({
 			'watch.summary.onewayBack': 'Return {flightNo} {depTime} → {arrTime}',
 			'watch.roundTable.title': 'Through-ticket flights and round-trip price',
 			'watch.combos.title': 'Through-ticket combos ({n})',
-			'watch.combos.help': 'Top 3 outbound × top 3 return, priced at the order-page payable total',
+			'watch.combos.help': 'Top 3 outbound × top 3 return, priced at the order-page actual total',
 			'watch.combos.empty': 'No through-ticket combos collected this time',
 			'watch.combos.real': 'Actual',
 			'watch.combos.estimate': 'Estimate',
 			'watch.combos.error': 'No price for this combo: {error}',
 			'watch.roundTable.price': 'Round-trip from',
 			'watch.roundTable.help': 'Top 10 through-ticket options by round-trip price',
-			'watch.backTable.title': 'Return flights and payable price',
-			'watch.backTable.help': 'Top 10 return one-way flights by payable price',
+			'watch.backTable.title': 'Return flights and actual price',
+			'watch.backTable.help': 'Top 10 return one-way flights by actual price',
 			'watch.tableEmpty': 'Not collected this time',
 			'watch.compare.title': 'Ticket options compared',
 			'watch.compare.partial': 'Some data is missing: {sides}',
 			'watch.compare.partialGeneric': 'Some data is missing',
 			'watch.compare.join': ', ',
-			'watch.compare.returnLeg': 'Return {flightNo} {depTime}→{arrTime}',
 			'watch.compare.split': '{outLabel} {outPrice} + {backLabel} {backPrice}',
 			'watch.compare.roundCheaper': 'Through ticket saves {amount}',
 			'watch.compare.onewayCheaper': 'Two one-ways save {amount}',
@@ -1396,7 +1403,7 @@ window.__ModuleLoader__.load({
 			'watch.vsLast': '{percent} vs last time ({price})',
 			'watch.trendTitle': 'Lowest bookable price trend',
 			'watch.trendEmpty': 'No real fares collected yet. Sign in to Ctrip and use "Collect now".',
-			'watch.taxIncluded': 'Payable',
+			'watch.taxIncluded': 'Actual price',
 			'watch.seats': 'Seats',
 			'watch.soldOut': 'Sold out',
 			'watch.seatsLeft': '{n} left',
@@ -1404,7 +1411,7 @@ window.__ModuleLoader__.load({
 			'watch.noPrice': 'No price',
 			'watch.bookable': 'Bookable',
 			'watch.priceMissingHint': 'No price collected for this flight',
-			'watch.flightsHelp': 'Top 10 flights by payable price',
+			'watch.flightsHelp': 'Top 10 flights by actual price',
 			'delivery.ok': 'Last delivery: success {when}',
 			'delivery.failed': 'Last delivery failed: {error}',
 			'delivery.none': 'No deliveries yet',
@@ -1446,14 +1453,19 @@ window.__ModuleLoader__.load({
 			'settings.notify.testOk': 'Test message sent.',
 			'settings.notify.testFailed': 'Test failed: {error}',
 			'settings.storage.title': 'Storage',
-			'settings.storage.leftover': 'Leftover data from deleted monitors: {files} files · {size}',
 			'settings.storage.none': 'No leftover data',
 			'settings.storage.cleanup': 'Clean up',
 			'settings.storage.cleaning': 'Cleaning…',
 			'settings.storage.cleaned': 'Released {size}',
 			'settings.storage.failed': 'Cleanup failed: {error}',
-			'settings.storage.total': 'Data directory: {size} · {files} files',
 			'settings.storage.totalUnknown': 'Directory usage is not available right now',
+			'settings.storage.dirTitle': 'Data directory',
+			'settings.storage.filesCount': '{n} files',
+			'settings.storage.leftoverTitle': 'Leftovers',
+			'settings.storage.ready': '{files} files · {size}',
+			'settings.storage.nothingToClean': 'Nothing to clean',
+			'settings.storage.cleanedZero': 'Nothing left to clean',
+			'settings.storage.cleanupHint': 'Only orphaned snapshots from deleted monitors are removed; existing history stays intact.',
 			'passengers.title': 'Passengers',
 			'passengers.manage': 'Manage passengers',
 			'passengers.new': 'New passenger',
@@ -1766,6 +1778,19 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-test-result { font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .pw-test-result[data-ok="true"] { color: var(--dsw-alias-state-success-primary); }
 .pw-test-result[data-ok="false"] { color: var(--dsw-alias-state-error-primary); }
+
+/* 存储卡片：左侧占用、右侧残留与一键清理；点击即清，不做二次确认。 */
+.pw-storage { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 14px; border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-lg); background: var(--dsw-alias-bg-layer-2); }
+.pw-storage-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 200px; }
+.pw-storage-title { font-size: 11px; letter-spacing: .02em; color: var(--dsw-alias-label-tertiary); }
+.pw-storage-metrics { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.pw-storage-value { font-size: 20px; font-weight: 600; line-height: 1.15; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
+.pw-storage-unit { font-size: 12px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+.pw-storage-leftover { font-size: 13px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+.pw-storage-leftover[data-tone="warn"] { color: var(--dsw-alias-state-warn-primary); }
+.pw-storage-path { font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.pw-storage-hint { font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-tertiary); }
+.pw-storage-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 .pw-strip-sep { color: var(--dsw-alias-border-l2); }
 @media (max-width: 780px) { .pw-spark { display: none; } .pw-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pw-head-row { flex-wrap: wrap; } .pw-head-actions { margin-left: 0; } }
 @media (max-width: 520px) { .pw-card { flex-wrap: wrap; } }
@@ -2230,29 +2255,39 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			return typeof value === 'number' && Number.isFinite(value) ? value : null;
 		}
 
+		/** `10-25` + `14:30` 两行 x 轴标签用；本地时区。 */
+		function stampParts(ms) {
+			const date = new Date(ms);
+			return {
+				day: `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`,
+				clock: `${pad2(date.getHours())}:${pad2(date.getMinutes())}`,
+			};
+		}
+
 		/**
-		 * Chart layout for a per-passenger series: 800 × 220 viewBox, series line,
-		 * area fill and 4–5 y ticks. Pure — the hover state only indexes into
-		 * `points`.
+		 * Chart layout for the collection series: 800 × 220 viewBox, one point per
+		 * **采集点**（不是按时间比例摆），点与点等距连成线。
+		 *
+		 * 为什么按采集点而不是时间：一天采集很多次时，同一日期会挤在 x 轴左侧、
+		 * 标签重叠，用户看不出「每次采集新增一个点」。等距 categorical 轴让每个点
+		 * 都占一格，标签取均匀的 4~5 个点写成 `MM-DD` + `HH:mm` 两行。
+		 *
+		 * 返回值额外带 `minIndex` / `maxIndex`，供 PriceChart 把最低点标绿、最高点
+		 * 标红（与行情日历的配色一致）。纯函数，hover 只索引 `coords`。
 		 */
 		function buildChart(points, height) {
 			const series = normalizePricePoints(points);
 			if (series.length === 0) return null;
 			const chartHeight = Number.isFinite(height) ? height : CHART_HEIGHT;
 			const padLeft = 52;
-			const padRight = 14;
-			const padTop = 14;
-			const padBottom = 26;
+			const padRight = 18;
+			const padTop = 20;
+			// 两行 x 轴标签（日期 + 时刻）需要更多底部空间。
+			const padBottom = 42;
 			const plotLeft = padLeft;
 			const plotRight = CHART_WIDTH - padRight;
 			const plotTop = padTop;
 			const plotBottom = chartHeight - padBottom;
-			let minTime = series[0].at;
-			let maxTime = series[series.length - 1].at;
-			if (maxTime === minTime) {
-				minTime -= 3600000;
-				maxTime += 3600000;
-			}
 			const values = series.map((point) => point.total);
 			let minValue = Math.min(...values);
 			let maxValue = Math.max(...values);
@@ -2265,7 +2300,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				minValue -= 1;
 				maxValue += 1;
 			}
-			const xOf = (time) => plotLeft + ((time - minTime) / (maxTime - minTime)) * (plotRight - plotLeft);
+			const plotWidth = plotRight - plotLeft;
+			const xOf = (index) => (series.length === 1 ? plotLeft + plotWidth / 2 : plotLeft + (index / (series.length - 1)) * plotWidth);
 			const yOf = (value) => plotBottom - ((value - minValue) / (maxValue - minValue)) * (plotBottom - plotTop);
 			const step = niceStep(maxValue - minValue, 4);
 			const ticks = [];
@@ -2273,14 +2309,27 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			for (let value = firstTick; value <= maxValue + step * 0.001 && ticks.length < 8; value += step) {
 				ticks.push({ value, y: yOf(value) });
 			}
-			const coords = series.map((point) => ({ x: xOf(point.at), y: yOf(point.total), total: point.total, at: point.at, bare: point.bare }));
+			const coords = series.map((point, index) => ({ x: xOf(index), y: yOf(point.total), total: point.total, at: point.at, bare: point.bare, index }));
 			const line = coords.map((coord, index) => `${index === 0 ? 'M' : 'L'}${coord.x.toFixed(1)} ${coord.y.toFixed(1)}`).join(' ');
 			const area = `${line} L${coords[coords.length - 1].x.toFixed(1)} ${plotBottom} L${coords[0].x.toFixed(1)} ${plotBottom} Z`;
-			const xLabels = [
-				{ x: plotLeft, anchor: 'start', time: minTime },
-				{ x: (plotLeft + plotRight) / 2, anchor: 'middle', time: (minTime + maxTime) / 2 },
-				{ x: plotRight, anchor: 'end', time: maxTime },
-			];
+			// 均匀取 4~5 个点做 x 轴标签；首尾一定有，中间等距，去重后保持顺序。
+			const labelIndexes = [];
+			const wanted = Math.min(5, series.length);
+			for (let slot = 0; slot < wanted; slot += 1) {
+				const index = wanted === 1 ? 0 : Math.round((slot / (wanted - 1)) * (series.length - 1));
+				if (!labelIndexes.includes(index)) labelIndexes.push(index);
+			}
+			const xLabels = labelIndexes.map((index) => {
+				const coord = coords[index];
+				const anchor = series.length === 1 ? 'middle' : index === 0 ? 'start' : index === series.length - 1 ? 'end' : 'middle';
+				return { x: coord.x, anchor, at: coord.at, index };
+			});
+			let minIndex = 0;
+			let maxIndex = 0;
+			for (let index = 1; index < coords.length; index += 1) {
+				if (coords[index].total < coords[minIndex].total) minIndex = index;
+				if (coords[index].total > coords[maxIndex].total) maxIndex = index;
+			}
 			return {
 				series,
 				coords,
@@ -2294,6 +2343,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				plotBottom,
 				xOf,
 				yOf,
+				minIndex,
+				maxIndex,
 			};
 		}
 
@@ -2362,12 +2413,67 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					)
 				),
 				h('line', { key: 'baseline', x1: layout.plotLeft, y1: layout.plotBottom, x2: layout.plotRight, y2: layout.plotBottom, stroke: 'var(--dsw-alias-border-l1)', strokeWidth: 1 }),
-				layout.xLabels.map((label, index) =>
-					h('text', { key: `xlabel-${index}`, x: label.x, y: layout.plotBottom + 16, textAnchor: label.anchor, fontSize: 11, fill: 'var(--dsw-alias-label-secondary)' }, shortDate(new Date(label.time).toISOString()))
-				),
+				layout.xLabels.flatMap((label, index) => {
+					const parts = stampParts(label.at);
+					return [
+						h('text', { key: `xday-${index}`, x: label.x, y: layout.plotBottom + 16, textAnchor: label.anchor, fontSize: 10.5, fill: 'var(--dsw-alias-label-tertiary)' }, parts.day),
+						h('text', { key: `xclock-${index}`, x: label.x, y: layout.plotBottom + 30, textAnchor: label.anchor, fontSize: 10.5, fill: 'var(--dsw-alias-label-secondary)' }, parts.clock),
+					];
+				}),
 				h('path', { key: 'area', d: layout.area, fill: `url(#${gradientId})`, stroke: 'none' }),
 				h('path', { key: 'line', d: layout.line, fill: 'none', stroke: 'var(--dsw-alias-state-business-primary)', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }),
 			];
+
+			// 每个采集点一个圆点；最低点绿、最高点红（与行情日历同一套语义）。
+			const lowestColor = 'var(--dsw-alias-state-success-primary)';
+			const highestColor = 'var(--dsw-alias-state-error-primary)';
+			children.push(
+				layout.coords.map((coord) => {
+					const isLowest = coord.index === layout.minIndex;
+					const isHighest = layout.coords.length > 1 && coord.index === layout.maxIndex && layout.maxIndex !== layout.minIndex;
+					const color = isLowest ? lowestColor : isHighest ? highestColor : 'var(--dsw-alias-state-business-primary)';
+					const emphasised = isLowest || isHighest;
+					return h('circle', {
+						key: `point-${coord.index}`,
+						cx: coord.x,
+						cy: coord.y,
+						r: emphasised ? 3.6 : 2.2,
+						fill: color,
+						stroke: emphasised ? 'var(--dsw-alias-bg-base)' : 'none',
+						strokeWidth: emphasised ? 1.4 : 0,
+						'data-extreme': isLowest ? 'low' : isHighest ? 'high' : undefined,
+					});
+				})
+			);
+
+			// 最低 / 最高价的数值直接标在点上，读者不用 hover 也知道极值。
+			const extremeLabels = [];
+			const labelFor = (index, color) => {
+				const coord = layout.coords[index];
+				if (coord === undefined) return;
+				const above = coord.y > layout.plotTop + 18;
+				const anchor = coord.x < layout.plotLeft + 36 ? 'start' : coord.x > layout.plotRight - 36 ? 'end' : 'middle';
+				extremeLabels.push(
+					h(
+						'text',
+						{
+							key: `extreme-${index}`,
+							x: coord.x,
+							y: above ? coord.y - 9 : coord.y + 16,
+							textAnchor: anchor,
+							fontSize: 10.5,
+							fontWeight: 600,
+							fill: color,
+						},
+						formatMoney(coord.total)
+					)
+				);
+			};
+			if (layout.coords.length > 1) {
+				labelFor(layout.minIndex, lowestColor);
+				if (layout.maxIndex !== layout.minIndex) labelFor(layout.maxIndex, highestColor);
+			}
+			children.push(extremeLabels);
 
 			if (hover !== null) {
 				children.push(
@@ -2492,9 +2598,10 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 
 		/**
 		 * The 行情 chart: one bar per calendar day, every price a tax-included
-		 * `total`. All bars sharing the period low are green; the hovered bar is
-		 * bright with a stroke and the rest dim to 0.55; the picked bar keeps a brand
-		 * outline. Clicking a bar reports the day to the pin bar below.
+		 * `total`. The period low is green and the period high red (same semantics
+		 * as the collection trend); the hovered bar is bright with a stroke and the
+		 * rest dim to 0.55; the picked bar keeps a brand outline. Clicking a bar
+		 * reports the day to the pin bar below.
 		 *
 		 * `disabledBefore` / `disabledAfter` mark days outside the legal window (the
 		 * round-trip calendars use them to keep the return after the departure): those
@@ -2545,6 +2652,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					const disabled = bar.disabled === true;
 					const selected = !disabled && props.selectedDate === bar.date;
 					const isLowest = bar.total === layout.min;
+					// 行情日历：最低绿、最高红（用户 2026-11-20 要求与走势图同一套语义）。
+					// 全部同价时只保留最低色，避免整片红绿打架。
+					const isHighest = layout.max !== layout.min && bar.total === layout.max;
 					const isHovered = !disabled && hoverIndex === bar.index;
 					const dimmed = !disabled && hoverIndex !== null && !isHovered;
 					let opacity = 0.8;
@@ -2560,12 +2670,17 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						width: bar.width,
 						height: bar.height,
 						rx: Math.min(2.5, bar.width / 2),
-						fill: isLowest ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-idle-primary)',
+						fill: isLowest
+							? 'var(--dsw-alias-state-success-primary)'
+							: isHighest
+								? 'var(--dsw-alias-state-error-primary)'
+								: 'var(--dsw-alias-state-idle-primary)',
 						opacity,
 						stroke,
 						strokeWidth: disabled ? 0 : selected ? 1.6 : isHovered ? 1 : 0,
 						'data-selected': selected ? 'true' : 'false',
 						'data-lowest': isLowest ? 'true' : 'false',
+						'data-highest': isHighest ? 'true' : 'false',
 						'data-disabled': disabled ? 'true' : 'false',
 					});
 				}),
@@ -2944,6 +3059,17 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [error, setError] = useState(null);
 			const busy = props.busy === true;
 			const nextRun = typeof props.nextDue === 'string' ? formatLastCollect(props.nextDue) : null;
+			const nextAt = typeof props.nextDue === 'string' ? Date.parse(props.nextDue) : Number.NaN;
+			const enabled = props.enabled !== false;
+			// 调整节奏后 Host 会把 nextDue 置为「现在」（即下一拍就采），此时既不是
+			// 「待定」也不该说「下次采集 16:20」；暂停的监控也没必要提下次。
+			const nextLabel = !enabled
+				? t('cadence.paused')
+				: nextRun === null
+					? t('cadence.waiting')
+					: Number.isFinite(nextAt) && nextAt <= Date.now()
+						? t('cadence.dueNow')
+						: t('cadence.next', { when: nextRun });
 			const failure = typeof props.failure === 'string' && props.failure.trim() !== '' ? props.failure.trim() : null;
 
 			const beginEdit = () => {
@@ -2973,7 +3099,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					'div',
 					{ className: 'pw-row', style: { gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
 					current === null ? h('span', { className: 'pw-hint' }, t('cadence.inherit')) : h(Chip, { tone: 'flat' }, cadenceEvery(current)),
-					h('span', { className: 'pw-hint' }, nextRun === null ? t('cadence.nextUnknown') : t('cadence.next', { when: nextRun })),
+					h('span', { className: 'pw-hint' }, nextLabel),
 					h(Button, { size: 'sm', onClick: beginEdit, disabled: busy }, t('cadence.edit'))
 				),
 				failure === null ? null : h('span', { className: 'pw-hint', style: { color: 'var(--dsw-alias-state-error-primary)' }, role: 'status' }, t('cadence.lastError', { message: failure })),
@@ -3108,7 +3234,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 							backStatsItems.length === 0 ? null : h(Stats, { items: backStatsItems })
 						)
 					: null,
-				h(CadenceEditor, { key: 'cadence', value: monitorCadence(monitor), nextDue: monitor.nextDue, busy: props.busy, onSave: (cadence) => props.onSaveCadence(monitor.id, cadence) }),
+				h(CadenceEditor, { key: 'cadence', value: monitorCadence(monitor), nextDue: monitor.nextDue, enabled: monitor.enabled !== false, busy: props.busy, onSave: (cadence) => props.onSaveCadence(monitor.id, cadence) }),
 				selectedOut === null
 					? null
 					: h(
@@ -3284,22 +3410,13 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 		 */
 		function RoundTripCompare(props) {
 			const info = props.info;
+			// 对比的是价格：只留去程航班这一条可核对的线索，回程时刻没有信息量
+			// （用户 2026-11-20 明确要求删掉「回程 MU5332 07:15→09:45」），
+			// 具体航班详情看下面的去程 / 返程表。
 			const roundFlight = info.round.flight;
-			const returnLeg = info.round.returnLeg;
-			const routeParts = [];
-			if (roundFlight !== null && typeof roundFlight.flightNo === 'string' && roundFlight.flightNo !== '') {
-				routeParts.push(`${roundFlight.flightNo} ${roundFlight.depTime || '—'}→${roundFlight.arrTime || '—'}`);
-			}
-			if (returnLeg !== null) {
-				routeParts.push(
-					t('watch.compare.returnLeg', {
-						flightNo: typeof returnLeg.flightNo === 'string' && returnLeg.flightNo !== '' ? returnLeg.flightNo : '—',
-						depTime: returnLeg.depTime || '—',
-						arrTime: returnLeg.arrTime || '—',
-					})
-				);
-			}
-			const roundDetail = routeParts.length === 0 ? null : routeParts.join(' / ');
+			const roundDetail = roundFlight !== null && typeof roundFlight.flightNo === 'string' && roundFlight.flightNo !== ''
+				? `${roundFlight.flightNo} ${roundFlight.depTime || '—'}→${roundFlight.arrTime || '—'}`
+				: null;
 			const onewayDetail =
 				info.oneway.outPayable === null || info.oneway.backPayable === null
 					? null
@@ -3460,14 +3577,42 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			);
 		}
 
-		/** One line of a combo: `CZ8882  14:00 大兴国际机场 → 16:20 浦东国际机场T2`. */
+		/**
+		 * 航司简称：`东方航空` → `东方`、`中国国航` → `国航`。与 Host 侧
+		 * `shortAirline()` 同一张表，客户端不能 import Host 代码，所以这里保留一份。
+		 */
+		const AIRLINE_SHORT_NAMES = {
+			中国国航: '国航', 中国东航: '东航', 中国南航: '南航', 中国联航: '联航',
+			东方航空: '东方', 南方航空: '南航', 海南航空: '海航', 厦门航空: '厦航',
+			四川航空: '川航', 深圳航空: '深航', 山东航空: '山航', 上海航空: '上航',
+			吉祥航空: '吉祥', 春秋航空: '春秋', 天津航空: '天津', 首都航空: '首都',
+			成都航空: '成都', 华夏航空: '华夏', 长龙航空: '长龙', 昆明航空: '昆明',
+			青岛航空: '青岛', 西藏航空: '西藏', 河北航空: '河北', 奥凯航空: '奥凯',
+			东海航空: '东海', 瑞丽航空: '瑞丽', 西部航空: '西部', 祥鹏航空: '祥鹏',
+			长安航空: '长安', 湖南航空: '湖南', 桂林航空: '桂林', 龙江航空: '龙江',
+		};
+
+		function shortAirlineOf(name) {
+			const text = typeof name === 'string' ? name.trim() : '';
+			if (text === '') return '';
+			return AIRLINE_SHORT_NAMES[text] || text.replace(/航空$/, '');
+		}
+
+		/**
+		 * One line of a combo: `东方 MU5332  07:15 宝安国际机场T3 → 09:45 浦东国际机场T1`.
+		 *
+		 * 航司与航班号同屏（用户 2026-11-20 要求「例如东方MU5332」）；老快照里
+		 * `flightNo` 可能为空（旧的解析器认不出 9C 开头的二字码），此时至少露出
+		 * 航司简称，绝不留一个孤零零的「—」。
+		 */
 		function TripLine(props) {
 			const flight = props.flight;
 			if (flight === null) return h('div', { className: 'pw-trip-line' }, h('span', { className: 'pw-trip-route' }, '—'));
+			const label = [shortAirlineOf(flight.airline), flight.flightNo || ''].filter((part) => part !== '').join(' ');
 			return h(
 				'div',
 				{ className: 'pw-trip-line' },
-				h('span', { className: 'pw-trip-no' }, flight.flightNo || '—'),
+				h('span', { className: 'pw-trip-no', title: flight.airline || undefined }, label === '' ? '—' : label),
 				h('span', { className: 'pw-trip-route' }, `${flight.depTime || '—'} ${flight.depAirport || '—'} → ${flight.arrTime || '—'} ${flight.arrAirport || '—'}`)
 			);
 		}
@@ -3736,6 +3881,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					key: 'cadence',
 					value: monitorCadence(monitor),
 					nextDue: monitor.nextDue,
+					enabled: monitor.enabled !== false,
 					failure: monitorFailure(monitor, props.status),
 					busy: props.busy,
 					onSave: (next) => props.onSaveCadence(monitor.id, next),
@@ -3898,32 +4044,75 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const totalBytes = storageInfo !== null && typeof storageInfo.totalBytes === 'number' && Number.isFinite(storageInfo.totalBytes) ? storageInfo.totalBytes : null;
 			const totalFiles = storageInfo !== null && typeof storageInfo.totalFiles === 'number' && Number.isFinite(storageInfo.totalFiles) ? Math.max(0, Math.round(storageInfo.totalFiles)) : null;
 			const dataDir = storageInfo !== null && typeof storageInfo.dataDir === 'string' ? storageInfo.dataDir : '';
+			const totalLabel = totalBytes === null ? t('settings.storage.totalUnknown') : formatBytes(totalBytes);
+			const filesLabel = totalFiles === null ? '' : t('settings.storage.filesCount', { n: totalFiles });
+			const pathShort = dataDir === '' ? '' : dataDir.replace(/^\/Users\/[^/]+/, '~');
 			const storageBody =
 				props.storageError !== null && props.storageError !== undefined
 					? h(ErrorBar, { key: 'storage-error', message: props.storageError, inline: true, onRetry: props.onReload })
 					: storageInfo === null
-						? h(Skeleton, { key: 'storage-skeleton', height: 44, radius: 12 })
+						? h(Skeleton, { key: 'storage-skeleton', height: 78, radius: 12 })
 						: [
 								h(
 									'div',
-									{ className: 'pw-row', style: { gap: 10, alignItems: 'center', flexWrap: 'wrap' }, key: 'leftover' },
-									h('span', { key: 'text' }, removedFiles > 0 ? t('settings.storage.leftover', { files: removedFiles, size: formatBytes(removedBytes) }) : t('settings.storage.none')),
-									h('span', { className: 'pw-grow', key: 'grow' }),
-									h(Button, { key: 'clean', size: 'sm', onClick: () => void runCleanup(), disabled: cleaning || removedFiles === 0 }, cleaning ? t('settings.storage.cleaning') : t('settings.storage.cleanup'))
+									{ className: 'pw-storage', key: 'storage-card' },
+									// 左：数据目录占用——一眼看到「现在占了多少」。
+									h(
+										'div',
+										{ className: 'pw-storage-col' },
+										h('span', { className: 'pw-storage-title' }, t('settings.storage.dirTitle')),
+										h(
+											'div',
+											{ className: 'pw-storage-metrics' },
+											h('span', { className: 'pw-storage-value' }, totalLabel),
+											filesLabel === '' ? null : h('span', { className: 'pw-storage-unit' }, filesLabel)
+										),
+										pathShort === '' ? null : h('span', { className: 'pw-storage-path', title: dataDir }, pathShort)
+									),
+									// 中：残留数据 + 解释清理范围（避免「清理会不会删掉我的历史」的疑虑）。
+									h(
+										'div',
+										{ className: 'pw-storage-col' },
+										h('span', { className: 'pw-storage-title' }, t('settings.storage.leftoverTitle')),
+										h(
+											'span',
+											{ className: 'pw-storage-leftover', 'data-tone': removedFiles > 0 ? 'warn' : 'none', role: 'status' },
+											removedFiles > 0
+												? t('settings.storage.ready', { files: removedFiles, size: formatBytes(removedBytes) })
+												: t('settings.storage.none')
+										),
+										h('span', { className: 'pw-storage-hint' }, t('settings.storage.cleanupHint'))
+									),
+									// 右：一键清理。点击立刻清理（不再二次确认），无残留时给一个安静的状态而不是灰色按钮。
+									h(
+										'div',
+										{ className: 'pw-storage-actions' },
+										removedFiles > 0 || cleaning
+											? h(
+													Button,
+													{
+														key: 'clean',
+														size: 'sm',
+														variant: 'primary',
+														onClick: () => void runCleanup(),
+														disabled: cleaning,
+														title: t('settings.storage.cleanup'),
+													},
+													cleaning ? t('settings.storage.cleaning') : t('settings.storage.cleanup')
+												)
+											: h('span', { className: 'pw-chip', 'data-tone': 'flat' }, t('settings.storage.nothingToClean'))
+									)
 								),
 								cleanupError === null
 									? null
 									: h('span', { className: 'pw-test-result', 'data-ok': 'false', role: 'alert', key: 'cleanup-error' }, t('settings.storage.failed', { error: cleanupError })),
 								cleanupFreed === null
 									? null
-									: h('span', { className: 'pw-test-result', 'data-ok': 'true', role: 'status', key: 'cleanup-ok' }, t('settings.storage.cleaned', { size: formatBytes(cleanupFreed) })),
-								h(
-									'span',
-									{ className: 'pw-hint', key: 'total', title: dataDir === '' ? undefined : dataDir },
-									totalBytes === null || totalFiles === null
-										? t('settings.storage.totalUnknown')
-										: t('settings.storage.total', { size: formatBytes(totalBytes), files: totalFiles })
-								),
+									: h(
+											'span',
+											{ className: 'pw-test-result', 'data-ok': 'true', role: 'status', key: 'cleanup-ok' },
+											cleanupFreed > 0 ? t('settings.storage.cleaned', { size: formatBytes(cleanupFreed) }) : t('settings.storage.cleanedZero')
+										),
 							];
 
 			const channel = draft.channel === 'webhook' ? 'webhook' : 'app';
