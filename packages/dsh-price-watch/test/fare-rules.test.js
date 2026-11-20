@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { fareFits, parseFareRules, parseRowText, parseSeatInfo } from '../host/collect/browser.js';
+import { chromeUserAgent, fareFits, parseFareRules, parseRowText, parseSeatInfo } from '../host/collect/browser.js';
 
 test('多人特惠：限至少3人 + 55岁及以上 都能解析出来', () => {
   const rules = parseFareRules('限至少3人(儿童不计)，55岁及以上乘客预订去经济舱2.2折 返经济舱1.5折 多人特惠');
@@ -61,4 +61,23 @@ test('往返列表行：按列表价 + 往返总价解析', () => {
   assert.equal(row.depTime, '21:20');
   assert.equal(row.listPrice, 730);
   assert.equal(row.isRoundRow, true);
+});
+
+// 无头浏览器（2026-11-20）：携程 whaleguard 只认 UA 里的 HeadlessChrome，
+// 换 UA 后无头模式能完整跑通。这两条断言锁住「永远不要发出 HeadlessChrome」。
+test('无头 UA 是正常 Chrome，绝不含 HeadlessChrome', () => {
+  const ua = chromeUserAgent('147.0.7727.56', 'darwin');
+  assert.match(ua, /^Mozilla\/5\.0 \(Macintosh; Intel Mac OS X 10_15_7\)/);
+  assert.match(ua, /Chrome\/147\.0\.7727\.56/);
+  assert.doesNotMatch(ua, /Headless/i);
+  assert.match(chromeUserAgent('147.0.7727.56', 'win32'), /Windows NT 10\.0; Win64; x64/);
+  assert.match(chromeUserAgent('147.0.7727.56', 'linux'), /X11; Linux x86_64/);
+});
+
+test('读不到 Chrome 版本时退回保守版本，不产生非法 UA', () => {
+  for (const version of ['', '  ', 'not-a-version', '147.0']) {
+    const ua = chromeUserAgent(version, 'darwin');
+    assert.match(ua, /Chrome\/140\.0\.0\.0 Safari\/537\.36$/);
+    assert.doesNotMatch(ua, /Headless/i);
+  }
 });

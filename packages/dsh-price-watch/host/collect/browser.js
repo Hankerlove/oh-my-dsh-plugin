@@ -3,9 +3,15 @@
  * renders and, when possible, the tax breakdown on the booking page.
  *
  * Why a browser: the flight list and the booking page refuse anonymous plain
- * HTTP (HTTP 432 / `whaleguard`), while a headed Chrome with a persistent
- * profile passes. Nothing here fabricates requests: it drives the same pages a
- * human would open and reads the text.
+ * HTTP (HTTP 432 / `whaleguard`), while a real Chrome with a persistent profile
+ * passes. Nothing here fabricates requests: it drives the same pages a human
+ * would open and reads the text.
+ *
+ * Runs **headless in the background** (2026-11-20): no window pops up. Headless
+ * Chrome is only rejected because its UA says `HeadlessChrome` — with a normal
+ * Chrome UA the same pages, the notice modal and the checkout step all work
+ * (see `chromeUserAgent`). A visible window is opened only for the interactive
+ * sign-in flow.
  *
  * A2 (spec §3) returns `{ points, flights, tax, lowest }` and every one of the
  * ten cheapest rows carries a real payable price:
@@ -42,13 +48,14 @@
  * Safety rules baked in:
  *  - one persistent profile under `$DSH_HOME/price-watch/browser-profile/`;
  *    the login cookie never leaves it and never reaches the JSON stores;
- *  - one collection at a time (serial queue), headed window parked off-screen;
+ *  - one collection at a time (serial queue), headless by default so the user
+ *    never sees a window; only the sign-in flow opens a visible one;
  *  - a blocked/verification page aborts the run and raises a typed error so the
  *    scheduler can back off instead of hammering;
  *  - the booking page is only opened for the single cheapest product and never
  *    submitted, so nothing is ever ordered.
  */
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
@@ -78,6 +85,28 @@ const DWELL_MIN_MS = 3000;
 const DWELL_MAX_MS = 8000;
 /** Row selectors tried before falling back to climbing from the book buttons. */
 const ROW_SELECTORS = ['.flight-item', '[class*="flight-item"]', '[class*="flightItem"]', '.flight-list-item'];
+
+/**
+ * 正常 Chrome UA。
+ *
+ * 无头 Chrome 默认 UA 里带 `HeadlessChrome`，携程 whaleguard 会直接回一张
+ * `whaleguard block` 空页（实测 body 只有 17 个字符，而同一 profile 的可见窗口
+ * 一切正常）。把 UA 换成同版本的正常 Chrome 后，无头模式实测能完整跑通：
+ * 14 行列表 → 选为去程 → 50 行返程 → 展开展示产品 → 预订提示弹层 → 预订页。
+ *
+ * 版本号取自 Chrome 自己写在 profile 里的 `Last Version`，浏览器升级后自动跟着
+ * 变，不在代码里写死；读不到时退回一个保守版本。
+ */
+export function chromeUserAgent(version = '', platform = process.platform) {
+  const raw = String(version || '').trim();
+  const build = /^\d+\.\d+\.\d+\.\d+$/.test(raw) ? raw : '140.0.0.0';
+  const os = platform === 'darwin'
+    ? 'Macintosh; Intel Mac OS X 10_15_7'
+    : platform === 'win32'
+      ? 'Windows NT 10.0; Win64; x64'
+      : 'X11; Linux x86_64';
+  return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${build} Safari/537.36`;
+}
 
 /** Error raised when Ctrip answers with a bot-check page. */
 export class BlockedError extends Error {
@@ -597,6 +626,12 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   let playwrightRetryAt = 0;
   let lastLoadError = null;
   let context = null;
+  /** 当前上下文是不是无头模式（`null` = 还没有上下文）。 */
+  let contextHeadless = null;
+  /** 采集进行中：无头/有头共用一个 profile，这时切模式会掐断正在跑的采集。 */
+  let collecting = false;
+  /** 用户在窗口里登录中：这时切无头会把登录窗口关掉。 */
+  let loggingIn = false;
   let idleTimer = null;
   let queue = Promise.resolve();
 
@@ -647,26 +682,54 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     return null;
   }
 
+  /**
+   * Chrome 自己写在 profile 里的版本号（`Last Version` 文件）。
+   * 用来拼 UA：升级浏览器后自动跟着变，不用在代码里维护版本常量。
+   */
+  async function profileChromeVersion() {
+    try {
+      return String(await readFile(join(profileDir, 'Last Version'), 'utf8')).trim();
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * 打开（或复用）浏览器上下文。
+   *
+   * `visible: false`（采集）走无头，用户在后台看不到任何窗口；
+   * `visible: true`（登录）才开一个真正的窗口。两种模式不能共用同一个上下文
+   * （无头窗口没法给用户登录），所以模式变了就关掉重开。
+   */
   async function ensureContext({ visible = false } = {}) {
     const pw = await loadPlaywright();
     if (!pw) throw new Error('playwright-core 未安装');
-    if (context) {
+    const wantHeadless = !visible;
+    if (context && contextHeadless === wantHeadless) {
       if (idleTimer) {
         clearTimeout(idleTimer);
         idleTimer = null;
       }
       return context;
     }
+    if (context) {
+      await context.close().catch(() => {});
+      context = null;
+    }
     await mkdir(profileDir, { recursive: true });
-    const position = visible ? '60,60' : '-2200,-2200';
+    const args = ['--disable-blink-features=AutomationControlled', '--no-first-run', '--no-default-browser-check'];
+    if (!wantHeadless) args.push('--window-position=60,60');
     context = await pw.chromium.launchPersistentContext(profileDir, {
       channel: 'chrome',
-      headless: false,
+      headless: wantHeadless,
+      // 无头 UA 带 HeadlessChrome 会被风控直接拦掉，换成正常 Chrome UA（见 chromeUserAgent）。
+      ...(wantHeadless ? { userAgent: chromeUserAgent(await profileChromeVersion()) } : {}),
       viewport: { width: 1360, height: 950 },
       locale: 'zh-CN',
       timezoneId: 'Asia/Shanghai',
-      args: [`--window-position=${position}`, '--disable-blink-features=AutomationControlled', '--no-first-run', '--no-default-browser-check'],
+      args,
     });
+    contextHeadless = wantHeadless;
     await context.addInitScript(() => {
       try {
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -690,6 +753,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
           /* ignore */
         }
         context = null;
+        contextHeadless = null;
       }
     }, IDLE_CLOSE_MS);
     idleTimer.unref?.();
@@ -707,7 +771,9 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     const pw = await loadPlaywright();
     if (!pw) return { ...stored, status: 'unavailable', reason: 'playwright-core 未安装' };
     try {
-      const ctx = await ensureContext();
+      // 只看登录态，绝不切换窗口模式：登录窗口开着的时候（用户正在扫码）
+      // 这里若按「采集用无头」重建上下文，会把用户正在用的窗口关掉。
+      const ctx = context || (await ensureContext());
       const ok = await hasTicket(ctx);
       const next = {
         status: ok ? 'valid' : stored.status === 'valid' ? 'expired' : 'unknown',
@@ -728,6 +794,19 @@ export function createBrowserCollector({ rootDir, logger, store }) {
    * sign in. Resolves when the `cticket` cookie shows up.
    */
   async function startLogin({ timeoutMs = 8 * 60000 } = {}) {
+    // 采集用的是无头上下文，登录要用可见窗口；同一个 profile 不能同时开两个，
+    // 采集期间点登录会掐断本轮采集，直接让用户等这一轮结束。
+    if (collecting) return { ok: false, error: '正在采集航班数据，请等这一轮结束（几分钟）再登录' };
+    loggingIn = true;
+    try {
+      return await runLogin({ timeoutMs });
+    } finally {
+      loggingIn = false;
+    }
+  }
+
+  /** 「用户登录」的真实流程（`startLogin` 只负责并发/模式保护）。 */
+  async function runLogin({ timeoutMs = 8 * 60000 } = {}) {
     const ctx = await ensureContext({ visible: true });
     const page = ctx.pages()[0] || (await ctx.newPage());
     await page.goto(HOME, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
@@ -760,6 +839,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     if (context) {
       await context.close().catch(() => {});
       context = null;
+      contextHeadless = null;
     }
     await rm(profileDir, { recursive: true, force: true }).catch(() => {});
     await store.saveState({ auth: { status: 'unknown', lastVerifiedAt: isoNow(), accountHint: '' } });
@@ -2048,6 +2128,8 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   async function collect(monitor, { signal } = {}) {
     const run = async () => {
       try {
+        // 有头登录窗口和采集共用一个 profile：登录期间不要去抢窗口。
+        if (loggingIn) throw new Error('正在登录携程，本轮采集跳过');
         const params = monitor?.params || {};
         if (!params.departDate) throw new Error('日历模式没有确定日期，不做浏览器精确采集');
         const ctx = await ensureContext();
@@ -2112,8 +2194,16 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       }
     };
 
-    // Serialise every browser run: one window, one page at a time.
-    const next = queue.then(run, run);
+    // Serialise every browser run: one browser, one page at a time.
+    const wrapped = async () => {
+      collecting = true;
+      try {
+        return await run();
+      } finally {
+        collecting = false;
+      }
+    };
+    const next = queue.then(wrapped, wrapped);
     queue = next.catch(() => {});
     return next;
   }
@@ -2131,6 +2221,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       if (idleTimer) clearTimeout(idleTimer);
       if (context) await context.close().catch(() => {});
       context = null;
+      contextHeadless = null;
     },
   };
 }
