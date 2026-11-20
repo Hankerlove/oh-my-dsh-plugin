@@ -160,7 +160,7 @@ export function apply(ctx) {
    * freshly uploaded trend PNG (`null` for the webhook channel, for a failed
    * upload, or when there are not enough points to draw anything).
    */
-  function buildCardFor(monitor, report, imageKey = null) {
+  function buildCardFor(monitor, report, imageKey = null, trend = null) {
     // 页脚时间用「这次采集的时间」而不是投递那一刻：两者只差几秒，但报告要对得上
     // 面板里的「采集于 …」。
     const at = report.at || (report.snapshot && report.snapshot.fetchedAt) || undefined;
@@ -179,6 +179,7 @@ export function apply(ctx) {
         roundTrip: report.roundTrip || null,
         imageKey,
         at,
+        trend,
       });
     }
     return buildCalendarCard({
@@ -188,6 +189,7 @@ export function apply(ctx) {
       previous: report.previous,
       imageKey,
       at,
+      trend,
     });
   }
 
@@ -212,34 +214,74 @@ export function apply(ctx) {
     return { kind: 'none' };
   }
 
+  /** `11-18`：X 轴刻度（日期）。 */
+  function shortDayLabel(value) {
+    const parts = String(value || '').split('-');
+    return parts.length === 3 ? `${parts[1]}-${parts[2]}` : '';
+  }
+
+  /** `11-18 10:53` 的本地时刻部分：同一天的多次采集靠时间区分。 */
+  function clockLabel(value) {
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+
+  /** 本地日期键，用来判断「这批点是不是同一天」。 */
+  function dayKey(value) {
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  }
+
   /**
-   * The numbers the trend PNG shows: the watch card plots the last 20 per-collection
-   * lowest payable prices, the calendar card the next 30 daily totals (the forward
-   * leg for a round trip).
+   * 走势图的数据：`{ values, labels }` 等长，labels 就是 X 轴刻度文字。
+   *
+   *  - 监控模式：最近 20 次采集的最低可订价，刻度用采集日期（同一天内多次采集
+   *    则退到时分，否则 20 个点全是同一个日期标签、刻度没有信息量）；
+   *  - 行情模式：未来 30 天的日历最低价，刻度用日期。
    */
-  function trendValuesFor(report) {
-    const values = report.kind === 'watch'
-      ? (Array.isArray(report.minSeries) ? report.minSeries.slice(-20) : [])
-      : (Array.isArray(report.snapshot?.out) ? report.snapshot.out.slice(0, 30).map((row) => row?.total) : []);
-    return values.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
+  function trendDataFor(report) {
+    if (report?.kind === 'watch') {
+      const points = (Array.isArray(report.minSeries) ? report.minSeries : [])
+        .map((entry) => ({
+          total: Number(entry?.total ?? entry),
+          at: typeof entry?.at === 'string' ? entry.at : '',
+        }))
+        .filter((point) => Number.isFinite(point.total) && point.total > 0)
+        .slice(-20);
+      const sameDay = new Set(points.map((point) => dayKey(point.at))).size <= 1;
+      const labels = points.map((point) => (sameDay ? clockLabel(point.at) : shortDayLabel(dayKey(point.at) || point.at)));
+      return { values: points.map((point) => Math.round(point.total)), labels };
+    }
+    const points = (Array.isArray(report?.snapshot?.out) ? report.snapshot.out.slice(0, 30) : [])
+      .map((row) => ({ total: Number(row?.total), date: row?.date }))
+      .filter((point) => Number.isFinite(point.total) && point.total > 0);
+    return {
+      values: points.map((point) => Math.round(point.total)),
+      labels: points.map((point) => shortDayLabel(point.date)),
+    };
   }
 
   /**
    * Render the trend PNG for a report, or null when the report has no chart.
    *
    *  - 失败卡永远不带图；
-   *  - 点数不足 2 个（监控首次采集）交给 `renderTrendPng` 出空白占位图：保持卡片
-   *    版式一致，也让「第一次采集」看起来是正常的而不是像挂了；
+   *  - 点数不足 2 个（监控首次采集）不发图：一次采集没有走势可言，卡片照样有
+   *    结论和明细，不塞一张空白占位图；
    *  - 渲染本身出错才降级为无图卡片（投递不能因此中断）。
    */
-  function renderTrend(report) {
+  function renderTrend(report, trend) {
     if (report.kind === 'failure') return null;
     try {
-      const values = trendValuesFor(report);
+      const values = Array.isArray(trend?.values) ? trend.values : [];
       // A single point draws nothing worth looking at (the first collection of a
       // monitor). Send the card without an image instead of a blank placeholder.
-      if (!Array.isArray(values) || values.length < 2) return null;
-      return renderTrendPng(values);
+      if (values.length < 2) return null;
+      // 640×320 + 横纵坐标刻度：轴文字要占空间，卡片插图按卡片宽度 1:1 显示。
+      return renderTrendPng(values, { labels: trend?.labels || [], width: 640, height: 320 });
     } catch (error) {
       logger.warn(`走势图渲染失败，降级为无图卡片: ${String(error?.message || error)}`);
       return null;
@@ -270,21 +312,23 @@ export function apply(ctx) {
       const previous = store.getState().delivery?.[monitor.id];
       if (previous && previous.hash === hash) return { skipped: 'duplicate' };
 
+      // 走势数据只算一次：图（横/纵轴刻度）与卡片（区间统计）必须来自同一批点。
+      const trend = trendDataFor(report);
       let result;
       if (channel.kind === 'app') {
         // 图先渲染好再交给 feishu.js：上传失败时它照样发正文（无图降级）。
-        const png = renderTrend(report);
+        const png = renderTrend(report, trend);
         result = await deliverAppCard({
           appId: channel.appId,
           appSecret: channel.appSecret,
           chatId: channel.chatId,
           png,
-          buildCard: (imageKey) => buildCardFor(monitor, report, imageKey),
+          buildCard: (imageKey) => buildCardFor(monitor, report, imageKey, trend),
           logger,
         });
       } else {
         // 自定义机器人不能带图，正文照发。
-        result = await sendFeishu(channel.webhook, buildCardFor(monitor, report, null), { logger });
+        result = await sendFeishu(channel.webhook, buildCardFor(monitor, report, null, trend), { logger });
       }
       const at = isoNow();
       const entry = {
@@ -450,8 +494,13 @@ export function apply(ctx) {
       const delivery = await deliverReport(monitor, {
         kind: 'calendar',
         snapshot,
+        // 卡片只看「未来 30 天」窗口（见 host/notify.js 的 CARD_WINDOW_DAYS），
+        // 上一轮也要按同一个窗口取最低价，否则涨跌幅会拿 30 天价去比一年最低价。
         previous: previousSnapshot
-          ? { out: lowestOfRows(previousSnapshot.out), back: lowestOfRows(previousSnapshot.back) }
+          ? {
+            out: lowestOfRows((previousSnapshot.out || []).slice(0, 30)),
+            back: lowestOfRows((previousSnapshot.back || []).slice(0, 30)),
+          }
           : null,
       });
       return { ok: true, source: 'calendar', points: 0, delivery };
@@ -508,7 +557,8 @@ export function apply(ctx) {
       await setNextDue(monitor.id, computeNextDue(monitor));
       // 卡片的「最近 20 次采集走势」取每次采集的最低可订价（同一次采集共享 at）。
       const history = await store.readPoints(monitor.id, { limit: 600 });
-      const minSeriesTotals = minSeries(history).slice(-20).map((entry) => entry.total);
+      // 走势要画在时间轴上，所以保留 {at, total}，别只留价格数组。
+      const minSeriesRows = minSeries(history).slice(-20);
       const delivery = await deliverReport(monitor, {
         kind: 'watch',
         at,
@@ -516,7 +566,7 @@ export function apply(ctx) {
         lowest,
         roundTrip,
         previous: Number.isFinite(previous) && previous > 0 ? previous : null,
-        minSeries: minSeriesTotals,
+        minSeries: minSeriesRows,
       });
       return { ok: true, source: 'l2', points: points.length, delivery };
     } catch (error) {
@@ -724,7 +774,7 @@ export function apply(ctx) {
       const monitors = store.listMonitors();
       const failures = Object.values(state.failures || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
       return {
-        version: '0.11.0',
+        version: '0.13.0',
         auth: { ...(state.auth || { status: 'unknown' }), available },
         lastCollectAt: state.lastCollectAt,
         monitorCount: monitors.length,

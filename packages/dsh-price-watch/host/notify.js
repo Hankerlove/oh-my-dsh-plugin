@@ -1,5 +1,5 @@
 /**
- * Feishu card payloads (A2.2 spec §3 / 卡片重做 2026-11-20).
+ * Feishu card payloads (A2.2 spec §3 / 卡片重做 2026-11-20 晚 → V10 分块版).
  *
  * Two channels share these builders:
  *   app      a self-built app uploads the rendered PNG (`host/chart.js` +
@@ -8,54 +8,56 @@
  *            (`sendFeishu` below) and therefore gets the same card **without** the
  *            `img` element — a custom bot cannot attach an image.
  *
- * The card is one self-contained message instead of「标题 + 图 + 几行文字」:
+ * 卡片按用户 2026-11-20 的要求分块展示，四块之间用 `hr` 分隔：
  *
- *   header   `价格监控 · 北京 → 上海（日期待定）`，主题色跌绿/涨红/平蓝
- *   hero     「当前最低实价 ¥1,099」大号数字 + 「比上次 -3.7%」同屏、同色系
- *   对比     往返：「联程组合 ¥X」vs「两段单买 ¥Y」+ 谁更便宜、省多少 + 部分数据提示
- *   航班     去程/可选航班 TOP3（航司简称 + 航班号 + 时刻 + 实价），航班号缺失就退到航司/时刻
- *   走势     `renderTrendPng` 生成的真 PNG（绿=最低 红=最高，每个采集点一个圆点）
- *   footer   采集时间（Host 本地时区）+ 口径
+ *   header    `价格监控 · 北京 ⇄ 上海（12月01日–12月08日）`，主题色跌绿/涨红/平蓝
+ *   结论      大号「当前最低实价」+ 涨跌 + 上次价格；往返再给「联程 vs 两段单买」
+ *   走势      区块标题（写明横轴=日期 / 纵轴=实价）+ 带坐标轴的 PNG + 区间统计
+ *   明细      最低价对应航班 / 联程组合表 / 两段单买拆分 / 可订航班表（含余票）
+ *   采集信息  采集时间 / 采集频率 / 乘客数 / 数据状态，末行给口径
  *
  * 不变式（改这个文件时别破）：
  *  - **没有按钮/action**，**没有字符画**：卡片是报表，不是导航入口；
  *  - 所有 `build*Card` **永不抛**：脏数据只让卡片降级为一句纯文本，不能阻断投递；
  *  - 投递只尝试一次（spec §5），失败由调用方记进 `state.delivery`，这里不重试；
- *  - 口径统一叫「实价」（= 订单页待支付价 / 含机建燃油），日历模式明确标「估算」。
+ *  - 口径统一叫「实价」（= 订单页待支付价 / 含机建燃油），日历模式明确标「估算」；
+ *  - 拿不到的数字/字段整项省略，**绝不写** `—`、`N/A`、`未填写` 之类的占位。
  */
 import { CITY_NAMES, monthDay } from './util.js';
 import {
   INK,
   TEMPLATE,
   cardShell,
+  comboTable,
+  dateCell,
+  dayTable,
   divText,
-  flightName,
+  fieldGrid,
+  flightCell,
   flightNo,
   flightTable,
   flightWindow,
-  footer,
   image,
-  markdown,
   money,
   priceHero,
+  rule,
   schemeCompare,
+  sectionTitle,
+  statLine,
   airlineShort,
 } from './card.js';
 
-/** How many days of the calendar the card image shows. */
-const CALENDAR_SPARK_DAYS = 30;
 /** How many cheapest flights the watch card lists. */
 const WATCH_TOP_N = 3;
+/** 日历卡片统一统计窗口（天）：主视觉 / 走势 / 低价日表都在这 30 天内。 */
+const CARD_WINDOW_DAYS = 30;
 /** 实价口径（自建应用读的是订单页总价，含机建燃油）。 */
 const PRICE_SPEC_WATCH = '实价=待支付价（含机建燃油）';
 /** 日历模式是 L1 公开日历价，不是能下单的实价，必须写清楚。 */
 const PRICE_SPEC_CALENDAR = '日历最低含税价（估算）';
-
-/** `12-03` for a YYYY-MM-DD string. */
-function shortDay(dateString) {
-  const parts = String(dateString || '').split('-');
-  return parts.length === 3 ? `${parts[1]}-${parts[2]}` : '';
-}
+/** 走势图的纵轴单位（写在区块标题里，图内只画数字刻度）。 */
+const AXIS_WATCH = '横轴 采集日期 · 纵轴 待支付实价（元）';
+const AXIS_CALENDAR = '横轴 日期 · 纵轴 最低含税价（元）';
 
 /** `北京 → 上海` / `北京 ⇄ 上海`；城市码缺失时返回空串（调用方据此省掉这一段）。 */
 function routeLabel(monitor) {
@@ -144,12 +146,6 @@ function inkFor(dir) {
   return INK.flat;
 }
 
-/** `11-18 → 12-17` for a list of rows sorted ascending. */
-function rangeLabel(rows) {
-  if (rows.length === 0) return '';
-  return `${shortDay(rows[0].date)} → ${shortDay(rows[rows.length - 1].date)}`;
-}
-
 /** The lowest row of a calendar leg. */
 function cheapestOf(rows) {
   let best = null;
@@ -161,9 +157,28 @@ function cheapestOf(rows) {
   return best;
 }
 
-/** The last N rows the image shows for a calendar leg. */
-function shownRows(rows) {
-  return Array.isArray(rows) ? rows.slice(0, CALENDAR_SPARK_DAYS) : [];
+/** 日历里最便宜的 N 天（原数组是日期升序，这里按价格重排）。 */
+function lowestDays(rows, limit = 4) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => money(row?.total))
+    .slice()
+    .sort((left, right) => Number(left.total) - Number(right.total))
+    .slice(0, limit);
+}
+
+/** `每 6 小时` / `每 30 分钟` / `每 1 天`；缺失时返回空串。 */
+function cadenceLabel(minutes) {
+  const value = Number(minutes);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  if (value === 1440) return '每 1 天';
+  if (value % 60 === 0) return `每 ${value / 60} 小时`;
+  return `每 ${value} 分钟`;
+}
+
+/** `2 位乘客` / 空串（乘客列表缺失时整项省略）。 */
+function passengerLabel(monitor) {
+  const count = Array.isArray(monitor?.passengerIds) ? monitor.passengerIds.length : 0;
+  return count > 0 ? `${count} 位乘客` : '';
 }
 
 /** `2026-11-18 10:53` in the Host's local timezone (a UTC stamp would confuse). */
@@ -188,16 +203,80 @@ function topFlights(flights, limit = WATCH_TOP_N) {
 }
 
 /**
- * 走势图块：说明 + PNG。没有 `imageKey`（webhook 通道 / 上传失败 / 点数不足）
- * 时整块省略——不写「图片加载失败」这类占位，卡片其余部分照常可读。
+ * 走势序列的区间统计（`trend` 由 `index.js` 生成：`{values, labels}`，
+ * 两者等长，labels 是 X 轴刻度文字）。点数不足 2 个时返回 `null`——
+ * 一次采集没有「区间」可言，卡片就不写这一行。
  */
-function trendBlock(imageKey, caption) {
-  const picture = image(imageKey, caption || '价格走势');
-  if (!picture) return [];
-  const out = [];
-  if (caption) out.push(divText(caption, { color: INK.muted, size: 'notation' }));
-  out.push(picture);
+export function trendStats(trend) {
+  const values = (Array.isArray(trend?.values) ? trend.values : []).map(Number).filter((value) => Number.isFinite(value));
+  if (values.length < 2) return null;
+  const labels = Array.isArray(trend?.labels) ? trend.labels : [];
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const labelOf = (target) => {
+    const index = values.indexOf(target);
+    return index >= 0 ? String(labels[index] || '').trim() : '';
+  };
+  return {
+    count: values.length,
+    min: { value: Math.round(min), label: labelOf(min) },
+    max: { value: Math.round(max), label: labelOf(max) },
+    avg: Math.round(avg),
+    flat: Math.round(min) === Math.round(max),
+  };
+}
+
+/**
+ * 区间统计文案：`区间 ¥1,080（11-18）– ¥1,160（12-08） · 均价 ¥1,120 · 20 次采集`。
+ * 价格全平时只写「一直 ¥1,080」，不硬凑一个假区间。
+ */
+export function trendSummary(trend, { unit = '次采集' } = {}) {
+  const stats = trendStats(trend);
+  if (!stats) return '';
+  const parts = [];
+  if (stats.flat) {
+    parts.push(`近 ${stats.count} ${unit}始终 ${money(stats.min.value)}`);
+  } else {
+    const at = (entry) => (entry.label ? `${money(entry.value)}（${entry.label}）` : money(entry.value));
+    parts.push(`最低 ${at(stats.min)}`);
+    parts.push(`最高 ${at(stats.max)}`);
+    parts.push(`均价 ${money(stats.avg)}`);
+    parts.push(`覆盖 ${stats.count} ${unit}`);
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * 走势图块：区块标题（横轴/纵轴口径写在这里）+ PNG + 区间统计。
+ * 没有 `imageKey`（webhook 通道 / 上传失败 / 点数不足）时只省略图片本身，
+ * 标题与统计照常保留——读者仍能看到「最近几次采集中，最低/最高/均价是多少」。
+ */
+function trendSection({ imageKey, axisText, trend, unit = '次采集' }) {
+  const picture = image(imageKey, '价格走势');
+  const summary = trendSummary(trend, { unit });
+  // 没图（webhook 通道 / 上传失败）也没统计（少于 2 次采集）时整块不出现，
+  // 否则会留一条孤零零的分隔线和标题。
+  if (!picture && !summary) return [];
+  const out = [rule(), sectionTitle('价格走势', axisText)];
+  if (picture) out.push(picture);
+  if (summary) out.push(statLine(summary));
   return out;
+}
+
+/**
+ * 「本次采集」区块：采集时间 / 采集频率 / 乘客 / 数据状态 + 口径。
+ * 这四个字段是每次投递都会变的元信息，放最后一块，不打断上面的价格阅读流。
+ */
+function collectSection({ monitor, at, dataState }) {
+  const grid = fieldGrid([
+    { label: '采集时间', value: localStamp(at) },
+    { label: '采集频率', value: cadenceLabel(monitor?.cadence?.minutes) },
+    { label: '乘客', value: passengerLabel(monitor) },
+    { label: '数据状态', value: dataState },
+  ]);
+  if (grid.length === 0) return [];
+  return [rule(), sectionTitle('本次采集'), ...grid];
 }
 
 /**
@@ -226,28 +305,35 @@ function degradedCard(monitor) {
 /**
  * Calendar-mode card (spec §3 行情).
  *
- * 单程：`未来 30 天最低价 ¥498` + 涨跌 + 最低日 + 走势图。
+ * 单程：`未来 30 天最低价 ¥498` + 涨跌 + 最低日 + 走势图 + 最便宜的几天。
  * 往返：主视觉是去程最低价，回程最低价单列一行（L1 的两段相加只是估算，
  * 不合并成一个「联程价」，避免和监控模式的实价口径混在一起）。
  *
  * @param {{ monitor: object, out: Array<{date:string,total:number}>, back?: Array|null,
  *           previous?: { out?: number|null, back?: number|null }|null, imageKey?: string|null,
- *           at?: string }} input
+ *           at?: string, trend?: {values:number[], labels:string[]}|null }} input
  */
-export function buildCalendarCard({ monitor, out, back, previous, imageKey, at } = {}) {
+export function buildCalendarCard({ monitor, out, back, previous, imageKey, at, trend } = {}) {
   try {
     const forward = Array.isArray(out) ? out : [];
     const backward = Array.isArray(back) ? back : [];
-    const shown = shownRows(forward);
-    const forwardLowest = cheapestOf(forward);
-    const backLowest = cheapestOf(backward);
+    // 卡片口径统一在「未来 30 天」窗口内：主视觉、最低日、走势图、统计、低价日表
+    // 必须来自同一批点。原来价格和明细取全量日历（约 347 天）、图只画 30 天，
+    // 会出现「未来 30 天最低价 ¥460」而当天并不在图上这种自相矛盾。
+    const forwardWindow = forward.slice(0, CARD_WINDOW_DAYS);
+    const backwardWindow = backward.slice(0, CARD_WINDOW_DAYS);
+    const forwardLowest = cheapestOf(forwardWindow);
+    const backLowest = cheapestOf(backwardWindow);
     const round = monitor?.params?.trip === 'round';
     const price = money(forwardLowest?.total);
     const delta = deltaParts(forwardLowest?.total, Number(previous?.out));
+    const backDelta = deltaParts(backLowest?.total, Number(previous?.back));
+    const stats = trendStats(trend);
     const elements = [];
 
+    // ── 1. 结论
     if (price) {
-      elements.push(priceHero({
+      elements.push(...priceHero({
         label: round ? '去程最低价 · 未来 30 天' : '未来 30 天最低价',
         price,
         // 有对比才上「涨红跌绿」，第一次采集没有上次价格就用中性深色。
@@ -260,21 +346,45 @@ export function buildCalendarCard({ monitor, out, back, previous, imageKey, at }
       elements.push(divText('本次没有采到日历报价', { color: INK.muted }));
     }
 
-    const notes = [];
-    if (forwardLowest) notes.push(`最低日 ${shortDay(forwardLowest.date)}`);
-    if (round) {
-      notes.push(backLowest
-        ? `回程最低 ${money(backLowest.total)}（${shortDay(backLowest.date)}）`
-        : '回程暂无可比报价');
+    const headline = [];
+    if (forwardLowest) {
+      const when = dateCell(forwardLowest.date);
+      if (when) headline.push(`最低日 ${when}`);
     }
-    if (notes.length > 0) elements.push(divText(notes.join('\n'), { color: INK.muted, size: 'notation' }));
+    if (round) {
+      const when = backLowest ? dateCell(backLowest.date) : '';
+      if (backLowest) {
+        headline.push(`回程最低 ${money(backLowest.total)}${when ? `（${when}）` : ''}${backDelta?.text ? `，${backDelta.text}` : ''}`);
+      }
+    }
+    if (headline.length > 0) elements.push(statLine(headline.join(' · ')));
 
-    const range = rangeLabel(shown);
-    elements.push(...trendBlock(
+    // ── 2. 走势
+    elements.push(...trendSection({
       imageKey,
-      `未来 30 天最低价走势${range ? `（${range}）` : ''} · 绿=最低 红=最高`,
-    ));
-    elements.push(...footer({ at: localStamp(at), priceSpec: PRICE_SPEC_CALENDAR }));
+      axisText: round ? `${AXIS_CALENDAR}（去程）` : AXIS_CALENDAR,
+      trend,
+      unit: '天',
+    }));
+
+    // ── 3. 明细：最便宜的几天
+    // 先取更多天再交给 dayTable 去重（同价位只留一天）：直接取 4 天会被
+    // 连续 4 天的同一个最低价占满，去重后只剩 1 行。
+    const days = lowestDays(forwardWindow, 12);
+    const table = dayTable(days, { limit: 4, average: stats?.avg });
+    if (table) {
+      elements.push(rule(), sectionTitle('最便宜的日期', '按含税价从低到高'), table);
+    }
+
+    // ── 4. 采集信息
+    const coverage = forward.length > 0 ? `${forward.length} 天` : '';
+    elements.push(...collectSection({
+      monitor,
+      at,
+      dataState: forward.length > 0 ? (coverage ? `已覆盖 ${coverage}` : '已更新') : '本轮未取到',
+    }));
+    const spec = statLine(`口径：${PRICE_SPEC_CALENDAR}`);
+    if (spec) elements.push(spec);
 
     const summary = price
       ? withRoute(monitor, `${round ? '去程最低' : '未来 30 天最低'} ${price}`)
@@ -293,16 +403,17 @@ export function buildCalendarCard({ monitor, out, back, previous, imageKey, at }
 }
 
 /**
- * Watch-mode card (spec §3 监控 + D10 往返联程).
+ * Watch-mode card (spec §3 监控 + D10 往返联程 + V10 分块).
  *
- * 主视觉是「当前最低实价」，往返再加一块「联程组合 vs 两段单买」的对比和
- * 部分数据提示；航班表只列实价最低的 3 个。
+ * 主视觉是「当前最低实价」；往返再加一块「联程组合 vs 两段单买」的对比，
+ * 明细区给联程组合 TOP3 和两段单买的拆分（单程给可订航班表 + 余票）。
  *
  * @param {{ monitor: object, lowest?: {flightNo:string,total:number,scheme?:string}|null,
  *           lowestFlight?: object|null, previous?: number|null, flights?: Array<object>,
- *           roundTrip?: object|null, imageKey?: string|null, at?: string }} input
+ *           roundTrip?: object|null, imageKey?: string|null, at?: string,
+ *           trend?: {values:number[], labels:string[]}|null }} input
  */
-export function buildWatchCard({ monitor, lowest, lowestFlight, previous, flights, roundTrip, imageKey, at } = {}) {
+export function buildWatchCard({ monitor, lowest, lowestFlight, previous, flights, roundTrip, imageKey, at, trend } = {}) {
   try {
     const current = Number(lowest?.total);
     const price = money(current);
@@ -311,8 +422,9 @@ export function buildWatchCard({ monitor, lowest, lowestFlight, previous, flight
     const schemeLabel = scheme === 'round' ? '联程组合' : scheme === 'oneway' ? '两段单买' : '';
     const elements = [];
 
+    // ── 1. 结论
     if (price) {
-      elements.push(priceHero({
+      elements.push(...priceHero({
         label: `当前最低实价${schemeLabel ? ` · ${schemeLabel}` : ''}`,
         price,
         priceColor: delta ? inkFor(delta.dir) : INK.neutral,
@@ -339,31 +451,54 @@ export function buildWatchCard({ monitor, lowest, lowestFlight, previous, flight
       }));
     }
 
-    // 这个最低价对应哪一班。联程只写去程：对比的是价格，回程时刻没有信息量
-    // （用户 2026-11-20 明确要求删掉「回程 MU5332 07:15→09:45」），
-    // 两段航班详情看下面的航班表。
-    const notes = [];
-    const roundFlight = scheme === 'round' ? roundTrip?.round : null;
-    if (roundFlight) {
-      const outbound = flightInline(roundFlight);
-      if (outbound) notes.push(['联程组合', outbound].filter(Boolean).join(' · '));
+    // ── 2. 走势
+    elements.push(...trendSection({ imageKey, axisText: AXIS_WATCH, trend }));
+
+    // ── 3. 明细
+    const round = monitor?.params?.trip === 'round';
+    const detailSub = [];
+
+    if (round && roundTrip && typeof roundTrip === 'object') {
+      const combos = comboTable(roundTrip.combos, { limit: 3 });
+      if (combos) {
+        elements.push(rule(), sectionTitle('联程组合', '按待支付价从低到高'), combos);
+      }
+      const oneway = roundTrip.oneway && typeof roundTrip.oneway === 'object' ? roundTrip.oneway : null;
+      const outPayable = money(oneway?.out?.payable);
+      const backPayable = money(oneway?.back?.payable);
+      const total = money(oneway?.sum);
+      if (outPayable && backPayable && total) {
+        elements.push(sectionTitle('两段单买', '去程 + 回程分开买'));
+        // 一行说清「哪两班 + 各多少钱 + 合计」：原来拆成三行，信息重复且占高度。
+        const outFlight = oneway.out ? flightCell({ ...oneway.out, no: oneway.out.flightNo }) : '';
+        const backFlight = oneway.back ? flightCell({ ...oneway.back, no: oneway.back.flightNo }) : '';
+        const legs = [
+          outFlight ? `去程 ${outFlight} ${outPayable}` : `去程 ${outPayable}`,
+          backFlight ? `回程 ${backFlight} ${backPayable}` : `回程 ${backPayable}`,
+        ];
+        elements.push(statLine(`${legs.join(' · ')} → 合计 ${total}`));
+      }
     } else {
+      const top = topFlights(flights, 5);
+      const table = flightTable(top);
+      if (table) {
+        elements.push(rule(), sectionTitle(round ? '去程航班' : '可订航班', '按实价从低到高 · 含余票'), table);
+      }
       const replayed = lowestFlight
         || (Array.isArray(flights) ? flights.find((flight) => flight?.no && flight.no === lowest?.flightNo) : null);
       const label = flightInline(replayed);
-      if (label) notes.push(`最低来自 ${label}`);
+      if (label) detailSub.push(`最低来自 ${label}`);
     }
-    if (notes.length > 0) elements.push(divText(notes.join('\n'), { color: INK.muted, size: 'notation' }));
+    if (detailSub.length > 0) elements.push(statLine(detailSub.join(' · ')));
 
-    const top = topFlights(flights);
-    const table = flightTable(top);
-    if (table) {
-      elements.push(markdown(`**${monitor?.params?.trip === 'round' ? '去程航班' : '可选航班'} · 实价从低到高**`));
-      elements.push(table);
-    }
-
-    elements.push(...trendBlock(imageKey, '最近 20 次采集最低实价走势 · 绿=最低 红=最高'));
-    elements.push(...footer({ at: localStamp(at), priceSpec: PRICE_SPEC_WATCH }));
+    // ── 4. 采集信息
+    const partial = roundTrip?.partial === true;
+    const dataState = round
+      ? (partial ? '部分数据（有组合没取到实价）' : '完整')
+      : (topFlights(flights, 10).length > 0 ? `已取到 ${topFlights(flights, 10).length} 个航班实价` : '本轮未取到');
+    elements.push(...collectSection({ monitor, at, dataState }));
+    const spec = statLine(`口径：${PRICE_SPEC_WATCH}`);
+    if (spec) elements.push(spec);
 
     const summary = price
       ? withRoute(monitor, `实价 ${price}${delta ? `，${delta.text}` : ''}`)
@@ -385,16 +520,18 @@ export function buildWatchCard({ monitor, lowest, lowestFlight, previous, flight
 export function buildFailureCard({ monitor, error, at } = {}) {
   try {
     const detail = String(error || '未知错误').slice(0, 300);
+    const elements = [
+      sectionTitle('失败原因'),
+      divText(detail, { color: INK.up }),
+      statLine('这一轮没有写入新价格，下一轮会按采集节奏继续。'),
+    ];
+    elements.push(...collectSection({ monitor, at, dataState: '本轮失败' }));
     return cardShell({
       template: TEMPLATE.failure,
       title: cardHeading(monitor),
       summary: withRoute(monitor, '本次采集失败'),
       tags: [modeTag(monitor)],
-      elements: [
-        divText(`本次采集失败：${detail}`, { color: INK.up }),
-        divText('这一轮没有写入新价格，下一轮会按采集节奏继续。', { color: INK.muted, size: 'notation' }),
-        ...footer({ at: localStamp(at) }),
-      ],
+      elements,
     });
   } catch {
     return degradedCard(monitor);
@@ -411,13 +548,18 @@ export function buildTestCard({ channel, chatId, webhook, at } = {}) {
     const target = channel === 'app'
       ? (chatId ? `目标群 ${chatId}` : '')
       : (webhook ? '目标：已配置的自定义机器人' : '');
-    const elements = [divText(`投递通道：**${channelLabel}**`)];
-    if (target) elements.push(divText(target, { color: INK.muted, size: 'notation' }));
-    elements.push(divText('收到这条消息说明通道可用；正式卡片还会带价格主视觉与走势图（走势图仅自建应用通道）。', {
+    const elements = [
+      sectionTitle('投递通道'),
+      divText(`**${channelLabel}**`),
+    ];
+    const targetLine = statLine(target);
+    if (targetLine) elements.push(targetLine);
+    elements.push(divText('收到这条消息说明通道可用；正式卡片包含价格主视觉、带坐标轴的走势图、分块明细与采集信息（走势图仅自建应用通道）。', {
       color: INK.muted,
       size: 'notation',
     }));
-    elements.push(...footer({ at: localStamp(at), atLabel: '发送' }));
+    elements.push(rule(), sectionTitle('发送信息'));
+    elements.push(...fieldGrid([{ label: '发送时间', value: localStamp(at) }]));
     return cardShell({
       template: TEMPLATE.test,
       title: '价格监控 · 测试消息',

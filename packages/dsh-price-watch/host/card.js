@@ -32,6 +32,11 @@ export const INK = {
 /** 相邻块之间的分隔线；卡片里所有区块切换都用它，不用空 div 撑间距。 */
 const RULE = { tag: 'hr' };
 
+/** 区块分隔线（卡片分块展示：结论 / 走势 / 明细 / 采集信息）。 */
+export function rule() {
+  return RULE;
+}
+
 /** `¥1,234`，拿不到正数时返回空串（调用方据此省略整块，而不是打印破折号）。 */
 export function money(value) {
   const n = Number(value);
@@ -123,25 +128,27 @@ function twoColumns(left, right) {
  * 两列都从同一行开始排（小标签/涨跌幅在上，金额在下），所以读者一眼看到的是
  * 价格和涨跌这一对，而不是一堆等宽的字段。
  *
+ * 一律返回**元素数组**（有涨跌时是一个 `column_set`，没有时是两行文本），
+ * 调用方用 `elements.push(...priceHero(...))`——返回裸对象会让 push 出嵌套数组、
+ * 卡片 JSON 校验直接失败。
+ *
  * @param {{label:string, price:string, priceColor?:string, delta?:string,
  *          deltaColor?:string, previous?:string}} input
+ * @returns {Array<object>}
  */
 export function priceHero({ label, price, priceColor, delta, deltaColor, previous }) {
-  const left = {
-    tag: 'column',
-    width: 'weighted',
-    weight: 1,
-    elements: [
-      divText(label, { color: INK.muted, size: 'notation' }),
-      divText(`**${price}**`, { color: priceColor || INK.neutral, size: 'xxxx-large' }),
-    ],
-  };
+  const leftElements = [
+    divText(label, { color: INK.muted, size: 'notation' }),
+    divText(`**${price}**`, { color: priceColor || INK.neutral, size: 'xxxx-large' }),
+  ];
   const rightElements = [];
   if (delta) rightElements.push(divText(`**${delta}**`, { color: deltaColor || INK.muted, size: 'large' }));
   if (previous) rightElements.push(divText(previous, { color: INK.muted, size: 'notation' }));
-  if (rightElements.length === 0) rightElements.push(divText('暂无对比', { color: INK.muted, size: 'notation' }));
+  // 没有上一轮价格（首次采集 / 上次失败）时右侧整列省掉：不写「暂无对比」
+  // 这种占位，价格主视觉独占一行更大更清楚。
+  if (rightElements.length === 0) return leftElements;
   const right = { tag: 'column', width: 'weighted', weight: 1, elements: rightElements };
-  return twoColumns(left, right);
+  return [twoColumns({ tag: 'column', width: 'weighted', weight: 1, elements: leftElements }, right)];
 }
 
 /**
@@ -290,6 +297,154 @@ const AIRLINE_SHORT = {
 };
 
 /**
+ * 卡片分块用的「区块标题」：`**价格走势**` + 右侧灰色小字说明（横轴/纵轴口径、
+ * 时间范围等）。两块之间由调用方插 `rule()`，标题自身不加分隔线。
+ *
+ * 为什么不用 markdown 组件：`div > lark_md` 才能同时给出「加粗标题 + 灰色小字」
+ * 的混排（markdown 组件的字号/颜色由客户端统一，不能混）。
+ */
+export function sectionTitle(title, sub) {
+  const head = `**${inline(title)}**`;
+  const tail = inline(sub) ? `　<font color='grey'>${inline(sub)}</font>` : '';
+  return { tag: 'div', text: { tag: 'lark_md', content: `${head}${tail}`, text_align: 'left' } };
+}
+
+/** 一行灰色小字：统计结论（区间最低/最高/均价）、补充说明。 */
+export function statLine(content) {
+  const text = inline(content);
+  return text ? divText(text, { color: INK.muted, size: 'notation' }) : null;
+}
+
+/**
+ * 字段网格：两列等分，每格「小标签 + 值」。
+ *
+ * 用来做「采集信息」这种成对出现的元数据（采集时间 / 采集频率 / 覆盖范围 /
+ * 数据状态）。house rule 要求内容列一律 `weighted` + `weight: 1`，所以不做
+ * 1:2 之类的主次分栏；奇数个字段时最后一列独占一行。
+ *
+ * @param {Array<{label:string, value:string, color?:string}>} pairs
+ * @returns {Array<object>}
+ */
+export function fieldGrid(pairs) {
+  const items = (Array.isArray(pairs) ? pairs : [])
+    .filter((pair) => pair && inline(pair.label) && inline(pair.value))
+    .map((pair) => ({ label: inline(pair.label), value: inline(pair.value), color: pair.color }));
+  if (items.length === 0) return [];
+  const elements = [];
+  for (let index = 0; index < items.length; index += 2) {
+    const columns = items.slice(index, index + 2).map((item) => ({
+      tag: 'column',
+      width: 'weighted',
+      weight: 1,
+      elements: [
+        divText(item.label, { color: INK.muted, size: 'notation' }),
+        divText(`**${item.value}**`, { color: item.color || INK.neutral, size: 'normal' }),
+      ],
+    }));
+    elements.push({ tag: 'column_set', flex_mode: 'flow', horizontal_spacing: '16px', columns });
+  }
+  return elements;
+}
+
+/** 表格里的航班简写：`南航 CZ8882 14:00`（逐级省略缺失字段，绝不空着）。 */
+export function flightCell(flight) {
+  const name = flightName(flight);
+  const dep = inline(flight?.depTime);
+  if (name && dep) return `${name} ${dep}`;
+  return name || dep || '';
+}
+
+/** `¥1,234` / 估算时 `≈¥1,234`；没有数字就是空串。 */
+function priceCell(payable, fallback) {
+  const exact = money(payable);
+  if (exact) return exact;
+  const estimate = money(fallback);
+  return estimate ? `≈${estimate}` : '';
+}
+
+/**
+ * 联程组合表（往返监控）：去程 / 返程 / 待支付实价，按实价升序。
+ *
+ * 实价拿不到的降级组合用 `≈` 标注（那是「列表价 + 两段实测税费」的估算），
+ * 和卡片页脚的口径说明对得上；连估算价都没有的行直接不出现。
+ *
+ * @param {Array<object>} combos 快照里的 `roundTrip.combos`
+ * @param {{limit?:number}} [options]
+ * @returns {object|null} markdown 元素
+ */
+export function comboTable(combos, { limit = 3 } = {}) {
+  const rows = (Array.isArray(combos) ? combos : [])
+    .map((combo) => ({
+      out: flightCell(combo?.out),
+      ret: flightCell(combo?.ret),
+      price: priceCell(combo?.payable, combo?.listTotal),
+      estimate: !money(combo?.payable),
+    }))
+    // 组合必须两侧都有航班：缺一侧的行整行省略（本仓库不留「—」「N/A」占位）。
+    .filter((row) => row.price && row.out && row.ret)
+    .slice(0, limit);
+  if (rows.length === 0) return null;
+  const lines = [
+    '| 去程 | 返程 | 待支付 |',
+    '| :--- | :--- | :--- |',
+    ...rows.map((row) => `| ${row.out} | ${row.ret} | ${row.price} |`),
+  ];
+  return markdown(lines.join('\n'));
+}
+
+/** `11-25 周二`；日期坏掉时返回空串（调用方据此省略整列）。 */
+export function dateCell(dateString) {
+  const parts = String(dateString || '').split('-').map(Number);
+  if (parts.length !== 3 || parts.some((value) => !Number.isFinite(value))) return '';
+  const day = new Date(parts[0], parts[1] - 1, parts[2]);
+  const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][day.getDay()] || '';
+  return `${String(parts[1]).padStart(2, '0')}-${String(parts[2]).padStart(2, '0')} ${weekday}`;
+}
+
+/**
+ * 日历模式的「最低价日期」表：日期（含星期）/ 最低含税价 / 相对均价。
+ * `relative` 传均价时算百分比，方便一眼看出便宜的幅度。
+ *
+ * @param {Array<{date:string,total:number}>} days 已按价格升序
+ * @param {{limit?:number, average?:number}} [options]
+ * @returns {object|null}
+ */
+export function dayTable(days, { limit = 4, average } = {}) {
+  const avg = Number(average);
+  const sorted = (Array.isArray(days) ? days : []).filter((day) => money(day?.total));
+  // 同价位只保留最早出现的那一天：连续四天都是 ¥460 时，列四行一样的价格
+  // 不如把位置留给「第二便宜的价位是哪天」。
+  const seenPrices = new Set();
+  const picked = [];
+  for (const day of sorted) {
+    const price = Math.round(Number(day.total));
+    if (seenPrices.has(price)) continue;
+    seenPrices.add(price);
+    picked.push(day);
+    if (picked.length >= limit) break;
+  }
+  const rows = picked
+    .map((day) => {
+      const when = dateCell(day.date);
+      const price = money(day.total);
+      const total = Number(day.total);
+      const relative = Number.isFinite(avg) && avg > 0 && Number.isFinite(total)
+        ? `${total < avg ? '-' : '+'}${Math.abs(((total - avg) / avg) * 100).toFixed(0)}%`
+        : '';
+      return { when, price, relative };
+    });
+  if (rows.length === 0) return null;
+  const useRelative = rows.some((row) => row.relative);
+  const header = ['日期', '最低含税价', ...(useRelative ? ['相对均价'] : [])];
+  const lines = [
+    `| ${header.join(' | ')} |`,
+    `| ${header.map(() => ':---').join(' | ')} |`,
+    ...rows.map((row) => `| ${[row.when, row.price, ...(useRelative ? [row.relative] : [])].join(' | ')} |`),
+  ];
+  return markdown(lines.join('\n'));
+}
+
+/**
  * 航班表（Markdown 表格，不用原生 `table`：原生表格只能放在 body 顶层，
  * 而这张表将来可能被挪进分栏/折叠面板里，Markdown 表格在哪都能用）。
  * 所有列显式左对齐，符合仓库的表格规范。
@@ -303,7 +458,13 @@ export function flightTable(flights) {
   // 只有整列都有值时才出这一列：缺航班号的快照宁可少一列，也不留空格子。
   const useName = rows.every((flight) => flightName(flight));
   const useTime = rows.every((flight) => flightWindow(flight));
-  const header = [...(useName ? ['航班'] : []), ...(useTime ? ['时间'] : []), '实价'];
+  const useSeats = rows.every((flight) => seatCell(flight));
+  const header = [
+    ...(useName ? ['航班'] : []),
+    ...(useTime ? ['时间'] : []),
+    ...(useSeats ? ['余票'] : []),
+    '实价',
+  ];
   const lines = [
     `| ${header.join(' | ')} |`,
     `| ${header.map(() => ':---').join(' | ')} |`,
@@ -312,6 +473,7 @@ export function flightTable(flights) {
     const cells = [
       ...(useName ? [flightName(flight)] : []),
       ...(useTime ? [flightWindow(flight)] : []),
+      ...(useSeats ? [seatCell(flight)] : []),
       money(flight.taxIncluded),
     ];
     lines.push(`| ${cells.join(' | ')} |`);
@@ -319,19 +481,11 @@ export function flightTable(flights) {
   return markdown(lines.join('\n'));
 }
 
-/**
- * 页脚：采集时间（Host 本地时区）+ 口径。口径必须一直可见（spec §7.3），
- * 否则读者会把「日历估算价」当成「订单页实价」。
- *
- * @param {{at:string, priceSpec?:string, atLabel?:string}} input
- * @returns {Array<object>}
- */
-export function footer({ at, priceSpec, atLabel = '采集' }) {
-  const parts = [];
-  if (at) parts.push(`${atLabel} ${at}`);
-  if (priceSpec) parts.push(`口径：${priceSpec}`);
-  if (parts.length === 0) return [];
-  return [RULE, divText(parts.join(' · '), { color: INK.muted, size: 'notation' })];
+/** 余票列：`剩 3 张` / `售罄`；快照没给余票时返回空串（整列就不出现）。 */
+function seatCell(flight) {
+  if (flight?.soldOut === true) return '售罄';
+  const seats = Number(flight?.seats);
+  return Number.isInteger(seats) && seats > 0 ? `剩 ${seats} 张` : '';
 }
 
 /**
@@ -363,7 +517,9 @@ export function cardShell({ template, title, summary, tags, elements }) {
       summary: { content: summaryText(summary) },
     },
     header,
-    body: { elements: (Array.isArray(elements) ? elements : []).filter(Boolean) },
+    // flat(2)：某个 builder 不小心把数组 push 进来时也不产出非法嵌套结构
+    // （元素本身最多两层：column_set > columns，所以 2 足够且不会破坏结构）。
+    body: { elements: (Array.isArray(elements) ? elements : []).flat(2).filter(Boolean) },
   };
 }
 
