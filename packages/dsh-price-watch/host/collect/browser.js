@@ -110,6 +110,10 @@ export function parseFareRules(text) {
   } else if ((match = source.match(/(\d{1,2})\s*[-~至]\s*(\d{1,2})\s*岁/))) {
     out.ageMin = Number(match[1]);
     out.ageMax = Number(match[2]);
+  } else if ((match = source.match(/(\d{1,2})\s*岁\s*(?:及以上|以上)/))) {
+    // 列表产品卡写作「55岁及以上乘客预订」（没有「周」字），实测出现在
+    // 「多人特惠」这类票种上；漏掉它就会把人订不了的票当成最低价。
+    out.ageMin = Number(match[1]);
   }
   if (/学生认证|学生专享|学生票/.test(source)) out.requiresStudent = true;
   if (/儿童票|儿童专享|婴儿票/.test(source)) out.childOnly = true;
@@ -994,6 +998,23 @@ export function createBrowserCollector({ rootDir, logger, store }) {
         const key = `${price}|${text.slice(0, 60)}`;
         if (seen.has(key)) continue;
         seen.add(key);
+        // 票价限制（「限至少3人(儿童不计)，55岁及以上乘客预订」这类「多人特惠」票）
+        // 在列表里是**隐藏文案**：innerText 读不到，只有 textContent 有。往上爬到
+        // 「只包住这一个预订按钮」的最近容器，取它 textContent 里那半句限制。
+        let ruleNode = box;
+        let ruleScope = norm(box.textContent);
+        for (let depth = 0; depth < 6 && ruleNode.parentElement; depth += 1) {
+          const parent = ruleNode.parentElement;
+          if (parent.querySelectorAll('.btn-book').length !== 1) break;
+          const candidate = norm(parent.textContent);
+          if (candidate.length > 800) break;
+          ruleNode = parent;
+          ruleScope = candidate;
+          if (/限至少|限\s*\d+\s*[-~]\s*\d+\s*人|岁及以上|学生专享|儿童专享/.test(candidate)) break;
+        }
+        const rulesText = (
+          ruleScope.match(/限[^¥]{0,60}|[^。；|¥]{0,10}\d{1,2}\s*岁\s*(?:及以上|以上)[^。；|¥]{0,20}|学生专享[^。；|¥]{0,20}|儿童专享[^。；|¥]{0,20}/) || ['']
+        )[0].slice(0, 140);
         const cabin = /超级经济舱/.test(text)
           ? '超级经济舱'
           : /公务舱|商务舱/.test(text)
@@ -1009,7 +1030,8 @@ export function createBrowserCollector({ rootDir, logger, store }) {
           cabin,
           discount: Number.isFinite(discount) ? discount : null,
           text: text.slice(0, 300),
-          limits: text.match(/限[^ ]{0,50}/g) || [],
+          rulesText,
+          limits: `${text} ${rulesText}`.match(/限[^ ]{0,50}/g) || [],
         });
       }
       return {
@@ -1079,11 +1101,20 @@ export function createBrowserCollector({ rootDir, logger, store }) {
           feeSum: pick(/(?:税费|基建燃油|机建燃油)[^¥]{0,12}¥?\s*(\d{1,5})/),
           orderTotal: totalOf(),
           sawBooking: /乘机人|证件|订单填写|去支付|填写订单|支付/.test(text),
+          // 「多人特惠」票种会按最少成团人数计价（页面上写成「¥380x 3」），
+          // 这时候总价是 3 个人的钱，不能当单人待支付价用。
+          paxMultiplier: (() => {
+            const multiplier = text.match(/[¥￥]\s?[\d,]{2,6}\s*[x×]\s*(\d)/);
+            return multiplier ? Number(multiplier[1]) : null;
+          })(),
+          // 票种限制原文（「该产品限3-9人可订」「55周岁及以上」），用来给出准确的降级原因。
+          constraintText: (text.match(/(?:该产品)?限\s*\d+\s*[-~]\s*\d+\s*人可订[^。；]{0,30}|限至少\s*\d+\s*人[^。；]{0,30}|\d{1,2}\s*周?岁\s*(?:及以上|以上)/) || [''])[0].slice(0, 80),
         };
       }).catch(() => null);
       if (!info || !info.sawBooking) return null;
       const orderTotal = Number.isFinite(info.orderTotal) && info.orderTotal > 0 ? info.orderTotal : null;
-      return { tax: taxFromOrderInfo(info), orderTotal };
+      const passengers = Number.isInteger(info.paxMultiplier) && info.paxMultiplier > 0 ? info.paxMultiplier : null;
+      return { tax: taxFromOrderInfo(info), orderTotal, paxMultiplier: passengers, constraintText: info.constraintText || '' };
     } catch (error) {
       logger.warn('读取预订页总价失败', error);
       return null;
@@ -1105,6 +1136,9 @@ export function createBrowserCollector({ rootDir, logger, store }) {
           button.click();
         }
       });
+      // 「特惠机票预订提示」确认层会拦住跳转（单程最便宜的舱位经常就是特惠票），
+      // 不点掉它这里就只能读到列表页，含税价会静默退回估算。
+      await confirmNoticeWhileNavigating(page);
       await navigated;
       await page.waitForTimeout(4500);
       const order = await readBookingPage(page);
@@ -1172,7 +1206,9 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   function chooseFares(snapshot, passengers, paxCount) {
     if (!snapshot || !Array.isArray(snapshot.products) || snapshot.products.length === 0) return null;
     const catalogue = snapshot.products
-      .map((product) => ({ product, rules: parseFareRules(product.limits.join(' ') || product.text) }))
+      // 「多人特惠 / 55 岁及以上」这类限制只在产品卡的隐藏文案里（`rulesText`），
+      // 漏读它就会把单人根本订不了的票当成最低价，然后在预订页读到 3 人总价。
+      .map((product) => ({ product, rules: parseFareRules(product.rulesText || product.limits.join(' ') || product.text) }))
       .sort((a, b) => a.product.price - b.product.price);
     const chosen = [];
     for (const passenger of passengers) {
@@ -1438,8 +1474,78 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     return false;
   }
 
-  async function waitForCheckout(page, timeoutMs = 25000) {
+  /**
+   * 点「预订」后携程可能先弹一个「预订提示」确认层（实测最常见的是
+   * 「特惠机票预订提示：… 报销凭证 … 出票时间 … [不同意] [同意并购买]」）。
+   * 这个弹窗不关掉就不会跳预订页，表现就是「点了预订但 URL 没变」。
+   *
+   * 只认弹窗内、且弹窗本身带预订提示文案的按钮，绝不点「不同意」，也不碰
+   * 页面其它区域的「同意」（cookie 之类），避免误点。
+   *
+   * @returns {Promise<{confirmed:boolean, label?:string, notice?:string}>}
+   */
+  async function confirmBookingNotice(page) {
+    return page.evaluate(() => {
+      const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+      const visible = (element) => {
+        try {
+          return element.getClientRects().length > 0;
+        } catch {
+          return false;
+        }
+      };
+      const scopes = [...document.querySelectorAll('[class*="modal" i],[class*="dialog" i],[class*="popup" i],[class*="layer" i],[role="dialog"]')]
+        .filter((element) => visible(element));
+      for (const scope of scopes) {
+        const text = norm(scope.innerText);
+        if (!/预订提示|我已阅读并同意|报销凭证/.test(text)) continue;
+        const candidates = [...scope.querySelectorAll('button, a, span, div')]
+          .filter((element) => element.children.length === 0 && visible(element));
+        const agree = candidates.find((element) => /^(同意并购买|同意并继续|继续预订|确认并继续|同意)$/.test(norm(element.textContent)));
+        if (!agree) continue;
+        const disabled = agree.getAttribute('disabled') !== null
+          || /disabled|is-disabled/i.test(String(agree.className || ''));
+        if (disabled) {
+          // 有的提示层要先勾「我已阅读并同意上述信息」才放开按钮。
+          const checkbox = [...scope.querySelectorAll('input[type="checkbox"],[class*="checkbox" i]')].find((element) => visible(element));
+          if (!checkbox) continue;
+          checkbox.click();
+        }
+        agree.scrollIntoView({ block: 'center' });
+        agree.click();
+        return { confirmed: true, label: norm(agree.textContent), notice: text.slice(0, 120) };
+      }
+      return { confirmed: false };
+    }).catch(() => ({ confirmed: false }));
+  }
+
+  /**
+   * 单程流程用：点「预订」之后轮询一小会儿，遇到提示层就点掉。
+   * 一旦已经离开列表页（跳转已发生）就立刻返回，不占用额外时间。
+   */
+  async function confirmNoticeWhileNavigating(page, timeoutMs = 6000) {
     const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const notice = await confirmBookingNotice(page);
+      if (notice.confirmed) {
+        logger.info(`预订提示层已确认（${notice.label}）：${notice.notice || ''}`);
+        return true;
+      }
+      if (!/\/online\/list\//.test(String(page.url?.() || ''))) return false;
+      await page.waitForTimeout(600);
+    }
+    return false;
+  }
+
+  /**
+   * 等到浏览器真正进入预订页；期间遇到「预订提示」确认层就点「同意并购买」。
+   *
+   * @returns {Promise<{checkout:boolean, confirmed:number}>}
+   *   `confirmed` 是本次为进预订页关掉的提示层数量（排查用）。
+   */
+  async function waitForCheckout(page, timeoutMs = 30000) {
+    const started = Date.now();
+    let confirmed = 0;
     const isCheckout = () => {
       try {
         return /flights\.ctrip\.com\/itinerary\/checkout\//.test(String(page.url?.() || ''));
@@ -1448,10 +1554,19 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       }
     };
     while (Date.now() - started < timeoutMs) {
-      if (isCheckout()) return true;
+      if (isCheckout()) return { checkout: true, confirmed };
+      if (confirmed < 3) {
+        const notice = await confirmBookingNotice(page);
+        if (notice.confirmed) {
+          confirmed += 1;
+          logger.info(`预订提示层已确认（${notice.label}）：${notice.notice || ''}`);
+          await page.waitForTimeout(1200);
+          continue;
+        }
+      }
       await page.waitForTimeout(600);
     }
-    return isCheckout();
+    return { checkout: isCheckout(), confirmed };
   }
 
   /**
@@ -1511,7 +1626,9 @@ export function createBrowserCollector({ rootDir, logger, store }) {
    * 用户实测的真实交互：
    *   1) 往返列表点回程行的「订票」**不跳转**，而是就地展开票价产品；
    *   2) 必须再点具体产品的「预订」才进入 `itinerary/checkout/` 预订页；
-   *   3) 预订页 URL 带 tt/tx 会话令牌，无法自行拼装，只能真实点击到达。
+   *   3) 点完「预订」还可能先弹一层「预订提示」确认弹窗（实测是「特惠机票预订
+   *      提示 … [不同意] [同意并购买]」），点「同意并购买」后才会真正跳转；
+   *   4) 预订页 URL 带 tt/tx 会话令牌，无法自行拼装，只能真实点击到达。
    *
    * 失败不抛（除非风控/登录失效）：返回 `{checkout:false, error}`，上层用
    * 「列表裸价 + 两段实测税费」降级并标 partial。
@@ -1533,19 +1650,26 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       const hit = chooseFares(snapshot, passengers, paxCount);
       if (!hit) throw new Error('回程行没有解析到可订的票价产品');
       const cheapest = hit.chosen.slice().sort((left, right) => left.bare - right.bare)[0];
+      // 产品清单进日志：票价限制读错/漏读时，这一行能直接看出是哪个票种被选中。
+      const catalogue = (snapshot?.products || [])
+        .map((product) => `¥${product.price}${product.rulesText ? `[${product.rulesText.slice(0, 26)}]` : ''}`)
+        .join(' ');
+      logger.info(`回程 ${returnFlight?.flightNo || ''} 票价产品：${catalogue || '无'}；选中 ¥${cheapest.bare}`);
       // 3) 点该产品的「预订」
       const clicked = await clickProductBook(page, backRow.rowIndex, cheapest.bare);
       if (!clicked) throw new Error('没有找到回程票价产品的「预订」按钮');
-      // 4) 真实点击后等 URL 进入预订页，再读总价（readBookingPage 由调用方执行）
-      const checkout = await waitForCheckout(page);
-      if (!checkout) {
+      // 4) 等 URL 进入预订页；中途弹「预订提示」就点「同意并购买」
+      //    （readBookingPage 由调用方执行）
+      const wait = await waitForCheckout(page);
+      if (!wait.checkout) {
         let currentUrl = '';
         try {
           currentUrl = String(page.url?.() || '').slice(0, 120);
         } catch {
           /* ignore */
         }
-        throw new Error(`点「预订」后没有进入预订页（当前 URL: ${currentUrl}）`);
+        const hint = await stuckHint(page);
+        throw new Error(`点「预订」后没有进入预订页（已确认提示层 ${wait.confirmed} 次，当前 URL: ${currentUrl}）${hint}`);
       }
       return { checkout: true, error: null, returnFlight };
     } catch (error) {
@@ -1554,6 +1678,19 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       logger.warn(`联程回程进预订页失败，降级为「列表裸价 + 两段实测税费」: ${message}`);
       return { checkout: false, error: message, returnFlight };
     }
+  }
+
+  /** 进预订页失败时给错误信息补一条现场线索（可见弹层文案），不截图不落盘。 */
+  async function stuckHint(page) {
+    const hint = await page.evaluate(() => {
+      const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+      const layers = [...document.querySelectorAll('[class*="modal" i],[class*="dialog" i],[class*="layer" i],[role="dialog"]')]
+        .map((element) => norm(element.innerText))
+        .filter((text) => text.length > 0)
+        .slice(0, 2);
+      return layers.length ? `；页面提示：${layers.join(' / ').slice(0, 160)}` : '';
+    }).catch(() => '');
+    return hint || '';
   }
 
   /** 往返列表行 → 详情页「往返航班表」的一行（D10-B 的 roundList）。 */
@@ -1644,17 +1781,28 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   /**
    * 已经在预订页：等渲染 → 读总价 → 做合理性校验。
    *
-   * 校验规则：预订总价必须 ≥ 这一条组合的列表往返总价，且不能超过它 3 倍 + 500
-   * （多乘客/保险/服务包会抬高，但离谱的数字多半是读到了别的金额）。不合理就当没
-   * 读到，走 list+tax 降级而不是写一个假实价。
+   * 校验规则：
+   *  - 预订页按 N 人计价（「¥380x 3」）而本次监控只有 1 人 → 这是「多人特惠」票种，
+   *    总价不是单人待支付价，直接判为不可用并给出原因（不拿它当价格）；
+   *  - 预订总价必须 ≥ 这一条组合的列表往返总价，且不能超过它 3 倍 + 500
+   *    （行李/服务包会抬高，但离谱的数字多半是别人的钱）。
+   * 不合理就当没读到，走 list+tax 降级而不是写一个假实价。
    *
    * @returns {Promise<{orderTotal:number|null, error:string|null}>}
    */
-  async function readCheckoutTotal(page, listTotal) {
+  async function readCheckoutTotal(page, listTotal, { paxCount = 1 } = {}) {
     await waitForCheckoutContent(page);
     const order = await readBookingPage(page);
     const rawTotal = order?.orderTotal ?? null;
     const bareFare = Number(listTotal) || 0;
+    const multiplier = order?.paxMultiplier ?? null;
+    if (multiplier !== null && multiplier > paxCount) {
+      const constraint = order?.constraintText ? `（${order.constraintText}）` : '';
+      return {
+        orderTotal: null,
+        error: `该票种按 ${multiplier} 人成团计价${constraint}，${paxCount} 人不可订（预订页总价 ¥${rawTotal ?? '?'}）`,
+      };
+    }
     const sane = rawTotal !== null && bareFare > 0 && rawTotal >= bareFare && rawTotal <= bareFare * 3 + 500;
     if (sane) return { orderTotal: rawTotal, error: null };
     if (rawTotal !== null) return { orderTotal: null, error: `预订页总价不合理（${rawTotal} vs 列表 ${bareFare}）` };
@@ -1689,19 +1837,35 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     });
 
     // 打开往返列表页并读出去程行（按列表价升序）。
-    const loadOutboundRows = async () => {
-      await page.goto(roundUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await waitForFlights(page);
-      // Human pacing: look at the list for a few seconds, like a person would.
-      await dwell(page);
-      await loadRowWindow(page);
-      const rows = await readRowList(page);
-      const roundRows = rows.filter((row) => row.isRoundRow || row.roundTotal != null);
-      return (roundRows.length ? roundRows : rows).slice().sort((a, b) => a.listPrice - b.listPrice);
+    //
+    // 携程偶尔只回页面壳、航班行迟迟不渲染（实测连跑几轮后更容易出现）。这种
+    // 一次性失败不值得丢掉整轮：重试一次；风控页（BlockedError）不重试，直接
+    // 抛给调度器跳过这一轮，别去硬碰。
+    const loadOutboundRows = async ({ humanPause = false } = {}) => {
+      let lastError = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await page.goto(roundUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+          await waitForFlights(page);
+          // Human pacing: look at the list for a few seconds, like a person would.
+          // 只在首屏停顿；后面的复位重载要快，否则一轮 9 条组合白等一分钟。
+          if (humanPause && attempt === 0) await dwell(page);
+          await loadRowWindow(page);
+          const rows = await readRowList(page);
+          const roundRows = rows.filter((row) => row.isRoundRow || row.roundTotal != null);
+          return (roundRows.length ? roundRows : rows).slice().sort((a, b) => a.listPrice - b.listPrice);
+        } catch (error) {
+          if (isFatal(error)) throw error;
+          lastError = error;
+          logger.warn(`往返列表第 ${attempt + 1} 次加载失败，${attempt === 0 ? '稍后重试一次' : '放弃'}: ${String(error?.message || error)}`);
+          if (attempt === 0) await page.waitForTimeout(5000);
+        }
+      }
+      throw lastError || new Error('往返列表没有解析到航班行');
     };
 
     // 1) 首屏（也为详情页 roundList 留数据）
-    const outboundRows = await loadOutboundRows();
+    const outboundRows = await loadOutboundRows({ humanPause: true });
     if (outboundRows.length === 0) throw new Error('往返列表没有解析到航班行');
     const roundList = outboundRows.slice(0, ROUND_LIST_ROWS).map(roundRowSummary);
     const topOutbound = outboundRows.slice(0, ROUND_OUTBOUND_TOP);
@@ -1717,12 +1881,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       let returnRows = [];
       try {
         // 2a) 每轮重新 goto，再点第 i 条去程的「选为去程」
-        await page.goto(roundUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await waitForFlights(page);
-        await loadRowWindow(page);
-        const freshRows = await readRowList(page);
-        const freshRoundRows = freshRows.filter((row) => row.isRoundRow || row.roundTotal != null);
-        const pool = (freshRoundRows.length ? freshRoundRows : freshRows).slice().sort((a, b) => a.listPrice - b.listPrice);
+        const pool = await loadOutboundRows();
         const fresh = findRoundRow(pool, outRow) || pool[i] || null;
         if (!fresh) throw new Error(`重新加载后找不到去程 ${outLabel}`);
         const selected = await clickRowAction(page, fresh.rowIndex, '选为去程|选择去程|选为去程航班');
@@ -1756,12 +1915,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
           // 起来更省事，但携程的 SPA 从 checkout 返回后经常不恢复列表状态，
           // 重新导航是唯一可靠的复位（实测 goBack 会让同一条去程只拿到 1 条返程）。
           try {
-            await page.goto(roundUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-            await waitForFlights(page);
-            await loadRowWindow(page);
-            const again = await readRowList(page);
-            const againRound = again.filter((row) => row.isRoundRow || row.roundTotal != null);
-            const againPool = (againRound.length ? againRound : again).slice().sort((a, b) => a.listPrice - b.listPrice);
+            const againPool = await loadOutboundRows();
             const sameOut = findRoundRow(againPool, outRow) || againPool[i] || null;
             if (!sameOut) throw new Error(`重新加载后找不到去程 ${outLabel}`);
             const reselected = await clickRowAction(page, sameOut.rowIndex, '选为去程|选择去程|选为去程航班');
@@ -1788,7 +1942,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
           let orderTotal = null;
           let error = opened.error || null;
           if (opened.checkout) {
-            const total = await readCheckoutTotal(page, backRow.listPrice);
+            const total = await readCheckoutTotal(page, backRow.listPrice, { paxCount });
             orderTotal = total.orderTotal;
             if (orderTotal === null) error = error || total.error;
           } else if (!error) {
