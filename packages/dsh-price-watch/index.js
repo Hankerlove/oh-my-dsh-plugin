@@ -280,8 +280,8 @@ export function apply(ctx) {
       // A single point draws nothing worth looking at (the first collection of a
       // monitor). Send the card without an image instead of a blank placeholder.
       if (values.length < 2) return null;
-      // 640×320 + 横纵坐标刻度：轴文字要占空间，卡片插图按卡片宽度 1:1 显示。
-      return renderTrendPng(values, { labels: trend?.labels || [], width: 640, height: 320 });
+      // 1280×640（设计基准的 2 倍）：飞书里按卡片宽 ~636px 显示，2 倍图在视网膜屏更锐。
+      return renderTrendPng(values, { labels: trend?.labels || [] });
     } catch (error) {
       logger.warn(`走势图渲染失败，降级为无图卡片: ${String(error?.message || error)}`);
       return null;
@@ -774,7 +774,7 @@ export function apply(ctx) {
       const monitors = store.listMonitors();
       const failures = Object.values(state.failures || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
       return {
-        version: '0.13.0',
+        version: '0.14.0',
         auth: { ...(state.auth || { status: 'unknown' }), available },
         lastCollectAt: state.lastCollectAt,
         monitorCount: monitors.length,

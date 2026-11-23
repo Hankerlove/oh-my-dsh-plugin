@@ -1,28 +1,37 @@
 /**
- * Minimal PNG chart renderer for Feishu cards.
+ * 走势图渲染：零依赖的**纯 JS 矢量**光栅器。
  *
- * Why hand-rolled: a Feishu card image has to be uploaded as an `image_key`, so
- * the Host must produce real PNG bytes. Pulling in canvas/sharp would add a
- * native dependency to a decorative plugin, and this only ever needs a plain
- * trend line — so the encoder below writes the four PNG chunks itself and leans
- * on `node:zlib` for compression.
+ * 为什么不是「套一个图表库 / 起个无头浏览器画 SVG」：
+ *  - 飞书卡片只认 PNG 字节（`img_key`），HTML/SVG 只是描述，必须有东西把它光栅化；
+ *  - 起浏览器要多养一个 300–800ms 的进程和 720MB 内存，还会把「有没有装 Chrome」
+ *    变成卡片能不能出图的隐式依赖；
+ *  - 引 native 依赖（canvas/sharp）又违反「装饰性插件不拖原生物件」的定位。
  *
- * 文字也是手写的：环境里没有 canvas/sharp，所以内置一套 5×7 点阵字形（数字、
- * `¥`、`,`、`-`、`.`、`:`、空格），在 2× 超采样空间里用 scale=4 画，缩下来就是
- * 10×14 的清晰字。坐标轴、网格、均价虚线和最高/最低点金额都在这里画。
+ * 所以：字形轮廓内嵌成数据（Inter，OFL，见 `chart-font.js`），在 JS 里自己做
+ * 二次贝塞尔展开 + 非零环绕扫描线填充 + 超采样抗锯齿。输出 2×（1280×640），
+ * 单张 20–70ms，天然可测。
  *
- * 卡片口径：每个采集点一个小圆点，**最低点绿、最高点红**（跌绿涨红），所以读者
- * 不用读数字就能看出这轮价格是创了新低还是新高。颜色都是 `options` 可覆盖的，
- * 旧的 `renderTrendPng(values)` 调用不用改。
- *
- * Rendering is supersampled (2×) and box-filtered down, which is the cheapest
- * way to get lines that do not look like stairs at 640px wide.
+ * 视觉规则（用户 2026-11-23 拍板）：
+ *  - 白底、无外框、只留极淡的横向网格，最高一条刻度带 `¥`；
+ *  - 中性蓝折线 + 同色纵向渐变面积；monotone cubic 平滑（绝不过冲，不会画出
+ *    数据里不存在的高低点）；
+ *  - 最低点绿、最高点红，各带一枚数值标注（白底 halo，自动避让边界）；
+ *  - **不画当前值胶囊**（飞书卡图是静态 PNG，没有 hover/滑动，只有末尾一个胶囊
+ *    没有意义），当前值由卡片「结论区」的大号数字承担；
+ *  - **不画均价虚线**；
+ *  - 平坦序列（价格一直不变）单独处理：线放绘图区垂直中点、不填面积、不标极值。
  */
 import { deflateSync } from 'node:zlib';
 
-const SS = 2; // supersampling factor
+import { GLYPHS, UPEM } from './chart-font.js';
 
-// #region PNG encoding
+/** 超采样倍数：输出像素再放大 SS 倍绘制，降采样后得到抗锯齿边缘。 */
+const SS = 2;
+/** 设计分辨率：所有视觉常量都按这个尺寸写，实际尺寸按比例缩放。 */
+const DESIGN_W = 1280;
+const DESIGN_H = 640;
+
+// #region PNG 编码
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let n = 0; n < 256; n += 1) {
@@ -54,26 +63,24 @@ function encodePng(width, height, rgb) {
   const raw = Buffer.alloc((stride + 1) * height);
   for (let y = 0; y < height; y += 1) {
     raw[y * (stride + 1)] = 0; // filter: none
-    rgb.copy ? rgb.copy(raw, y * (stride + 1) + 1, y * stride, y * stride + stride) : raw.set(rgb.subarray(y * stride, y * stride + stride), y * (stride + 1) + 1);
+    rgb.copy(raw, y * (stride + 1) + 1, y * stride, y * stride + stride);
   }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
   ihdr[9] = 2; // colour type: truecolour
-  ihdr[10] = 0;
-  ihdr[11] = 0;
-  ihdr[12] = 0;
+  const idat = deflateSync(raw, { level: 9 });
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(raw, { level: 9 })),
+    chunk('IDAT', idat),
     chunk('IEND', Buffer.alloc(0)),
   ]);
 }
 // #endregion
 
-// #region colour + canvas
+// #region 颜色与画布
 function parseColor(value, fallback) {
   const text = String(value || '').trim();
   const hex = text.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
@@ -93,8 +100,8 @@ function createCanvas(width, height, background) {
     pixels[i * 3 + 2] = background[2];
   }
   const set = (x, y, colour) => {
-    const px = Math.round(x);
-    const py = Math.round(y);
+    const px = x | 0;
+    const py = y | 0;
     if (px < 0 || py < 0 || px >= width || py >= height) return;
     const offset = (py * width + px) * 3;
     pixels[offset] = colour[0];
@@ -102,61 +109,96 @@ function createCanvas(width, height, background) {
     pixels[offset + 2] = colour[2];
   };
   const blend = (x, y, colour, alpha) => {
-    const px = Math.round(x);
-    const py = Math.round(y);
+    const px = x | 0;
+    const py = y | 0;
     if (px < 0 || py < 0 || px >= width || py >= height) return;
     const offset = (py * width + px) * 3;
     pixels[offset] = Math.round(pixels[offset] * (1 - alpha) + colour[0] * alpha);
     pixels[offset + 1] = Math.round(pixels[offset + 1] * (1 - alpha) + colour[1] * alpha);
     pixels[offset + 2] = Math.round(pixels[offset + 2] * (1 - alpha) + colour[2] * alpha);
   };
-  const line = (x0, y0, x1, y1, colour, thickness = 1, alpha = 1) => {
-    let ax = Math.round(x0);
-    let ay = Math.round(y0);
-    const bx = Math.round(x1);
-    const by = Math.round(y1);
-    const dx = Math.abs(bx - ax);
-    const dy = Math.abs(by - ay);
-    const sx = ax < bx ? 1 : -1;
-    const sy = ay < by ? 1 : -1;
-    let error = dx - dy;
-    for (;;) {
-      if (thickness <= 1) {
-        if (alpha >= 1) set(ax, ay, colour);
-        else blend(ax, ay, colour, alpha);
-      } else {
-        const r = Math.floor(thickness / 2);
-        for (let oy = -r; oy <= r; oy += 1) {
-          for (let ox = -r; ox <= r; ox += 1) {
-            if (alpha >= 1) set(ax + ox, ay + oy, colour);
-            else blend(ax + ox, ay + oy, colour, alpha);
-          }
-        }
+  /** 非零环绕规则填充多边形组（字形、圆角矩形都走这里）。 */
+  const fillPolygons = (polygons, colour) => {
+    const edges = [];
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const poly of polygons) {
+      if (!poly || poly.length < 2) continue;
+      for (let i = 0; i < poly.length; i += 1) {
+        const a = poly[i];
+        const b = poly[(i + 1) % poly.length];
+        if (a.y === b.y) continue;
+        edges.push(a.y < b.y
+          ? { x0: a.x, y0: a.y, x1: b.x, y1: b.y, dir: 1 }
+          : { x0: b.x, y0: b.y, x1: a.x, y1: a.y, dir: -1 });
+        if (a.y < minY) minY = a.y;
+        if (a.y > maxY) maxY = a.y;
+        if (b.y < minY) minY = b.y;
+        if (b.y > maxY) maxY = b.y;
       }
-      if (ax === bx && ay === by) break;
-      const e2 = error * 2;
-      if (e2 > -dy) {
-        error -= dy;
-        ax += sx;
+    }
+    if (edges.length === 0) return;
+    const yStart = Math.max(0, Math.floor(minY));
+    const yEnd = Math.min(height - 1, Math.ceil(maxY));
+    for (let y = yStart; y <= yEnd; y += 1) {
+      const sampleY = y + 0.5;
+      const hits = [];
+      for (const edge of edges) {
+        if (sampleY < edge.y0 || sampleY >= edge.y1) continue;
+        hits.push({
+          x: edge.x0 + ((sampleY - edge.y0) / (edge.y1 - edge.y0)) * (edge.x1 - edge.x0),
+          dir: edge.dir,
+        });
       }
-      if (e2 < dx) {
-        error += dx;
-        ay += sy;
+      if (hits.length < 2) continue;
+      hits.sort((left, right) => left.x - right.x);
+      let winding = 0;
+      for (let i = 0; i < hits.length - 1; i += 1) {
+        winding += hits[i].dir;
+        if (winding === 0) continue;
+        const from = Math.max(0, Math.round(hits[i].x));
+        const to = Math.min(width - 1, Math.round(hits[i + 1].x));
+        for (let x = from; x <= to; x += 1) set(x, y, colour);
       }
     }
   };
-  return { width, height, pixels, set, blend, line };
-}
-
-/** Filled axis-aligned rectangle (device px). */
-function fillRect(canvas, x, y, width, height, colour) {
-  const x0 = Math.round(x);
-  const y0 = Math.round(y);
-  const x1 = Math.round(x + width);
-  const y1 = Math.round(y + height);
-  for (let py = y0; py < y1; py += 1) {
-    for (let px = x0; px < x1; px += 1) canvas.set(px, py, colour);
-  }
+  const rect = (x, y, w, h, colour, alpha = 1) => {
+    for (let py = Math.round(y); py < Math.round(y + h); py += 1) {
+      for (let px = Math.round(x); px < Math.round(x + w); px += 1) {
+        if (alpha >= 1) set(px, py, colour);
+        else blend(px, py, colour, alpha);
+      }
+    }
+  };
+  const hline = (x0, x1, y, colour, thickness = 1, alpha = 1) => {
+    const rows = Math.max(1, Math.round(thickness));
+    for (let offset = 0; offset < rows; offset += 1) {
+      for (let x = Math.round(x0); x <= Math.round(x1); x += 1) {
+        if (alpha >= 1) set(x, y + offset, colour);
+        else blend(x, y + offset, colour, alpha);
+      }
+    }
+  };
+  const dot = (cx, cy, radius, colour, alpha = 1) => {
+    const limit = Math.ceil(radius);
+    for (let oy = -limit; oy <= limit; oy += 1) {
+      for (let ox = -limit; ox <= limit; ox += 1) {
+        if (ox * ox + oy * oy > radius * radius) continue;
+        if (alpha >= 1) set(cx + ox, cy + oy, colour);
+        else blend(cx + ox, cy + oy, colour, alpha);
+      }
+    }
+  };
+  /** 粗线：沿线段逐点 stamp 圆点，端点自然是圆的（round cap/join）。 */
+  const stroke = (x0, y0, x1, y1, colour, thickness) => {
+    const steps = Math.max(1, Math.round(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0))));
+    const radius = thickness / 2;
+    for (let i = 0; i <= steps; i += 1) {
+      const t = i / steps;
+      dot(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, radius, colour);
+    }
+  };
+  return { width, height, pixels, set, blend, fillPolygons, rect, hline, dot, stroke };
 }
 
 /** Box-filter a supersampled canvas down to the requested size. */
@@ -188,486 +230,386 @@ function downsample(canvas, factor) {
 }
 // #endregion
 
-// #region bitmap font
+// #region 矢量文字
 /**
- * 5×7 点阵字形。每个字形 7 行、每行 5 个字符，`'1'` 为实心。
- * 只收录卡片坐标轴/金额标注会用到的字符；未知字符按空格处理（仍占一位宽）。
+ * TrueType 轮廓 → 折线。
+ *
+ * 二次曲线的控制点混在轮廓点里（`onCurve=false`），两个相邻控制点之间有一个
+ * 隐式 on-curve 中点，必须先补出来再展开，否则字形会缺角。
  */
-const FONT_ROWS = {
-  '0': '01110/10001/10011/10101/11001/10001/01110',
-  '1': '00100/01100/00100/00100/00100/00100/01110',
-  '2': '01110/10001/00001/00110/01000/10000/11111',
-  '3': '01110/10001/00001/00110/00001/10001/01110',
-  '4': '00010/00110/01010/10010/11111/00010/00010',
-  '5': '11111/10000/11110/00001/00001/10001/01110',
-  '6': '00110/01000/10000/11110/10001/10001/01110',
-  '7': '11111/00001/00010/00100/01000/01000/01000',
-  '8': '01110/10001/10001/01110/10001/10001/01110',
-  '9': '01110/10001/10001/01111/00001/00010/01100',
-  '¥': '10101/10101/01110/11111/00100/11111/00100',
-  ',': '00000/00000/00000/00000/00110/00100/01000',
-  '-': '00000/00000/00000/11111/00000/00000/00000',
-  '.': '00000/00000/00000/00000/00000/01100/01100',
-  ':': '00000/01100/01100/00000/01100/01100/00000',
-  ' ': '00000/00000/00000/00000/00000/00000/00000',
-};
-
-const FONT = Object.fromEntries(Object.entries(FONT_ROWS).map(([char, rows]) => [char, rows.split('/')]));
-const FONT_WIDTH = 5;
-const FONT_HEIGHT = 7;
-const FONT_GAP = 1; // one blank dot column between glyphs
-const FONT_SCALE = 4; // device px per font dot → 10×14 css px after downsampling
-const FONT_ADVANCE = (FONT_WIDTH + FONT_GAP) * FONT_SCALE;
-
-/** Width of `text` in device px (trailing inter-glyph gap excluded). */
-function measureText(text, scale = FONT_SCALE) {
-  const chars = String(text || '').length;
-  if (!chars) return 0;
-  return chars * (FONT_WIDTH + FONT_GAP) * scale - FONT_GAP * scale;
-}
-
-/**
- * Draw `text` with its top-left corner at device `(x, y)`.
- * The origin is snapped to the supersample grid so every glyph dot lands on a
- * whole final pixel and the text stays crisp after downsampling.
- */
-function drawText(canvas, text, x, y, colour, scale = FONT_SCALE) {
-  const originX = Math.round(x / SS) * SS;
-  const originY = Math.round(y / SS) * SS;
-  let cursor = originX;
-  for (const char of String(text || '')) {
-    const glyph = FONT[char] || FONT[' '];
-    for (let row = 0; row < FONT_HEIGHT; row += 1) {
-      const bits = glyph[row] || '00000';
-      for (let col = 0; col < FONT_WIDTH; col += 1) {
-        if (bits[col] !== '1') continue;
-        const px = cursor + col * scale;
-        const py = originY + row * scale;
-        for (let oy = 0; oy < scale; oy += 1) {
-          for (let ox = 0; ox < scale; ox += 1) canvas.set(px + ox, py + oy, colour);
-        }
-      }
+function contourToPolyline(points, originX, originY, scale) {
+  const count = points.length;
+  if (count === 0) return [];
+  const mapped = points.map(([x, y, on]) => ({ x: originX + x * scale, y: originY - y * scale, on: on === 1 }));
+  let start;
+  let index = 0;
+  if (!mapped[0].on) {
+    const last = mapped[count - 1];
+    start = last.on
+      ? { x: last.x, y: last.y }
+      : { x: (last.x + mapped[0].x) / 2, y: (last.y + mapped[0].y) / 2 };
+  } else {
+    start = { x: mapped[0].x, y: mapped[0].y };
+    index = 1;
+  }
+  const out = [start];
+  let current = start;
+  let i = index;
+  while (i < count) {
+    const point = mapped[i];
+    if (point.on) {
+      out.push({ x: point.x, y: point.y });
+      current = point;
+      i += 1;
+      continue;
     }
-    cursor += FONT_ADVANCE;
+    const next = mapped[(i + 1) % count];
+    const end = next.on ? next : { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 };
+    for (let step = 1; step <= 8; step += 1) {
+      const t = step / 8;
+      const mt = 1 - t;
+      out.push({
+        x: mt * mt * current.x + 2 * mt * t * point.x + t * t * end.x,
+        y: mt * mt * current.y + 2 * mt * t * point.y + t * t * end.y,
+      });
+    }
+    current = end;
+    i += 1;
   }
-  return cursor - FONT_GAP * scale - originX;
+  return out;
 }
 
-/** `1080` → `1,080`; `-3.5` → `-3.5`. */
-function formatNumber(value, decimals = 0) {
-  const safeDecimals = Math.max(0, Math.min(4, decimals));
-  const rounded = Number(value).toFixed(safeDecimals);
-  const negative = rounded.startsWith('-');
-  const [integerPart, decimalPart] = (negative ? rounded.slice(1) : rounded).split('.');
-  const grouped = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `${negative ? '-' : ''}${grouped}${decimalPart ? `.${decimalPart}` : ''}`;
+/** 文本宽度（px）。字体里没有的字符按空格宽度算，不抛错。 */
+export function textWidth(value, sizePx) {
+  const scale = Number(sizePx) / UPEM;
+  let total = 0;
+  for (const char of String(value ?? '')) {
+    const glyph = GLYPHS[char] || GLYPHS[' '];
+    total += (glyph ? glyph[0] : UPEM / 2) * scale;
+  }
+  return total;
 }
 
 /**
- * Candidate tick steps. `1/2/2.5/5/10` is the classic "nice" set; `1.5/3/4/6/8`
- * are admitted with a small penalty because price ranges are often awkward
- * (e.g. ¥450–¥802) and forcing a purely classic step there wastes half the
- * canvas. Readability beats dogmatic niceness.
+ * 在 canvas 上画一行文本（左上角为 `(x, baselineY)` 的基线位置）。
+ * 字形轮廓直接填充，配合超采样得到灰阶抗锯齿的数字 —— 这是这套渲染器
+ * 能看起来"不像点阵"的关键。
  */
-const NICE_MULTIPLES = [
-  [1, 0],
-  [1.5, 0.05],
-  [2, 0.02],
-  [2.5, 0.06],
-  [3, 0.12],
-  [4, 0.25],
-  [5, 0.04],
-  [6, 0.3],
-  [8, 0.35],
-  [10, 0],
-];
-
-/** Nearest classic nice step (1/2/2.5/5/10 × 10^k) — used for flat series. */
-function niceRound(raw) {
-  if (!Number.isFinite(raw) || raw <= 0) return 1;
-  const base = 10 ** Math.floor(Math.log10(raw));
-  const fraction = raw / base;
-  let best = 1;
-  let bestDiff = Infinity;
-  for (const multiple of [1, 2, 2.5, 5, 10]) {
-    const diff = Math.abs(Math.log(fraction / multiple));
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      best = multiple;
+export function drawText(canvas, value, x, baselineY, sizePx, colour) {
+  const scale = Number(sizePx) / UPEM;
+  let cursor = Number(x) || 0;
+  for (const char of String(value ?? '')) {
+    const glyph = GLYPHS[char];
+    const advance = (glyph ? glyph[0] : (GLYPHS[' ']?.[0] ?? UPEM / 2)) * scale;
+    if (glyph && glyph.length > 1) {
+      const polygons = glyph.slice(1).map((contour) => contourToPolyline(contour, cursor, Number(baselineY) || 0, scale));
+      canvas.fillPolygons(polygons, colour);
     }
+    cursor += advance;
   }
-  return best * base;
-}
-
-function candidateSteps(ideal) {
-  const out = [];
-  const seen = new Set();
-  const centre = Math.floor(Math.log10(ideal));
-  for (let exponent = centre - 2; exponent <= centre + 1; exponent += 1) {
-    const base = 10 ** exponent;
-    for (const [multiple, penalty] of NICE_MULTIPLES) {
-      const step = multiple * base;
-      if (step < ideal / 20 || step > ideal * 1.5) continue;
-      const key = step.toPrecision(12);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ step, penalty });
-    }
-  }
-  return out.sort((a, b) => a.step - b.step);
-}
-
-/**
- * 5-tick axis range covering the data. Ideally the data keeps 12% (at least ¥6)
- * padding on both sides and the range is widened outward to whole tick steps.
- * When that would leave a lot of empty canvas, a tighter range (less padding,
- * but still no clipping) wins — hence the score instead of "first fit".
- */
-function niceRange(min, max) {
-  const span = max - min;
-  if (span < 1e-9) {
-    // Flat series: no span to pad, so centre a round range on the value.
-    const magnitude = Math.max(Math.abs(max), 1);
-    const step = Math.max(1, niceRound(Math.max(6, magnitude * 0.01)));
-    const low = Math.floor((max - step * 2) / step) * step;
-    return { low, high: low + step * 4, step };
-  }
-
-  const pad = Math.max(6, span * 0.12);
-  const ideal = span + pad * 2;
-  let best = null;
-  for (const { step, penalty } of candidateSteps(ideal)) {
-    const range = step * 4;
-    // low + range must cover max, low must stay at/under min.
-    const minLow = Math.ceil((max - range) / step - 1e-9) * step;
-    const maxLow = Math.floor(min / step + 1e-9) * step;
-    if (minLow > maxLow + 1e-9) continue;
-    // 在能盖住数据的区间里挑一个让上下余量尽量对称的起点，而不是一味贴着
-    // 下边界（那样近水平的序列会整条浮在画布上半部）。
-    const balancedLow = min - (range - (max - min)) / 2;
-    const low = Math.min(maxLow, Math.max(minLow, Math.round(balancedLow / step) * step));
-    const padLow = (min - low) / range;
-    const padHigh = (low + range - max) / range;
-    const decimalPenalty = step < 1 && Math.max(Math.abs(min), Math.abs(max)) >= 100 ? 0.6 : 0;
-    const score =
-      range / ideal + penalty + 3 * Math.max(0, 0.12 - padLow) + 3 * Math.max(0, 0.12 - padHigh) + decimalPenalty;
-    if (!best || score < best.score) best = { low, step, score };
-  }
-  if (!best) {
-    // Fallback: just cover the data with four equal intervals.
-    const step = (max - min) / 4 || 1;
-    return { low: min, high: max, step };
-  }
-  return { low: best.low, high: best.low + best.step * 4, step: best.step };
-}
-
-/** Number of decimals needed to render a tick of the given step. */
-function decimalsForStep(step) {
-  for (let decimals = 0; decimals <= 4; decimals += 1) {
-    if (Math.abs(step * 10 ** decimals - Math.round(step * 10 ** decimals)) < 1e-9) return decimals;
-  }
-  return 4;
+  return cursor - (Number(x) || 0);
 }
 // #endregion
 
-/** 默认标记色（`[r,g,b]`）：采集中性点 / 最低点绿 / 最高点红。 */
-const LOW_COLOR = [26, 117, 38]; // 最低点：绿（跌绿，和卡片 header 的语义一致）
-const HIGH_COLOR = [192, 42, 38]; // 最高点：红（涨红）
-const DOT_COLOR = [47, 107, 255]; // 普通采集点：跟着折线的主色走
-const AXIS_COLOR = [196, 203, 214]; // 轴线比网格深一点
-const LABEL_COLOR = [89, 96, 112]; // 刻度文字
-const AVG_COLOR = [125, 147, 184]; // 均价虚线：淡灰蓝
-const ANNOTATION_COLOR = [32, 37, 48]; // 金额标注
-
-/** Pick up to `max` evenly spaced indices (first and last always included). */
-function pickEvenIndices(count, max) {
-  const take = Math.max(2, Math.min(max, count));
-  const indices = [];
-  for (let i = 0; i < take; i += 1) {
-    const index = Math.round((i * (count - 1)) / (take - 1));
-    if (indices[indices.length - 1] !== index) indices.push(index);
+// #region 几何
+/** monotone cubic（Fritsch–Carlson）：平滑但**不过冲**。 */
+export function monotonePath(values, steps = 10) {
+  const count = values.length;
+  if (count < 2) return values.map((value, index) => ({ index, value }));
+  const delta = [];
+  for (let i = 0; i < count - 1; i += 1) delta.push(values[i + 1] - values[i]);
+  const tangent = new Array(count).fill(0);
+  tangent[0] = delta[0];
+  tangent[count - 1] = delta[count - 2];
+  for (let i = 1; i < count - 1; i += 1) {
+    tangent[i] = delta[i - 1] * delta[i] <= 0 ? 0 : (delta[i - 1] + delta[i]) / 2;
   }
-  return indices;
+  for (let i = 0; i < count - 1; i += 1) {
+    if (delta[i] === 0) {
+      tangent[i] = 0;
+      tangent[i + 1] = 0;
+      continue;
+    }
+    const a = tangent[i] / delta[i];
+    const b = tangent[i + 1] / delta[i];
+    const sum = a * a + b * b;
+    if (sum > 9) {
+      const factor = 3 / Math.sqrt(sum);
+      tangent[i] = factor * a * delta[i];
+      tangent[i + 1] = factor * b * delta[i];
+    }
+  }
+  const out = [];
+  for (let i = 0; i < count - 1; i += 1) {
+    for (let step = 0; step < steps; step += 1) {
+      const t = step / steps;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      out.push({
+        index: i + t,
+        value: (2 * t3 - 3 * t2 + 1) * values[i]
+          + (t3 - 2 * t2 + t) * tangent[i]
+          + (-2 * t3 + 3 * t2) * values[i + 1]
+          + (t3 - t2) * tangent[i + 1],
+      });
+    }
+  }
+  out.push({ index: count - 1, value: values[count - 1] });
+  return out;
 }
 
 /**
- * Draw a trend line.
+ * 取一个"整"的刻度步长（1/2/2.5/5 × 10^k 的整数倍）。
+ * 价格都是整数，所以最后取整 —— 否则会出现"几何位置在 617.5、标签写 618"的错位。
+ */
+export function niceStep(span, target = 4) {
+  const safeSpan = Math.max(1, Number(span) || 0);
+  const baseExponent = Math.floor(Math.log10(safeSpan / Math.max(1, target)));
+  const candidates = new Set();
+  // 只在 1/2/2.5/5 × 10^k 里挑，并且**只保留整数步长**：价格都是整数，
+  // 非整数步长会让"刻度线的几何位置"和"标签写的数字"对不上。
+  for (let exponent = baseExponent - 1; exponent <= baseExponent + 1; exponent += 1) {
+    for (const multiplier of [1, 2, 2.5, 5]) {
+      const step = multiplier * 10 ** exponent;
+      if (!Number.isInteger(step) || step < 1) continue;
+      candidates.add(step);
+    }
+  }
+  let best = 1;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const step of candidates) {
+    const count = Math.ceil(safeSpan / step) + 1; // 大致会有几条刻度
+    const score = Math.abs(count - target);
+    if (score < bestScore || (score === bestScore && step < best)) {
+      best = step;
+      bestScore = score;
+    }
+  }
+  return Math.max(1, best);
+}
+
+/** 整数刻度序列（含首尾），并把标签文字一起返回。 */
+export function tickSeries(min, max, target = 4) {
+  const pad = Math.max(1, Math.round((max - min) * 0.12));
+  const low = min - pad;
+  const high = max + pad;
+  const step = niceStep(high - low, target);
+  const start = Math.floor(low / step) * step;
+  const end = Math.ceil(high / step) * step;
+  const ticks = [];
+  for (let value = start; value <= end + 1e-6; value += step) ticks.push(Math.round(value));
+  return { ticks, step };
+}
+
+/** `1,234`（字体里有 `,`，所以直接手写千分位而不依赖 toLocaleString）。 */
+export function groupDigits(value) {
+  const text = String(Math.round(Number(value) || 0));
+  const negative = text.startsWith('-');
+  const digits = negative ? text.slice(1) : text;
+  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return negative ? `-${grouped}` : grouped;
+}
+// #endregion
+
+/** 默认配色（用户 2026-11-23 拍板：中性蓝折线，红绿只留给极值语义）。 */
+const PALETTE = {
+  background: [255, 255, 255],
+  grid: [233, 237, 243],
+  axis: [221, 227, 236],
+  label: [138, 148, 166],
+  line: [47, 107, 255],
+  fill: [47, 107, 255],
+  low: [14, 159, 110],
+  high: [224, 36, 36],
+  halo: [255, 255, 255],
+};
+
+/**
+ * 画一张价格走势图。
  *
- * 卡片口径（用户 2026-11-20 要求）：最低点绿、最高点红，并给每个采集点画小圆点。
- * 这些都是**默认值**，因此旧的 `renderTrendPng(values)` 调用（`host/index.js`）
- * 不用改就会得到新的标记；需要旧行为时传 `points:false` 或显式颜色即可。
- *
- * 坐标轴文字同样是默认打开的：`labels` 是 X 轴刻度（与 `values` 等长），缺省时
- * 只画网格；`avg` 控制均价虚线；`annotate` 控制最高/最低点金额标注。
- *
- * @param {number[]} values  oldest → newest, at least 2 finite numbers
- * @param {object}  [options]
- * @param {string[]} [options.labels]     X 轴刻度文字，例如 `['11-01','11-02',…]`
- * @param {string}  [options.yPrefix]     Y 轴最高刻度的前缀，默认 `'¥'`
- * @param {boolean|number} [options.avg]  均价虚线，默认 `true`（取 values 均值）
- * @param {boolean} [options.annotate]    最低/最高点金额标注，默认 `true`
- * @param {string}  [options.lowlight]   最低点颜色，默认绿
- * @param {string}  [options.highlight]  最高点颜色，默认红
- * @param {string}  [options.dot]        普通采集点颜色，默认同折线色
- * @param {boolean} [options.points]     是否画每个采集点的小圆点，默认 true
- * @param {number}  [options.pointRadius] 小圆点半径（css px），默认 1.9
- * @param {string}  [options.axis]       轴线/刻度颜色
- * @param {string}  [options.label]      刻度文字颜色
- * @param {string}  [options.avgLine]    均价虚线颜色
+ * @param {number[]} values  从旧到新，至少 2 个有限值；更少时返回空白占位图
+ * @param {object} [options]
+ * @param {string[]} [options.labels]  与 values 等长的 X 轴刻度文字（`11-23` / `17:40`）
+ * @param {number}  [options.width]    输出像素宽，默认 1280（设计基准 1280，按比例缩放）
+ * @param {number}  [options.height]   输出像素高，默认 640
+ * @param {string}  [options.background] / grid / line / fill / lowlight / highlight
  * @returns {Buffer} PNG bytes
  */
 export function renderTrendPng(values, options = {}) {
-  const width = Math.max(120, Math.min(1200, Number(options.width) || 640));
-  const height = Math.max(120, Math.min(900, Number(options.height) || 320));
-  const background = parseColor(options.background, [255, 255, 255]);
-  const grid = parseColor(options.grid, [232, 234, 238]);
-  const stroke = parseColor(options.line, [47, 107, 255]);
-  const fill = parseColor(options.fill, [47, 107, 255]);
-  const low = parseColor(options.lowlight, LOW_COLOR);
-  const high = parseColor(options.highlight, HIGH_COLOR);
-  const point = parseColor(options.dot, DOT_COLOR);
-  const axisColour = parseColor(options.axis, AXIS_COLOR);
-  const labelColour = parseColor(options.label, LABEL_COLOR);
-  const avgColour = parseColor(options.avgLine, AVG_COLOR);
-  const showPoints = options.points !== false;
-  const pointRadius = Math.min(6, Math.max(0.8, Number(options.pointRadius) || 1.9));
-  const yPrefix = options.yPrefix === undefined ? '¥' : String(options.yPrefix);
-  const showAnnotations = options.annotate !== false;
+  const width = Math.max(320, Math.min(2560, Math.round(Number(options.width) || DESIGN_W)));
+  const height = Math.max(160, Math.min(1280, Math.round(Number(options.height) || DESIGN_H)));
+  const unit = width / DESIGN_W; // 设计单位 → 输出像素
+  const background = parseColor(options.background, PALETTE.background);
+  const gridColour = parseColor(options.grid, PALETTE.grid);
+  const axisColour = parseColor(options.axis, PALETTE.axis);
+  const labelColour = parseColor(options.label, PALETTE.label);
+  const lineColour = parseColor(options.line, PALETTE.line);
+  const fillColour = parseColor(options.fill, PALETTE.fill);
+  const lowColour = parseColor(options.lowlight, PALETTE.low);
+  const highColour = parseColor(options.highlight, PALETTE.high);
+  const haloColour = background;
 
   const rawValues = Array.isArray(values) ? values : [];
   const rawLabels = Array.isArray(options.labels) ? options.labels : [];
   const numbers = [];
-  const labelList = [];
+  const labels = [];
   rawValues.forEach((value, index) => {
     const number = Number(value);
     if (!Number.isFinite(number)) return;
     numbers.push(number);
-    labelList.push(rawLabels[index] === undefined || rawLabels[index] === null ? '' : String(rawLabels[index]));
+    labels.push(rawLabels[index] === undefined || rawLabels[index] === null ? '' : String(rawLabels[index]));
   });
-  if (numbers.length < 2) return renderBlankPng({ width, height, background, grid });
+  if (numbers.length < 2) return renderBlankPng({ width, height, background, grid: gridColour });
 
-  const w = width * SS;
-  const h = height * SS;
+  const canvas = createCanvas(width * SS, height * SS, background);
+  const dev = (value) => value * SS;
 
-  const minValue = Math.min(...numbers);
-  const maxValue = Math.max(...numbers);
-  const range = niceRange(minValue, maxValue);
-  const decimals = decimalsForStep(range.step);
-  const tickValues = Array.from({ length: 5 }, (_, index) => {
-    const value = range.low + range.step * index;
-    return Math.round(value * 1e6) / 1e6;
+  const min = Math.min(...numbers);
+  const max = Math.max(...numbers);
+  const flat = Math.round(min) === Math.round(max);
+  const { ticks } = flat
+    ? { ticks: [Math.round(min) - 1, Math.round(min), Math.round(min) + 1] }
+    : tickSeries(min, max, 4);
+  const tickLow = ticks[0];
+  const tickHigh = ticks[ticks.length - 1];
+
+  const fontSize = { axis: 18 * unit, extreme: 19 * unit, month: 17 * unit };
+  const tickTexts = ticks.map((value, index) => {
+    const body = groupDigits(value);
+    // 只有最高刻度带 `¥`：既点明币种，又不让每个标签都占一位宽度
+    return index === ticks.length - 1 ? `¥${body}` : body;
   });
-  // 只有最高刻度带 `¥`，其余只写数字：既点明币种，又不至于每条都占 6 位宽。
-  const tickTexts = tickValues.map((value, index) => {
-    const text = formatNumber(value, Number.isInteger(value) ? 0 : decimals);
-    return `${index === 4 ? yPrefix : ''}${text}`;
-  });
-  const tickWidth = Math.max(...tickTexts.map((text) => measureText(text)));
+  const yTextWidth = Math.max(...tickTexts.map((text) => textWidth(text, fontSize.axis)));
 
-  // 布局（css px → 设备 px）：左边文字槽按最长刻度实际宽度算，至少 52px。
-  const ySlotWidth = Math.max(52 * SS, tickWidth);
-  const padLeft = 4 * SS + ySlotWidth + 10 * SS;
-  const padRight = 14 * SS;
-  const padTop = 24 * SS;
-  const padBottom = 38 * SS;
-  const plotW = Math.max(1, w - padLeft - padRight);
-  const plotH = Math.max(1, h - padTop - padBottom);
-  const plotRight = padLeft + plotW;
-  const plotBottom = padTop + plotH;
+  const padding = {
+    top: 34 * unit,
+    right: 26 * unit,
+    bottom: 62 * unit,
+    left: yTextWidth + 34 * unit,
+  };
+  const plot = {
+    x: padding.left,
+    y: padding.top,
+    w: Math.max(1, width - padding.left - padding.right),
+    h: Math.max(1, height - padding.top - padding.bottom),
+  };
+  const span = Math.max(1e-6, tickHigh - tickLow);
+  const toY = (value) => plot.y + plot.h - ((value - tickLow) / span) * plot.h;
+  // 末点稍稍内缩，避免和右边缘/标注打架
+  const toX = (index) => plot.x + (index / Math.max(1, numbers.length - 1)) * plot.w;
 
-  const canvas = createCanvas(w, h, background);
-  const span = range.high - range.low;
-  const toY = (value) => padTop + plotH - ((value - range.low) / span) * plotH;
-  const toX = (index) => padLeft + (index / (numbers.length - 1)) * plotW;
+  // ── 横向网格（不画外框、不画纵网格）
+  for (let i = 0; i < ticks.length; i += 1) {
+    const y = toY(ticks[i]);
+    const isEdge = i === 0 || i === ticks.length - 1;
+    canvas.hline(dev(plot.x), dev(plot.x + plot.w), Math.round(dev(y)), gridColour, dev(1), isEdge ? 0.55 : 1);
+  }
+  // 底线
+  canvas.hline(dev(plot.x), dev(plot.x + plot.w), Math.round(dev(plot.y + plot.h)), axisColour, dev(1.5), 1);
 
-  // --- horizontal grid + Y axis labels -------------------------------------
-  const yLabelCentreOffset = (FONT_HEIGHT * FONT_SCALE) / 2; // 14 device px
-  // 矮图（如 120px 高）里 5 条刻度文字会挤在一起，隔一条标一次，网格线仍画满 5 条。
-  const yLabelStride = plotH / 4 < 18 * SS ? 2 : 1;
-  for (let i = 0; i < 5; i += 1) {
-    const y = toY(tickValues[i]);
-    canvas.line(padLeft, y, plotRight, y, grid, SS, 0.55);
-    canvas.line(padLeft - 4 * SS, y, padLeft, y, axisColour, SS, 1);
-    if (i % yLabelStride !== 0) continue;
+  // ── Y 轴刻度文字（右对齐、垂直居中于刻度线）
+  for (let i = 0; i < ticks.length; i += 1) {
     const text = tickTexts[i];
-    drawText(canvas, text, padLeft - 10 * SS - measureText(text), y - yLabelCentreOffset, labelColour);
+    const textWidthValue = textWidth(text, fontSize.axis);
+    drawText(
+      canvas,
+      text,
+      dev(plot.x - 12 * unit) - dev(textWidthValue),
+      dev(toY(ticks[i]) + fontSize.axis * 0.35),
+      dev(fontSize.axis),
+      labelColour,
+    );
   }
 
-  // --- X labels: choose 3–6 that fit without touching -----------------------
-  const hasLabels = labelList.some((text) => text.length > 0);
-  const xLabelWidth = hasLabels ? Math.max(...labelList.filter(Boolean).map((text) => measureText(text))) : 0;
-  let xTickIndices = [];
-  if (hasLabels) {
-    const maxCount = Math.min(6, numbers.length);
-    for (let count = maxCount; count >= 2; count -= 1) {
-      const indices = pickEvenIndices(numbers.length, count);
-      let fits = true;
-      for (let i = 1; i < indices.length; i += 1) {
-        const gap = toX(indices[i]) - toX(indices[i - 1]);
-        if (gap < xLabelWidth + 8 * SS) {
-          fits = false;
-          break;
+  const curve = (numbers.length < 4 ? numbers.map((value, index) => ({ index, value })) : monotonePath(numbers))
+    .map((point) => ({ x: toX(point.index), y: toY(point.value) }));
+
+  // ── 面积：按列从曲线填到底线，alpha 自上而下 0.22 → 0
+  if (!flat) {
+    for (let i = 0; i < curve.length - 1; i += 1) {
+      const from = curve[i];
+      const to = curve[i + 1];
+      const steps = Math.max(1, Math.round(Math.abs(to.x - from.x) * SS));
+      for (let step = 0; step < steps; step += 1) {
+        const t = step / steps;
+        const x = from.x + (to.x - from.x) * t;
+        const y = from.y + (to.y - from.y) * t;
+        const bottom = plot.y + plot.h;
+        for (let py = y; py < bottom; py += 1) {
+          const ratio = (py - plot.y) / plot.h;
+          const alpha = 0.22 * (1 - ratio);
+          if (alpha < 0.005) continue;
+          canvas.blend(dev(x), dev(py), fillColour, alpha);
         }
       }
-      if (fits) {
-        xTickIndices = indices;
-        break;
-      }
-    }
-    if (!xTickIndices.length) xTickIndices = [0];
-  }
-
-  // 垂直网格线：有 labels 时对应刻度，没有 labels 时只留几条装饰网格。
-  if (hasLabels) {
-    for (const index of xTickIndices) {
-      const x = toX(index);
-      canvas.line(x, padTop, x, plotBottom, grid, SS, 0.18);
-    }
-  } else {
-    for (let i = 1; i < 4; i += 1) {
-      const x = padLeft + (plotW / 4) * i;
-      canvas.line(x, padTop, x, plotBottom, grid, SS, 0.18);
     }
   }
 
-  // --- area under the line -------------------------------------------------
-  for (let x = 0; x <= plotW; x += 1) {
-    const position = padLeft + x;
-    const ratio = x / plotW;
-    const index = ratio * (numbers.length - 1);
-    const lower = Math.floor(index);
-    const upper = Math.min(numbers.length - 1, lower + 1);
-    const frac = index - lower;
-    const value = numbers[lower] + (numbers[upper] - numbers[lower]) * frac;
-    const top = Math.round(toY(value));
-    for (let y = top; y < plotBottom; y += 1) canvas.blend(position, y, fill, 0.12);
+  // ── 折线
+  for (let i = 0; i < curve.length - 1; i += 1) {
+    canvas.stroke(dev(curve[i].x), dev(curve[i].y), dev(curve[i + 1].x), dev(curve[i + 1].y), lineColour, dev(2.4));
   }
 
-  // --- average dashed line (thin, below the trend line) --------------------
-  let average = null;
-  if (options.avg === false) average = null;
-  else if (typeof options.avg === 'number' && Number.isFinite(options.avg)) average = options.avg;
-  else average = numbers.reduce((sum, value) => sum + value, 0) / numbers.length;
-  if (average !== null) {
-    const avgY = toY(average);
-    if (avgY >= padTop - 0.5 && avgY <= plotBottom + 0.5) {
-      const dash = 6 * SS;
-      for (let x = 0; x < plotW; x += dash * 2) {
-        const x0 = padLeft + x;
-        const x1 = Math.min(plotRight, x0 + dash);
-        canvas.line(x0, avgY, x1, avgY, avgColour, SS, 0.5);
-      }
-    }
-  }
-
-  // --- axes ----------------------------------------------------------------
-  canvas.line(padLeft, padTop, padLeft, plotBottom, axisColour, SS, 1);
-  canvas.line(padLeft, plotBottom, plotRight, plotBottom, axisColour, SS, 1);
-
-  // X ticks + labels
-  if (hasLabels && xLabelWidth <= plotW - 4 * SS) {
-    const xLabelTop = plotBottom + 13 * SS;
-    for (const index of xTickIndices) {
-      const x = toX(index);
-      canvas.line(x, plotBottom, x, plotBottom + 4 * SS, axisColour, SS, 1);
-      const text = labelList[index];
-      if (!text) continue;
-      const textW = measureText(text);
-      let left = Math.round((x - textW / 2) / SS) * SS;
-      left = Math.max(padLeft, Math.min(plotRight - textW, left));
-      drawText(canvas, text, left, xLabelTop, labelColour);
-    }
-  }
-
-  // --- the line itself, 2 device pixels (≈1 css px after downsampling) -----
-  for (let i = 1; i < numbers.length; i += 1) {
-    canvas.line(toX(i - 1), toY(numbers[i - 1]), toX(i), toY(numbers[i]), stroke, 1.6 * SS, 1);
-  }
-
-  /**
-   * Round dot with a background-coloured halo: without the halo a 2px dot on a
-   * 1.6px line reads as a bulge; with it the collection point looks deliberate
-   * and stays legible where the line is steep.
-   */
-  const dotAt = (x, y, radius, colour) => {
-    const cx = Math.round(x);
-    const cy = Math.round(y);
-    const r = Math.max(1, Math.round(radius));
-    const halo = r + Math.max(1, Math.round(0.8 * SS));
-    for (let oy = -halo; oy <= halo; oy += 1) {
-      for (let ox = -halo; ox <= halo; ox += 1) {
-        if (ox * ox + oy * oy <= halo * halo) canvas.set(cx + ox, cy + oy, background);
-      }
-    }
-    for (let oy = -r; oy <= r; oy += 1) {
-      for (let ox = -r; ox <= r; ox += 1) {
-        if (ox * ox + oy * oy <= r * r) canvas.set(cx + ox, cy + oy, colour);
-      }
-    }
+  /** 白底 halo 的小号金额标注，会自动翻到点上方/下方并夹在绘图区内。 */
+  const extremeLabel = (text, cx, cy, above, colour) => {
+    const boxW = textWidth(text, fontSize.extreme) + 12 * unit;
+    const boxH = 24 * unit;
+    let x = cx - boxW / 2;
+    let y = above ? cy - boxH - 10 * unit : cy + 10 * unit;
+    x = Math.min(Math.max(x, plot.x), plot.x + plot.w - boxW);
+    y = Math.min(Math.max(y, plot.y), plot.y + plot.h - boxH);
+    canvas.rect(dev(x), dev(y), dev(boxW), dev(boxH), haloColour, 1);
+    drawText(canvas, text, dev(x + 6 * unit), dev(y + boxH * 0.72), dev(fontSize.extreme), colour);
   };
 
-  // 每次采集一个小圆点；最低 / 最高点另用绿 / 红强调（最后画，保证在最上层）。
-  // 全部数值相同（首几次采集常见）时没有「最低/最高」可言，只留中性色圆点，
-  // 避免绿色被红色盖住、看起来像一处莫名其妙的红斑。
-  const lowest = numbers.indexOf(minValue);
-  const highest = numbers.indexOf(maxValue);
-  const flat = lowest === highest;
-  if (showPoints) {
-    for (let i = 0; i < numbers.length; i += 1) {
-      if (!flat && (i === lowest || i === highest)) continue;
-      dotAt(toX(i), toY(numbers[i]), Math.round(pointRadius * SS), point);
-    }
-  }
+  // ── 极值：绿点/红点 + 金额；平坦序列没有"极值"可言，整块省略
   if (!flat) {
-    const markR = Math.max(2 * SS, Math.round(pointRadius * SS) + SS);
-    dotAt(toX(lowest), toY(numbers[lowest]), markR, low);
-    dotAt(toX(highest), toY(numbers[highest]), markR, high);
+    const lowIndex = numbers.indexOf(min);
+    const highIndex = numbers.indexOf(max);
+    const lowX = toX(lowIndex);
+    const lowY = toY(min);
+    const highX = toX(highIndex);
+    const highY = toY(max);
+    canvas.dot(dev(lowX), dev(lowY), dev(7), haloColour);
+    canvas.dot(dev(lowX), dev(lowY), dev(4.6), lowColour);
+    canvas.dot(dev(highX), dev(highY), dev(7), haloColour);
+    canvas.dot(dev(highX), dev(highY), dev(4.6), highColour);
+    extremeLabel(`¥${groupDigits(min)}`, lowX, lowY, false, lowColour);
+    extremeLabel(`¥${groupDigits(max)}`, highX, highY, true, highColour);
   }
 
-  // --- min / max amount annotations ---------------------------------------
-  const annotationRects = [];
-  const drawnAnnotations = new Set();
-  // 留 2px 视觉间隙：两个框刚好挨着也会看起来像一行糊掉的字。
-  const overlaps = (a, b) =>
-    a.left - 2 < b.right && b.left - 2 < a.right && a.top - 2 < b.bottom && b.top - 2 < a.bottom;
-  const annotate = (index, value, colour) => {
-    // 金额标注按整元写（¥1,081），只有很小的数值才保留两位小数：点旁的标签贵在
-    // 一眼读懂，精确数字在卡片的 markdown 里。
-    const rounded = Math.abs(value) >= 100 ? Math.round(value) : Math.round(value * 100) / 100;
-    const text = `¥${formatNumber(rounded, Number.isInteger(rounded) ? 0 : 2)}`;
-    if (drawnAnnotations.has(text)) return; // 近似平坦的序列两边会取整成同一个数
-    const textW = measureText(text);
-    const haloPad = 2 * SS; // 2 css px of white around the glyphs
-    const rectW = textW + haloPad * 2;
-    const rectH = FONT_HEIGHT * FONT_SCALE + haloPad * 2;
-    // 绘图区窄到放不下标签时宁可不标，也不要糊住整张图。
-    if (rectW > plotW - 8 * SS || plotH < 60 * SS) return;
-    const cx = toX(index);
-    const cy = toY(value);
-    let left = Math.round((cx - rectW / 2) / SS) * SS;
-    left = Math.max(padLeft, Math.min(plotRight - rectW, left));
-    const preferredBelow = cy - padTop < 26 * SS;
-    // 最高/最低点挨得很近时两块标签会叠在一起：先按默认方向放，撞了就翻到
-    // 点的另一侧；两边都撞就放弃这一块，避免糊成一团。
-    for (const below of [preferredBelow, !preferredBelow]) {
-      let top = below ? cy + 6 * SS : cy - 6 * SS - rectH;
-      top = Math.max(2 * SS, Math.min(h - 2 * SS - rectH, top));
-      const rect = { left, top, right: left + rectW, bottom: top + rectH };
-      if (annotationRects.some((other) => overlaps(other, rect))) continue;
-      fillRect(canvas, left, top, rectW, rectH, background);
-      drawText(canvas, text, left + haloPad, top + haloPad, colour);
-      annotationRects.push(rect);
-      drawnAnnotations.add(text);
-      return;
+  // ── 末点：画一个实心点 + 白圈收边（不再有数值胶囊，当前值由卡片大号数字承担）
+  const lastX = toX(numbers.length - 1);
+  const lastY = toY(numbers[numbers.length - 1]);
+  canvas.dot(dev(lastX), dev(lastY), dev(9), haloColour);
+  canvas.dot(dev(lastX), dev(lastY), dev(5.6), lineColour);
+
+  // ── X 轴刻度：去重、首左末右、最多 5 个
+  const target = numbers.length >= 20 ? 5 : numbers.length >= 10 ? 4 : Math.min(numbers.length, 3);
+  const indices = [];
+  for (let i = 0; i < target; i += 1) {
+    const index = Math.round((i * (numbers.length - 1)) / Math.max(1, target - 1));
+    if (indices[indices.length - 1] !== index) indices.push(index);
+  }
+  // 同一天多次采集时标签会重复（`11-20 11-20`），这里按文字去重，保留最后出现的位置
+  const seen = new Set();
+  for (let i = indices.length - 1; i >= 0; i -= 1) {
+    const text = labels[indices[i]] || '';
+    if (!text) {
+      indices.splice(i, 1);
+      continue;
     }
-  };
-  if (showAnnotations) {
-    if (flat) {
-      annotate(Math.floor((numbers.length - 1) / 2), numbers[0], ANNOTATION_COLOR);
-    } else {
-      annotate(lowest, numbers[lowest], low);
-      annotate(highest, numbers[highest], high);
-    }
+    if (seen.has(text)) indices.splice(i, 1);
+    else seen.add(text);
+  }
+  for (const index of indices) {
+    const text = labels[index] || '';
+    const textWidthValue = textWidth(text, fontSize.month);
+    let x = toX(index) - textWidthValue / 2;
+    if (index === 0) x = plot.x; // 首个左对齐
+    if (index === numbers.length - 1) x = plot.x + plot.w - textWidthValue; // 末个右对齐
+    x = Math.min(Math.max(x, plot.x), Math.max(plot.x, width - textWidthValue - 4 * unit));
+    drawText(canvas, text, dev(x), dev(plot.y + plot.h + 30 * unit), dev(fontSize.month), labelColour);
   }
 
   const small = downsample(canvas, SS);
@@ -675,21 +617,26 @@ export function renderTrendPng(values, options = {}) {
 }
 
 /** Placeholder used when there is not enough data to draw a trend. */
-export function renderBlankPng({ width = 640, height = 320, background = [255, 255, 255], grid = [232, 234, 238] } = {}) {
-  const canvas = createCanvas(width, height, background);
-  for (let i = 1; i < 4; i += 1) canvas.line(0, (height / 4) * i, width, (height / 4) * i, grid, 1, 0.55);
+export function renderBlankPng({ width = DESIGN_W, height = DESIGN_H, background, grid } = {}) {
+  const outW = Math.max(160, Math.min(2560, Math.round(Number(width) || DESIGN_W)));
+  const outH = Math.max(120, Math.min(1280, Math.round(Number(height) || DESIGN_H)));
+  const bg = Array.isArray(background) ? background : PALETTE.background;
+  const gridColour = Array.isArray(grid) ? grid : PALETTE.grid;
+  const canvas = createCanvas(outW, outH, bg);
+  const unit = outW / DESIGN_W;
+  for (let i = 1; i <= 4; i += 1) {
+    canvas.hline(0, outW - 1, Math.round((outH / 5) * i), gridColour, Math.max(1, Math.round(unit)), 0.5);
+  }
   return encodePng(canvas.width, canvas.height, canvas.pixels);
 }
 
 export const __internals = {
   crc32,
   encodePng,
-  FONT,
-  FONT_ROWS,
-  FONT_SCALE,
-  measureText,
-  drawText,
-  formatNumber,
-  niceRange,
-  pickEvenIndices,
+  createCanvas,
+  downsample,
+  contourToPolyline,
+  measureText: textWidth,
+  GLYPHS,
+  UPEM,
 };
