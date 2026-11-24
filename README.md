@@ -23,6 +23,7 @@ Oh My DSH Plugin 收集个人开发、好用的 DSH 插件。每个插件是一�
 | [待办清单](./packages/dsh-todo-list/README.md) | 悬浮在 Web UI 右上角的待办面板：可拖动、可收起，按天查看；重复事项每天一条独立实例，支持优先级、工作日历与到点提醒 | [`@ultraslow/dsh-todo-list`](https://www.npmjs.com/package/@ultraslow/dsh-todo-list) |
 | [Skills & MCP](./packages/dsh-skill-mcp-manager/README.md) | <img src="https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/skill-mcp-manager.png" width="320" alt="按工作区管理 Skill 与 MCP"><br>按 DSH 真实优先级展示工作区会加载的 Skill，勾选即对模型隐藏以节省 context（`/名字` 仍可用）；MCP 分工作区与全局两级，全局写入 profile 的 `cordis.patch.yml`、对所有工作区生效 | [`@ultraslow/dsh-skill-mcp-manager`](https://www.npmjs.com/package/@ultraslow/dsh-skill-mcp-manager) |
 | [开屏与壁纸](./packages/dsh-boot-skin/README.md) | <img src="https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/boot-skin-demo.gif" width="320" alt="开屏与壁纸演示：点击启动 → 开屏片头 → 主界面壁纸"><br>启动时全屏播你自己的视频，并把图片/视频铺成界面壁纸；不透明度、渐入渐隐、模糊、暗化、界面通透度都能在设置里实时调 | [`@ultraslow/dsh-boot-skin`](https://www.npmjs.com/package/@ultraslow/dsh-boot-skin) |
+| [机票 / 酒店价格监控](./packages/dsh-price-watch/README.md) | 盯机票与酒店价格：机票不填日期看未来一年每日最低价、填了日期采真实航班与乘客含税实价；酒店输入城市+门店+住期后按节奏采房型与最低整段总价。走势图与飞书卡片，内容不变不重复推送 | [`@ultraslow/dsh-price-watch`](https://www.npmjs.com/package/@ultraslow/dsh-price-watch) |
 
 ## 安装方式
 
@@ -47,6 +48,7 @@ Oh My DSH Plugin 收集个人开发、好用的 DSH 插件。每个插件是一�
 dsh plugin --profile <profile> add @ultraslow/dsh-todo-list
 dsh plugin --profile <profile> add @ultraslow/dsh-skill-mcp-manager
 dsh plugin --profile <profile> add @ultraslow/dsh-boot-skin
+dsh plugin --profile <profile> add @ultraslow/dsh-price-watch
 ```
 
 ### 从源码安装
@@ -57,6 +59,7 @@ cd oh-my-dsh-plugin
 dsh plugin --profile <profile> add ./packages/dsh-todo-list
 dsh plugin --profile <profile> add ./packages/dsh-skill-mcp-manager
 dsh plugin --profile <profile> add ./packages/dsh-boot-skin
+dsh plugin --profile <profile> add ./packages/dsh-price-watch
 ```
 
 安装后用该 profile 启动 DSH，并刷新 Web UI 页面，插件会出现在界面上。
@@ -67,6 +70,7 @@ dsh plugin --profile <profile> add ./packages/dsh-boot-skin
 dsh plugin --profile <profile> remove @ultraslow/dsh-todo-list
 dsh plugin --profile <profile> remove @ultraslow/dsh-skill-mcp-manager
 dsh plugin --profile <profile> remove @ultraslow/dsh-boot-skin
+dsh plugin --profile <profile> remove @ultraslow/dsh-price-watch
 ```
 
 ## 插件使用
