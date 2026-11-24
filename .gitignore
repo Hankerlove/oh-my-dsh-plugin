@@ -29,8 +29,11 @@ coverage/
 !.vscode/extensions.json
 !.vscode/settings.json
 
-# Local DSH sandbox leftovers
-.dsh/
+# Local DSH sandbox leftovers; only the shared dsh-plugin-dev skill is tracked
+.dsh/*
+!.dsh/skills/
+.dsh/skills/*
+!.dsh/skills/dsh-plugin-dev/
 
 # Internal ecosystem research: kept locally, never published
 docs/research/
