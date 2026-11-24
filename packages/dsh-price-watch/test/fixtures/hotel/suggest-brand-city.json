@@ -1,0 +1,152 @@
+{
+ "note": "真实响应脱敏瘦身（2026-11-24，纯 HTTP suggest；keyword=全季 上海）：10 条 hotel + 少量 food/sight 干扰项",
+ "data": [
+  {
+   "type": "hotel",
+   "productId": 427795,
+   "word": "全季酒店(上海人民广场南京路店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "zoneName": "上海-人民广场",
+   "starRating": "舒适型",
+   "url": "http://hotels.ctrip.com/hotel/427795.html?cityid=2"
+  },
+  {
+   "type": "hotel",
+   "productId": 6257126,
+   "word": "全季酒店(上海陆家嘴浦东大道店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "zoneName": "上海-陆家嘴",
+   "starRating": "舒适型",
+   "url": "http://hotels.ctrip.com/hotel/6257126.html?cityid=2"
+  },
+  {
+   "type": "hotel",
+   "productId": 18431318,
+   "word": "全季酒店(上海外滩金陵东路店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "zoneName": "上海-外滩核心区",
+   "starRating": "舒适型",
+   "url": "http://hotels.ctrip.com/hotel/18431318.html?cityid=2"
+  },
+  {
+   "type": "hotel",
+   "productId": 449956,
+   "word": "全季酒店(上海静安寺康定路店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "zoneName": "上海-长寿路",
+   "starRating": "舒适型",
+   "url": "http://hotels.ctrip.com/hotel/449956.html?cityid=2"
+  },
+  {
+   "type": "hotel",
+   "productId": 128230353,
+   "word": "全季酒店(上海新国际博览中心嘉里城店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "zoneName": "上海-新国际博览中心/世博园",
+   "starRating": "舒适型",
+   "url": "http://hotels.ctrip.com/hotel/128230353.html?cityid=2"
+  },
+  {
+   "type": "hotel",
+   "productId": 919928,
+   "word": "全季酒店(上海延安路店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "zoneName": "上海-静安寺/南京西路",
+   "starRating": "舒适型",
+   "url": "http://hotels.ctrip.com/hotel/919928.html?cityid=2"
+  },
+  {
+   "type": "hotel",
+   "productId": 1776590,
+   "word": "全季酒店(上海虹桥国展中心店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "zoneName": "上海-虹桥机场/国家会展中心",
+   "starRating": "舒适型",
+   "url": "http://hotels.ctrip.com/hotel/1776590.html?cityid=2"
+  },
+  {
+   "type": "hotel",
+   "productId": 135524401,
+   "word": "全季大观上海外滩酒店",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "zoneName": "上海-人民广场",
+   "starRating": "豪华型",
+   "url": "http://hotels.ctrip.com/hotel/135524401.html?cityid=2"
+  },
+  {
+   "type": "hotel",
+   "productId": 3687115,
+   "word": "全季酒店(上海外滩天潼路店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "zoneName": "上海-北外滩",
+   "starRating": "舒适型",
+   "url": "http://hotels.ctrip.com/hotel/3687115.html?cityid=2"
+  },
+  {
+   "type": "hotel",
+   "productId": 36184335,
+   "word": "全季酒店(上海人民广场店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "zoneName": "上海-人民广场",
+   "starRating": "舒适型",
+   "url": "http://hotels.ctrip.com/hotel/36184335.html?cityid=2"
+  },
+  {
+   "type": "food",
+   "productId": 143349852,
+   "word": "全季酒店(上海虹桥吴中路店)·晓山青·茶",
+   "cityId": 2,
+   "cityName": "",
+   "districtName": "上海",
+   "zoneName": "光大会展中心/漕河泾",
+   "url": "http://you.ctrip.com/food/shanghai2/143349852.html"
+  },
+  {
+   "type": "flighthotel",
+   "productId": 81673632,
+   "word": "中国江西上饶4日3晚自由行·【清远小Y】上海-江西4天3晚自由行（全季酒店）",
+   "cityId": 0,
+   "cityName": "",
+   "districtName": "",
+   "url": "http://vacations.ctrip.com/tour/detail/p81673632s1.html"
+  },
+  {
+   "type": "sightplay",
+   "productId": 148930981,
+   "word": "曲水兰亭(上海虹桥店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "url": "http://you.ctrip.com/sight/qushuilantingshanghaihongqiaodian2/148930981.html"
+  },
+  {
+   "type": "sight",
+   "productId": 1412255,
+   "word": "上海迪士尼度假区",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "url": "http://you.ctrip.com/sight/shanghaidishinidujiaqu2/1412255.html"
+  }
+ ]
+}

@@ -1,0 +1,322 @@
+{
+ "note": "真实响应（2026-11-24，hotelId=1565886，匿名无登录；isLogin=false ⇒ isHidePrice=true，价格被隐藏）",
+ "data": {
+  "isLogin": false,
+  "roomCount": 12,
+  "searchBoxInfo": {
+   "checkIn": "20261205",
+   "checkOut": "20261207",
+   "adult": 2,
+   "childInfoItems": [],
+   "roomQuantity": 1
+  },
+  "physicRoomMap": {
+   "4222432": {
+    "id": 4222432,
+    "name": "高级双床房（电视投屏）"
+   },
+   "4222434": {
+    "id": 4222434,
+    "name": "高级大床房（电视投屏）"
+   },
+   "5489440": {
+    "id": 5489440,
+    "name": "大床房（电视投屏）"
+   },
+   "17156830": {
+    "id": 17156830,
+    "name": "商务大床房（电视投屏）"
+   }
+  },
+  "saleRoomMap": {
+   "1655119205_R24X5G": {
+    "id": 1655119205,
+    "physicalRoomId": 5489440,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 6,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "无早餐"
+    }
+   },
+   "1655119209_R24X5Z": {
+    "id": 1655119209,
+    "physicalRoomId": 5489440,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 6,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "1份早餐"
+    }
+   },
+   "1655119200_R24X50": {
+    "id": 1655119200,
+    "physicalRoomId": 5489440,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 6,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "2份早餐"
+    }
+   },
+   "1655119216_R24X5Y": {
+    "id": 1655119216,
+    "physicalRoomId": 4222432,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 59,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "无早餐"
+    }
+   },
+   "1655119217_R24X5S": {
+    "id": 1655119217,
+    "physicalRoomId": 4222432,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 59,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "1份早餐"
+    }
+   },
+   "1655119208_R24X5J": {
+    "id": 1655119208,
+    "physicalRoomId": 4222432,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 59,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "2份早餐"
+    }
+   },
+   "1655119197_R24X5M": {
+    "id": 1655119197,
+    "physicalRoomId": 4222434,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 67,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "无早餐"
+    }
+   },
+   "1655119203_R24X56": {
+    "id": 1655119203,
+    "physicalRoomId": 4222434,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 67,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "1份早餐"
+    }
+   },
+   "1655119185_R24XDW": {
+    "id": 1655119185,
+    "physicalRoomId": 4222434,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 67,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "2份早餐"
+    }
+   },
+   "1655119199_R24X59": {
+    "id": 1655119199,
+    "physicalRoomId": 17156830,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 133,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "无早餐"
+    }
+   },
+   "1655119207_R24X58": {
+    "id": 1655119207,
+    "physicalRoomId": 17156830,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 133,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "1份早餐"
+    }
+   },
+   "1655119195_R24X5F": {
+    "id": 1655119195,
+    "physicalRoomId": 17156830,
+    "name": "",
+    "priceInfo": {
+     "currency": "CNY",
+     "deletePrice": "",
+     "deletePricewithOutCurrency": 0,
+     "displayPrice": "",
+     "priceExplanation": ""
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "登录看低价",
+     "remainRoomQuantity": 133,
+     "isHidePrice": true,
+     "buttonType": 3
+    },
+    "mealInfo": {
+     "title": "2份早餐"
+    }
+   }
+  }
+ }
+}

@@ -154,6 +154,55 @@
           }
         }
       ]
+    },
+    {
+      "name": "@ultraslow/dsh-price-watch",
+      "title": {
+        "en": "Price watch",
+        "zh": "价格监控"
+      },
+      "description": {
+        "en": "Watch flight and hotel prices: flights show a year of lowest daily fares or collect real flights with per-passenger tax-included fares; hotels take a city, hotel name and stay dates, then collect the lowest stay total and room types at your chosen rhythm. New prices push a Feishu card (identical results are skipped); hotel prices need a Ctrip sign-in.",
+        "zh": "监控机票与酒店价格：机票按「行情」看未来一年每日最低价、按「监控」采集真实航班与乘客含税价；酒店输入城市、酒店名与住期，按节奏采集房型最低整段总价。价格有变化时推飞书卡片，相同内容不重复推送，酒店价格需登录携程。"
+      },
+      "icon": "https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/main/packages/dsh-price-watch/icon.svg",
+      "author": "Hankerlove",
+      "homepage": "https://github.com/Hankerlove/oh-my-dsh-plugin/tree/main/packages/dsh-price-watch",
+      "repository": {
+        "url": "https://github.com/Hankerlove/oh-my-dsh-plugin",
+        "directory": "packages/dsh-price-watch"
+      },
+      "metadata": {
+        "keywords": [
+          "flight",
+          "hotel",
+          "price-watch",
+          "ctrip",
+          "feishu"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.15.1",
+          "publishTimestamp": 1795505743,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.2-rc.1 <0.3.0"
+          }
+        },
+        {
+          "version": "0.15.0",
+          "publishTimestamp": 1795502230,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.2-rc.1 <0.3.0"
+          }
+        }
+      ]
     }
   ]
 }

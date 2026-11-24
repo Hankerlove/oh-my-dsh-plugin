@@ -1,0 +1,68 @@
+{
+  "name": "@ultraslow/dsh-price-watch",
+  "version": "0.15.1",
+  "description": "Flight and hotel price watch for the DeepSeek Harness Web UI: with no date it tracks the next year's lowest fare day by day from Ctrip's public calendar; with a fixed date it also reads the real flight list and each passenger's payable price from your logged-in browser. Hotel monitors verify the hotel exists on Ctrip, then watch the room types and the lowest total price for your stay. History is kept and Feishu cards are pushed on change.",
+  "license": "MIT",
+  "dependencies": {
+    "playwright-core": "^1.65.0"
+  },
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "host",
+    "locale/en.json",
+    "locale/zh.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "flight",
+    "hotel",
+    "price-watch",
+    "ctrip",
+    "feishu"
+  ],
+  "homepage": "https://github.com/Hankerlove/oh-my-dsh-plugin/tree/main/packages/dsh-price-watch",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hankerlove/oh-my-dsh-plugin.git",
+    "directory": "packages/dsh-price-watch"
+  },
+  "bugs": {
+    "url": "https://github.com/Hankerlove/oh-my-dsh-plugin/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "dsh": ">=0.1.2-rc.1 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
