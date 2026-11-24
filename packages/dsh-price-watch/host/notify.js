@@ -38,6 +38,8 @@ import {
   flightTable,
   flightWindow,
   image,
+  inline,
+  markdown,
   money,
   priceHero,
   rule,
@@ -58,6 +60,15 @@ const PRICE_SPEC_CALENDAR = '日历最低含税价（估算）';
 /** 走势图的纵轴单位（写在区块标题里，图内只画数字刻度）。 */
 const AXIS_WATCH = '横轴 采集日期 · 纵轴 待支付实价（元）';
 const AXIS_CALENDAR = '横轴 日期 · 纵轴 最低含税价（元）';
+/**
+ * 酒店监控：横轴是「采集日期」（不是入住日期），纵轴是当日最低**整段总价**。
+ * 酒店没有「未来 30 天」这种窗口概念——走势就是全部历史采集点。
+ */
+const AXIS_HOTEL = '横轴 采集日期 · 纵轴 当日最低总价（元）';
+/** 房型表最多展示几行，其余折成一行「另有 N 个房型未显示」。 */
+const HOTEL_ROOM_LIMIT = 6;
+/** 房型名超过这个字数会压垮表格：按字符截断（中文/emoji 不会被切坏）。 */
+const HOTEL_ROOM_NAME_MAX = 14;
 
 /** `北京 → 上海` / `北京 ⇄ 上海`；城市码缺失时返回空串（调用方据此省掉这一段）。 */
 function routeLabel(monitor) {
@@ -278,6 +289,145 @@ function collectSection({ monitor, at, dataState }) {
   if (grid.length === 0) return [];
   return [rule(), sectionTitle('本次采集'), ...grid];
 }
+
+// #region 酒店卡片（hotel 监控：整段总价 + 房型表）
+/**
+ * 酒店监控的标题：`价格监控 · 全季酒店(上海虹桥店)（12月05日–12月07日）`。
+ * 酒店没有航线，标题用「酒店名 + 入住区间」；两者都拿不到时退回「价格监控」。
+ */
+function hotelHeading(monitor) {
+  const params = monitor?.params || {};
+  const name = inline(params.hotelName || params.keyword);
+  const checkIn = monthDay(params.checkIn);
+  const checkOut = monthDay(params.checkOut);
+  const stay = checkIn && checkOut ? `${checkIn}–${checkOut}` : (checkIn || '');
+  if (name && stay) return `价格监控 · ${name}（${stay}）`;
+  if (name) return `价格监控 · ${name}`;
+  if (stay) return `价格监控 · ${stay}`;
+  return '价格监控';
+}
+
+/** 酒店名：快照里的规范名优先，其次监控参数里的匹配名，最后用户原始关键词。 */
+function hotelNameOf(monitor, snapshot) {
+  const params = monitor?.params || {};
+  return inline(snapshot?.hotel?.name) || inline(params.hotelName) || inline(params.keyword);
+}
+
+/** 晚数：快照里的 nights 优先，缺失时按 checkIn/checkOut 现算（1–30 晚）。 */
+function nightsOf(monitor, snapshot) {
+  const fromSnapshot = Number(snapshot?.nights);
+  if (Number.isFinite(fromSnapshot) && fromSnapshot > 0) return Math.round(fromSnapshot);
+  const params = monitor?.params || {};
+  const start = Date.parse(`${params.checkIn}T00:00:00Z`);
+  const end = Date.parse(`${params.checkOut}T00:00:00Z`);
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) return Math.round((end - start) / 86400000);
+  return null;
+}
+
+/** `12月05日 → 12月07日（2 晚）`；日期缺失的片段整段省略。 */
+function hotelStayLine(monitor, snapshot) {
+  const params = monitor?.params || {};
+  const checkIn = snapshot?.checkIn || params.checkIn;
+  const checkOut = snapshot?.checkOut || params.checkOut;
+  const nights = nightsOf(monitor, snapshot);
+  const start = monthDay(checkIn);
+  const end = monthDay(checkOut);
+  const range = start && end ? `${start} → ${end}` : (start || end || '');
+  if (range && nights) return `${range}（${nights} 晚）`;
+  return range;
+}
+
+/** `全季酒店(上海虹桥店) · 3 星 · 4.7 分 很好`：只拼有值的项，不写占位。 */
+function hotelIdentityLine(monitor, snapshot) {
+  const hotel = snapshot?.hotel && typeof snapshot.hotel === 'object' ? snapshot.hotel : {};
+  const parts = [];
+  const name = hotelNameOf(monitor, snapshot);
+  if (name) parts.push(name);
+  const star = Number(hotel.star);
+  if (Number.isFinite(star) && star > 0) parts.push(`${star} 星`);
+  const score = Number(hotel.score);
+  if (Number.isFinite(score) && score > 0) {
+    const label = inline(hotel.scoreLabel);
+    parts.push(label ? `${score.toFixed(1)} 分 ${label}` : `${score.toFixed(1)} 分`);
+  }
+  return parts.join(' · ');
+}
+
+/** `房型名` 截断到 ~14 个字符；缺失时用破折号（表格列需要占位）。 */
+function roomNameCell(value) {
+  const text = inline(value);
+  if (!text) return '—';
+  const chars = [...text];
+  return chars.length <= HOTEL_ROOM_NAME_MAX ? text : `${chars.slice(0, HOTEL_ROOM_NAME_MAX - 1).join('')}…`;
+}
+
+/**
+ * 房型表数据：只保留「可订且整段总价 > 0」的房型（契约第 3 节的价格口径），
+ * 按整段总价升序。`nightly` 缺失时用 total / 晚数 现算（副数字容错）。
+ */
+function hotelRoomRows(rooms, { nights } = {}) {
+  return (Array.isArray(rooms) ? rooms : [])
+    .filter((room) => room && typeof room === 'object')
+    .map((room) => {
+      const total = Number(room?.price?.total);
+      if (room?.bookable === false || !Number.isFinite(total) || total <= 0) return null;
+      const nightlyRaw = Number(room?.price?.nightly);
+      const nightly = Number.isFinite(nightlyRaw) && nightlyRaw > 0
+        ? Math.round(nightlyRaw)
+        : (Number.isFinite(nights) && nights > 0 ? Math.round(total / nights) : null);
+      return {
+        name: room?.name,
+        bed: room?.bed,
+        area: room?.area,
+        total: Math.round(total),
+        nightly,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.total - right.total);
+}
+
+/**
+ * 房型 Markdown 表（房型 / 床型 / 面积 / 每晚 / 整段）。
+ *
+ * 最低价行**整行加粗**：读者第一眼要落在最便宜的一行，而不是自己逐行比较。
+ * 床型/面积缺失用 `—`（表格里空单元格比破折号更难读）——这是本仓库唯一允许
+ * 破折号的地方，仅限房型表的这两个单元格。
+ *
+ * @returns {{element: object|null, hidden: number}}
+ */
+function hotelRoomTable(rooms, { nights, limit = HOTEL_ROOM_LIMIT } = {}) {
+  const rows = hotelRoomRows(rooms, { nights });
+  if (rows.length === 0) return { element: null, hidden: 0 };
+  const shown = rows.slice(0, limit);
+  const lines = [
+    '| 房型 | 床型 | 面积 | 每晚 | 整段 |',
+    '| :--- | :--- | :--- | :--- | :--- |',
+  ];
+  shown.forEach((row, index) => {
+    // rows 已按整段总价升序：第一行就是最低价，整行加粗。
+    const bold = index === 0;
+    const cells = [
+      roomNameCell(row.name),
+      inline(row.bed) || '—',
+      inline(row.area) || '—',
+      Number.isFinite(row.nightly) ? money(row.nightly) : '—',
+      money(row.total),
+    ].map((cell) => (bold ? `**${cell}**` : cell));
+    lines.push(`| ${cells.join(' | ')} |`);
+  });
+  return { element: markdown(lines.join('\n')), hidden: Math.max(0, rows.length - shown.length) };
+}
+
+/** 房型列表：快照里 `rooms` 可能是数组（房源列表），也兼容 `roomList`/`hotelRooms`。 */
+function hotelRoomList(snapshot) {
+  for (const key of ['rooms', 'roomList', 'hotelRooms']) {
+    if (Array.isArray(snapshot?.[key])) return snapshot[key];
+  }
+  return [];
+}
+
+// #endregion
 
 /**
  * 卡片构造自身出问题（脏快照、字段类型异常）时的兜底：一句纯文本，绝不抛。
@@ -568,6 +718,125 @@ export function buildTestCard({ channel, chatId, webhook, at } = {}) {
     });
   } catch {
     return degradedCard({});
+  }
+}
+
+/**
+ * Hotel-mode card（契约 §7：结论 / 走势 / 房型 / 本次采集 四区块）。
+ *
+ * 与机票卡片同一套视觉语言：`priceHero` 大号主数字、`sectionTitle` 区块标题、
+ * `rule()` 分隔、`fieldGrid` 采集信息、末行口径说明；**没有按钮/action，没有字符画**，
+ * 走势只走真 PNG（`imageKey` 为空时整块图省略、只留统计行）。
+ *
+ * 与机票的三点差异（用户已确认的定案）：
+ *  - 主数字是**整段含税总价**（`lowest.total`），每晚价只做副标题；
+ *  - 酒店没有「未来 30 天」窗口，走势就是全部历史采集点；
+ *  - 涨跌用独立一行（`deltaLine`），不是价格右侧的胶囊。
+ *
+ * 无价 / 无房型 / 无图时**整块省略**，不写占位；任何脏数据都降级成纯文本，绝不抛
+ * （卡片构造失败不能阻断投递）。
+ *
+ * @param {{ monitor: object, snapshot: object|null, previous?: number|null,
+ *           imageKey?: string|null, at?: string,
+ *           trend?: {values:number[], labels:string[]}|null }} input
+ * @returns {object} 飞书卡片 2.0 JSON
+ */
+export function buildHotelCard({ monitor, snapshot, previous, imageKey = null, at, trend = null } = {}) {
+  try {
+    const snap = snapshot && typeof snapshot === 'object' ? snapshot : null;
+    const params = monitor?.params || {};
+    const rooms = hotelRoomList(snap);
+    const nights = nightsOf(monitor, snap);
+    const adultsRaw = Number(snap?.adults ?? params.adults);
+    const adults = Number.isFinite(adultsRaw) && adultsRaw > 0 ? Math.round(adultsRaw) : null;
+    const lowestInfo = snap?.lowest && typeof snap.lowest === 'object' ? snap.lowest : null;
+    const roomRows = hotelRoomRows(rooms, { nights });
+    const lowestRoom = roomRows[0] || null;
+    const totalRaw = Number(lowestInfo?.total ?? lowestRoom?.total);
+    const total = Number.isFinite(totalRaw) && totalRaw > 0 ? Math.round(totalRaw) : null;
+    const price = money(total);
+    const delta = deltaParts(total, previous);
+    const name = hotelNameOf(monitor, snap);
+    const elements = [];
+
+    // ── 1. 结论：大号整段总价 + 每晚/房型副行 + 酒店身份 + 涨跌 + 口径标签
+    if (price) {
+      elements.push(...priceHero({
+        label: '整段最低总价',
+        price,
+        // 有上一次价格才用涨红跌绿；第一次采集保持中性深色。
+        priceColor: delta ? inkFor(delta.dir) : INK.neutral,
+      }));
+      const subline = [];
+      if (Number.isFinite(nights) && nights > 0) subline.push(`${nights} 晚`);
+      const nightlyRaw = Number(lowestInfo?.nightly);
+      const nightly = Number.isFinite(nightlyRaw) && nightlyRaw > 0
+        ? Math.round(nightlyRaw)
+        : (Number.isFinite(nights) && nights > 0 && total ? Math.round(total / nights) : null);
+      if (nightly) subline.push(`每晚约 ${money(nightly)}`);
+      const roomName = inline(lowestInfo?.roomName) || inline(lowestRoom?.name);
+      if (roomName) subline.push(roomName);
+      if (subline.length > 0) elements.push(statLine(subline.join(' · ')));
+      const identity = hotelIdentityLine(monitor, snap);
+      if (identity) elements.push(statLine(identity));
+      const deltaText = previous !== null && previous !== undefined ? deltaLine(total, previous) : null;
+      if (deltaText) elements.push(divText(deltaText, { color: inkFor(delta?.dir), size: 'normal' }));
+    }
+
+    // ── 2. 走势：区块标题写横纵轴口径；图/统计都没有才整块省略
+    const picture = image(imageKey, '价格走势');
+    const trendText = trendSummary(trend);
+    if (picture || trendText) {
+      elements.push(rule(), sectionTitle('价格走势', AXIS_HOTEL));
+      if (picture) elements.push(picture);
+      if (trendText) elements.push(statLine(trendText));
+    }
+
+    // ── 3. 房型：整段总价升序前 6 行，最低价整行加粗，其余折成一行提示
+    const table = hotelRoomTable(rooms, { nights });
+    if (table.element) {
+      elements.push(rule(), sectionTitle('房型价格', '按整段总价从低到高'), table.element);
+      if (table.hidden > 0) elements.push(statLine(`另有 ${table.hidden} 个房型未显示`));
+    }
+
+    // ── 4. 本次采集：酒店 / 入住–离店 / 人数 / 时间 / 频率 / 数据状态 + 口径
+    const dataState = roomRows.length > 0
+      ? `已取到 ${roomRows.length} 个可订房型`
+      : (snap ? '本轮未取到可订房型' : '本轮未取到房价');
+    const grid = fieldGrid([
+      { label: '酒店', value: name },
+      { label: '入住–离店', value: hotelStayLine(monitor, snap) },
+      { label: '入住人数', value: adults ? `${adults} 人` : '' },
+      { label: '采集时间', value: localStamp(at) },
+      { label: '采集频率', value: cadenceLabel(monitor?.cadence?.minutes) },
+      { label: '数据状态', value: dataState },
+    ]);
+    if (grid.length > 0) elements.push(rule(), sectionTitle('本次采集'), ...grid);
+
+    // 结论的标题/摘要：有价才有价格，没价就说「本轮未取到房价」，不编数字。
+    const summary = price
+      ? `${name ? `${name} ` : ''}整段 ${price}${delta ? `，${delta.text}` : ''}`
+      : `${name ? `${name} ` : ''}本轮未取到房价`;
+
+    return cardShell({
+      template: templateFor(delta?.diff ?? null),
+      title: hotelHeading(monitor),
+      summary,
+      tags: [{ text: '酒店监控', color: 'blue' }],
+      elements,
+    });
+  } catch {
+    // 卡片构造绝不能抛：降级成一句纯文本，采集结果仍会正常保存。
+    try {
+      return cardShell({
+        template: TEMPLATE.flat,
+        title: hotelHeading(monitor),
+        summary: '酒店价格监控 · 本次卡片降级为纯文本',
+        elements: [divText('本次卡片构造降级为纯文本，采集结果已正常保存。', { color: INK.muted })],
+      });
+    } catch {
+      return { schema: '2.0', config: { compact_width: false }, body: { elements: [] } };
+    }
   }
 }
 
