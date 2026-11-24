@@ -60,6 +60,7 @@ import { deliverAppCard } from './host/feishu.js';
 import { buildCalendarCard, buildFailureCard, buildTestCard, buildWatchCard, sendFeishu } from './host/notify.js';
 import { createRouter } from './host/routes.js';
 import { clampCadence, createStore } from './host/store.js';
+import { NETWORK_RETRY_MS, isNetworkError } from './host/net.js';
 import { createLogger, isDateString, isoDate, isoNow, minSeries, sleep } from './host/util.js';
 
 export const name = 'price-watch';
@@ -400,6 +401,14 @@ export function apply(ctx) {
     return new Date(Date.now() + cadenceMinutesOf(monitor) * 60000 * 2).toISOString();
   }
 
+  /**
+   * 网络类失败的补采时间：不按用户节奏等（可能是 6/12 小时），15 分钟后就试。
+   * 典型场景是笔记本休眠：维护唤醒窗口里网络还没就绪，等机器醒着就会成功。
+   */
+  function retrySoon() {
+    return new Date(Date.now() + NETWORK_RETRY_MS).toISOString();
+  }
+
   async function setNextDue(monitorId, iso) {
     const state = store.getState();
     await store.saveState({ nextDue: { ...(state.nextDue || {}), [monitorId]: iso } });
@@ -506,6 +515,15 @@ export function apply(ctx) {
       return { ok: true, source: 'calendar', points: 0, delivery };
     } catch (error) {
       const message = String(error?.message || error);
+      // 休眠/断网：不当成「采集失败」处理——不发失败卡（否则每次维护唤醒都推一张），
+      // 只把原因写进面板，并在 15 分钟后补采。
+      if (isNetworkError(error)) {
+        const note = `网络不可用（可能刚休眠/断网），本轮跳过，${Math.round(NETWORK_RETRY_MS / 60000)} 分钟后重试：${message}`;
+        logger.warn(`日历采集跳过 ${monitor.title}: ${note}`);
+        await recordFailure(monitor, note);
+        await setNextDue(monitor.id, retrySoon());
+        return { ok: false, error: message, source: 'calendar', points: 0, delivery: { skipped: 'network' } };
+      }
       logger.warn(`日历采集失败 ${monitor.title}: ${message}`);
       await recordFailure(monitor, message);
       await setNextDue(monitor.id, computeNextDue(monitor));
@@ -572,6 +590,18 @@ export function apply(ctx) {
     } catch (error) {
       const message = String(error?.message || error);
       const state = store.getState();
+      if (isNetworkError(error)) {
+        const note = `网络不可用（可能刚休眠/断网），本轮跳过，${Math.round(NETWORK_RETRY_MS / 60000)} 分钟后重试：${message}`;
+        logger.warn(`监控采集跳过 ${monitor.title}: ${note}`);
+        await store.saveState({
+          l2LastRunBy: { ...(state.l2LastRunBy || {}), [monitor.id]: isoNow() },
+          l2LastOk: { ...(state.l2LastOk || {}), [monitor.id]: false },
+          l2LastError: note,
+        });
+        await recordFailure(monitor, note);
+        await setNextDue(monitor.id, retrySoon());
+        return { ok: false, error: message, source: 'l2', points: 0, delivery: { skipped: 'network' } };
+      }
       const patch = {
         l2LastOk: { ...(state.l2LastOk || {}), [monitor.id]: false },
         l2LastError: message,
@@ -774,7 +804,7 @@ export function apply(ctx) {
       const monitors = store.listMonitors();
       const failures = Object.values(state.failures || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
       return {
-        version: '0.14.0',
+        version: '0.14.1',
         auth: { ...(state.auth || { status: 'unknown' }), available },
         lastCollectAt: state.lastCollectAt,
         monitorCount: monitors.length,

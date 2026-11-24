@@ -59,6 +59,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
+import { NetworkError, isNetworkError, probeNetwork } from '../net.js';
 import { isoNow } from '../util.js';
 
 const LIST_BASE = 'https://flights.ctrip.com';
@@ -908,6 +909,37 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     return { ok: true };
   }
 
+  /**
+   * 打开列表页。
+   *
+   * 为什么不是 `domcontentloaded`：携程列表页挂着不少第三方脚本，弱网/风控/机器
+   * 刚休眠回来时 DCL 可能几分钟都不触发，实测表现为 `page.goto: Timeout 60000ms
+   * exceeded ... waiting until "domcontentloaded"`。`commit` 只等响应头，之后的
+   * 「行有没有渲染出来」交给 `waitForFlights` 自己轮询，失败语义更准确。
+   *
+   * @param {object} page
+   * @param {string} url
+   * @param {{signal?:AbortSignal, attempts?:number}} [options]
+   */
+  async function openListPage(page, url, { signal, attempts = 2 } = {}) {
+    let lastError = null;
+    for (let attempt = 0; attempt < Math.max(1, attempts); attempt += 1) {
+      if (signal?.aborted) throw new Error('已取消');
+      try {
+        await page.goto(url, { waitUntil: 'commit', timeout: 30000 });
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.warn(`列表页第 ${attempt + 1} 次打开失败: ${String(error?.message || error).slice(0, 140)}`);
+        if (attempt + 1 < attempts) await page.waitForTimeout(3000);
+      }
+    }
+    if (isNetworkError(lastError)) {
+      throw new NetworkError(`打开列表页失败（网络不可用，可能刚休眠/断网）: ${String(lastError?.message || lastError).slice(0, 140)}`);
+    }
+    throw lastError || new Error('打开列表页失败');
+  }
+
   async function waitForFlights(page, timeoutMs = 35000) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
@@ -928,6 +960,17 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       if (state.blocked) throw new BlockedError();
       await page.waitForTimeout(1200);
     }
+    // 浏览器停在错误页（断网 / DNS 失败 / 连接被掐）时，body 里往往是
+    // `ERR_INTERNET_DISCONNECTED` 之类的代码页，直接判成网络问题，别当成"站点改版"。
+    let currentUrl = '';
+    try {
+      currentUrl = String(page.url?.() || '');
+    } catch {
+      /* ignore */
+    }
+    if (/^chrome-error:\/\//i.test(currentUrl)) {
+      throw new NetworkError(`页面加载失败（浏览器错误页）: ${currentUrl.slice(0, 120)}`);
+    }
     const diag = await page.evaluate(() => {
       const text = (document.body.innerText || '').replace(/\s+/g, ' ');
       return {
@@ -937,6 +980,9 @@ export function createBrowserCollector({ rootDir, logger, store }) {
         title: document.title.slice(0, 40),
       };
     }).catch(() => ({ text: '', len: 0, priceChips: 0, title: '' }));
+    if (/ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ERR_CONNECTION|ERR_NETWORK_CHANGED|ERR_TIMED_OUT/.test(diag.text)) {
+      throw new NetworkError(`页面加载失败（网络不可用）: ${diag.text.slice(0, 120)}`);
+    }
     if (BLOCK_RE.test(diag.text)) throw new BlockedError(`携程返回验证/风控页：${diag.text.slice(0, 80)}`);
     // The page shell and the date strip render, but the flight rows are withheld:
     // that is Ctrip throttling the list endpoint rather than a layout change.
@@ -1461,7 +1507,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
    */
   async function collectListFlights(page, url, passengers, paxCount, { signal } = {}) {
     if (signal?.aborted) throw new Error('已取消');
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await openListPage(page, url, { signal });
     await waitForFlights(page);
     // Human pacing: look at the list for a few seconds before touching it.
     await dwell(page);
@@ -1987,7 +2033,7 @@ export function createBrowserCollector({ rootDir, logger, store }) {
       let lastError = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          await page.goto(roundUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+          await openListPage(page, roundUrl, { signal, attempts: 1 });
           await waitForFlights(page);
           // Human pacing: look at the list for a few seconds, like a person would.
           // 只在首屏停顿；后面的复位重载要快，否则一轮 9 条组合白等一分钟。
@@ -2194,6 +2240,10 @@ export function createBrowserCollector({ rootDir, logger, store }) {
         if (loggingIn) throw new Error('正在登录携程，本轮采集跳过');
         const params = monitor?.params || {};
         if (!params.departDate) throw new Error('日历模式没有确定日期，不做浏览器精确采集');
+        // 休眠唤醒窗口里网络常常还没就绪：先用 6 秒探一下，别白起一个浏览器再等 60 秒超时。
+        if (!(await probeNetwork())) {
+          throw new NetworkError('本机网络不可用（可能刚休眠或断网），跳过本轮');
+        }
         const ctx = await ensureContext();
         if (!(await hasTicket(ctx))) throw new AuthError();
         const page = ctx.pages()[0] || (await ctx.newPage());
