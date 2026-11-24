@@ -20,10 +20,10 @@
 
 | 插件 | 能做什么 | npm 包名 |
 | --- | --- | --- |
-| [待办清单](./packages/dsh-todo-list/README.md) | 右上角悬浮待办面板：按天查看、重复事项每日独立实例、优先级与到点提醒。 | [`@ultraslow/dsh-todo-list`](https://www.npmjs.com/package/@ultraslow/dsh-todo-list) |
+| [待办清单](./packages/dsh-todo-list/README.md) | <img src="https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/todo-list.jpg" width="320" alt="待办清单面板：按天查看、优先级与到点提醒"><br>右上角悬浮待办面板：按天查看、重复事项每日独立实例、优先级与到点提醒。 | [`@ultraslow/dsh-todo-list`](https://www.npmjs.com/package/@ultraslow/dsh-todo-list) |
 | [Skills & MCP](./packages/dsh-skill-mcp-manager/README.md) | <img src="https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/skill-mcp-manager.png" width="320" alt="按工作区管理 Skill 与 MCP"><br>按 DSH 真实优先级开关 Skill（只对模型隐藏，`/名字` 仍可用），并管理全局与工作区两级 MCP。 | [`@ultraslow/dsh-skill-mcp-manager`](https://www.npmjs.com/package/@ultraslow/dsh-skill-mcp-manager) |
 | [开屏与壁纸](./packages/dsh-boot-skin/README.md) | <img src="https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/boot-skin-demo.gif" width="320" alt="开屏与壁纸演示：点击启动 → 开屏片头 → 主界面壁纸"><br>启动时播放自己的开屏视频，并把图片/视频铺成整屏壁纸，参数实时可调。 | [`@ultraslow/dsh-boot-skin`](https://www.npmjs.com/package/@ultraslow/dsh-boot-skin) |
-| [机票 / 酒店价格监控](./packages/dsh-price-watch/README.md) | 盯机票与酒店价格：看未来一年最低价，或按日期采真实报价，变化时推飞书卡片。 | [`@ultraslow/dsh-price-watch`](https://www.npmjs.com/package/@ultraslow/dsh-price-watch) |
+| [机票 / 酒店价格监控](./packages/dsh-price-watch/README.md) | <img src="https://raw.githubusercontent.com/Hankerlove/oh-my-dsh-plugin/refs/heads/main/assets/price-watch-demo.gif" width="320" alt="价格监控详情页：最低价、走势图与航班实价表"><br>盯机票与酒店价格：看未来一年最低价，或按日期采真实报价，变化时推飞书卡片。 | [`@ultraslow/dsh-price-watch`](https://www.npmjs.com/package/@ultraslow/dsh-price-watch) |
 
 ## 安装方式
 
