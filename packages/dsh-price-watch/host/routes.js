@@ -24,7 +24,7 @@
  * ignored instead of clearing the stored one. `POST /notify/test` sends one test
  * card through the configured channel for the settings page button.
  *
- * Hotel v1 (docs/design/price-watch-hotel.md §6): `POST /monitors` with
+ * Hotel v1 （酒店契约见本地笔记，未入库）: `POST /monitors` with
  * `{ type:'hotel' }` is dispatched to `actions.createHotelMonitor` (the route
  * never touches the network itself) and its codes become 400/422/502;
  * `POST /api/hotels/suggest` (contract §6.5) is the new-form typeahead — a

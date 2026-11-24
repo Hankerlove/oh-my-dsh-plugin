@@ -27,7 +27,7 @@
  * (no retry); the outcome lands in `state.delivery[id]` and `alerts.jsonl`.
  * Alert rules, cooldowns and the daily digest were deleted with rules.js.
  *
- * Hotel v1 (docs/design/price-watch-hotel.md): a third mode, `mode:'hotel'`.
+ * Hotel v1 （酒店契约见本地笔记，未入库）: a third mode, `mode:'hotel'`.
  * Creating one first validates the body locally, then asks the (dynamically
  * imported) hotel collector whether the hotel exists — a 422 carries "not found"
  * / "ambiguous" without storing anything. A successful collection appends

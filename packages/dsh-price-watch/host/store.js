@@ -13,7 +13,7 @@
  *   hotels/*.json    latest room/price snapshot per hotel monitor (hotel spec §3)
  *   alerts.jsonl     the delivery log (kept under its historical name)
  *
- * Hotel monitors v1 (docs/design/price-watch-hotel.md): `type:'hotel'`,
+ * Hotel monitors v1 （酒店契约见本地笔记，未入库）: `type:'hotel'`,
  * `mode:'hotel'`, `h_` ids, no passengers (only `params.adults`) and
  * `params.rooms` pinned to 1. Their snapshot has its own whitelist
  * (`normaliseHotelSnapshot`): integer prices, unknown room types dropped and

@@ -35,5 +35,8 @@ coverage/
 .dsh/skills/*
 !.dsh/skills/dsh-plugin-dev/
 
+# Design/contract docs are working notes between the two of us: kept locally, never committed
+/docs/design/
+
 # Internal ecosystem research: kept locally, never published
 docs/research/

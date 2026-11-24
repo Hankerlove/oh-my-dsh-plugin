@@ -213,12 +213,8 @@ packages/dsh-price-watch/
 └── README.md
 ```
 
-设计文档与接口契约：
-
-- [`docs/design/price-watch.md`](../../docs/design/price-watch.md) —— 数据模型、采集层、通知规则、里程碑（§14 是 V2 修订）
-- [`docs/design/price-watch-v2.md`](../../docs/design/price-watch-v2.md) —— 机票接口契约（Host 与 Client 的准绳，V3–V13 修订在文末）
-- [`docs/design/price-watch-hotel.md`](../../docs/design/price-watch-hotel.md) —— 酒店监控 v1 接口契约（数据模型 / 快照 / 卡片 / UI）
-- [`docs/design/price-watch-hotel-recon.md`](../../docs/design/price-watch-hotel-recon.md) —— 酒店数据源侦察报告（实测接口与匹配规则）
+设计文档（数据模型、接口契约、酒店数据源侦察结论）是开发期的内部工作笔记，
+不随仓库发布；对外行为以本 README 与代码里的注释为准。
 
 ## 许可证
 
