@@ -671,14 +671,22 @@ window.__ModuleLoader__.load({
 			return monitorParams(monitor).trip === 'round' ? 'round' : 'oneway';
 		}
 
-		/** `calendar` = no date picked (L1 calendar only); `watch` = dates fixed. */
-		function monitorMode(monitor) {
-			return monitor && monitor.mode === 'calendar' ? 'calendar' : 'watch';
+		/** First-level type: `hotel` when the Host says so, or when the params hold a stay. */
+		function monitorType(monitor) {
+			if (monitor && monitor.type === 'hotel') return 'hotel';
+			if (monitor && monitor.mode === 'hotel') return 'hotel';
+			const params = monitorParams(monitor);
+			return typeof params.checkIn === 'string' || typeof params.checkOut === 'string' ? 'hotel' : 'flight';
 		}
 
-		/** First-level type from the Host list (`flight` today, `hotel` later). */
-		function monitorType(monitor) {
-			return monitor && monitor.type === 'hotel' ? 'hotel' : 'flight';
+		/**
+		 * `hotel` = one stay (no other mode), `calendar` = no date picked (L1 calendar
+		 * only), `watch` = flight dates fixed. Hotel never falls into either flight
+		 * branch, so the calendar/stats paths can never render for it.
+		 */
+		function monitorMode(monitor) {
+			if (monitorType(monitor) === 'hotel') return 'hotel';
+			return monitor && monitor.mode === 'calendar' ? 'calendar' : 'watch';
 		}
 
 		function tripLabel(trip) {
@@ -695,6 +703,7 @@ window.__ModuleLoader__.load({
 		/** Card / detail subtitle: `日期待定` or the fixed departure (and return) date. */
 		function monitorDates(monitor) {
 			const params = monitorParams(monitor);
+			if (monitorMode(monitor) === 'hotel') return hotelStayLine(monitor, null);
 			const trip = monitorTrip(monitor);
 			if (monitorMode(monitor) === 'calendar') return `${tripLabel(trip)} · ${t('card.dateTbd')}`;
 			const depart = shortDate(params.departDate);
@@ -705,6 +714,13 @@ window.__ModuleLoader__.load({
 		/** Host-computed title when present, otherwise the same shape rebuilt locally. */
 		function monitorTitle(monitor) {
 			if (monitor && typeof monitor.title === 'string' && monitor.title.trim() !== '') return monitor.title;
+			if (monitorType(monitor) === 'hotel') {
+				const params = monitorParams(monitor);
+				const name = [params.hotelName, params.keyword].find((value) => typeof value === 'string' && value.trim() !== '');
+				const base = name === undefined ? cityLabel(params.city) : name.trim();
+				const range = hotelDateRange(monitor, null);
+				return range === null ? base : `${base} · ${range}`;
+			}
 			const route = monitorRoute(monitor);
 			if (monitorMode(monitor) === 'calendar') {
 				return monitorTrip(monitor) === 'round' ? `${route} · ${t('card.round')} · ${t('card.dateTbd')}` : `${route} · ${t('card.dateTbd')}`;
@@ -712,6 +728,154 @@ window.__ModuleLoader__.load({
 			const depart = shortDate(monitorParams(monitor).departDate);
 			if (monitorTrip(monitor) !== 'round') return `${route} · ${depart}`;
 			return `${route} · ${depart}–${shortDate(monitorParams(monitor).returnDate)}`;
+		}
+
+		/** Whole calendar days between two `YYYY-MM-DD` strings, or null. */
+		function daysBetween(startDate, endDate) {
+			const start = parseDateOnly(startDate);
+			const end = parseDateOnly(endDate);
+			if (start === null || end === null) return null;
+			const days = Math.round((end.getTime() - start.getTime()) / 86400000);
+			return Number.isFinite(days) ? days : null;
+		}
+
+		/** Today as a local `YYYY-MM-DD` key (date inputs compare strings). */
+		function todayDateKey() {
+			const now = new Date();
+			return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+		}
+
+		/**
+		 * Nights of a hotel stay: the params are authoritative, then the last
+		 * snapshot, then whatever the list item carried. Null when unknowable.
+		 */
+		function hotelNightsOf(monitor, snapshot) {
+			const params = monitorParams(monitor);
+			const fromParams = daysBetween(params.checkIn, params.checkOut);
+			if (fromParams !== null && fromParams > 0) return fromParams;
+			const fallbacks = [snapshot && snapshot.nights, monitor && monitor.nights];
+			for (const value of fallbacks) {
+				if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.round(value);
+			}
+			return null;
+		}
+
+		/** Guests of a hotel stay, defaulting to the Host's 2 when nothing is known. */
+		function hotelAdultsOf(monitor, snapshot) {
+			const params = monitorParams(monitor);
+			const fallbacks = [params.adults, monitor && monitor.adults, snapshot && snapshot.adults];
+			for (const value of fallbacks) {
+				if (typeof value === 'number' && Number.isFinite(value) && value >= 1) return Math.round(value);
+			}
+			return 2;
+		}
+
+		/** Canonical hotel name: params, list fields, snapshot, then the keyword. */
+		function hotelNameOf(monitor) {
+			const params = monitorParams(monitor);
+			const hotel = monitor && monitor.hotel && typeof monitor.hotel === 'object' ? monitor.hotel : null;
+			const fallbacks = [params.hotelName, monitor && monitor.hotelName, hotel && hotel.name, params.keyword];
+			for (const value of fallbacks) {
+				if (typeof value === 'string' && value.trim() !== '') return value.trim();
+			}
+			return monitorTitle(monitor);
+		}
+
+		/**
+		 * Optional suffix of a candidate line: ` · 城市 · 商圈`, or `''` when nothing is
+		 * known. Ctrip suggest returns no address, so an empty address must never
+		 * leave a dangling ` · —` in either candidate list.
+		 */
+		function hotelCandidateExtra(row) {
+			const parts = [];
+			for (const value of [row && row.cityName, row && row.district, row && row.address]) {
+				if (typeof value === 'string' && value.trim() !== '') parts.push(value.trim());
+			}
+			return parts.length === 0 ? '' : ` · ${parts.join(' · ')}`;
+		}
+
+		/** `12-05 → 12-07`, or null while the stay dates are missing. */
+		function hotelDateRange(monitor, snapshot) {
+			const params = monitorParams(monitor);
+			// Host list items carry the stay dates both in params and at the top level.
+			const checkIn = typeof params.checkIn === 'string' ? params.checkIn : typeof (monitor && monitor.checkIn) === 'string' ? monitor.checkIn : snapshot && snapshot.checkIn;
+			const checkOut = typeof params.checkOut === 'string' ? params.checkOut : typeof (monitor && monitor.checkOut) === 'string' ? monitor.checkOut : snapshot && snapshot.checkOut;
+			if (typeof checkIn !== 'string' || typeof checkOut !== 'string') return null;
+			return `${monthDay(checkIn)} → ${monthDay(checkOut)}`;
+		}
+
+		/** `12-05 → 12-07 · 2 晚 · 2 人` — the subtitle cards and details share. */
+		function hotelStayLine(monitor, snapshot) {
+			const parts = [];
+			const range = hotelDateRange(monitor, snapshot);
+			if (range !== null) parts.push(range);
+			const nights = hotelNightsOf(monitor, snapshot);
+			if (nights !== null) parts.push(t('hotel.nights', { n: nights }));
+			parts.push(t('hotel.adults', { n: hotelAdultsOf(monitor, snapshot) }));
+			return parts.join(' · ');
+		}
+
+		/**
+		 * Snapshot normaliser: drops unbookable / zero-price rooms, sorts by stay
+		 * total and derives `lowest` from the cheapest room when the Host omitted it.
+		 * Tolerant of the contract's duplicated `rooms` key: the array is the room
+		 * list, a number is the room count.
+		 */
+		function normalizeHotelSnapshot(raw) {
+			if (!raw || typeof raw !== 'object') return null;
+			const hotel = raw.hotel && typeof raw.hotel === 'object' ? raw.hotel : null;
+			const roomRows = Array.isArray(raw.rooms) ? raw.rooms : Array.isArray(raw.roomList) ? raw.roomList : Array.isArray(raw.rates) ? raw.rates : [];
+			const rooms = [];
+			for (const room of roomRows) {
+				if (!room || typeof room !== 'object') continue;
+				if (room.bookable === false) continue;
+				const price = room.price && typeof room.price === 'object' ? room.price : null;
+				const total = price && typeof price.total === 'number' && Number.isFinite(price.total) && price.total > 0 ? price.total : null;
+				if (total === null) continue;
+				const nightly = price && typeof price.nightly === 'number' && Number.isFinite(price.nightly) && price.nightly > 0 ? price.nightly : null;
+				rooms.push({
+					id: typeof room.id === 'string' && room.id !== '' ? room.id : `room-${rooms.length}`,
+					name: typeof room.name === 'string' && room.name.trim() !== '' ? room.name.trim() : t('hotel.roomFallback'),
+					bed: typeof room.bed === 'string' && room.bed.trim() !== '' ? room.bed.trim() : null,
+					area: typeof room.area === 'string' && room.area.trim() !== '' ? room.area.trim() : null,
+					window: typeof room.window === 'boolean' ? room.window : null,
+					left: numberOrNull(room.left),
+					total,
+					nightly,
+				});
+			}
+			rooms.sort((left, right) => left.total - right.total);
+			const lowestRaw = raw.lowest && typeof raw.lowest === 'object' ? raw.lowest : null;
+			let lowest = null;
+			if (lowestRaw !== null && typeof lowestRaw.total === 'number' && Number.isFinite(lowestRaw.total) && lowestRaw.total > 0) {
+				lowest = {
+					roomId: typeof lowestRaw.roomId === 'string' ? lowestRaw.roomId : null,
+					roomName: typeof lowestRaw.roomName === 'string' ? lowestRaw.roomName : null,
+					nightly: numberOrNull(lowestRaw.nightly),
+					total: lowestRaw.total,
+				};
+			} else if (rooms.length > 0) {
+				lowest = { roomId: rooms[0].id, roomName: rooms[0].name, nightly: rooms[0].nightly, total: rooms[0].total };
+			}
+			return {
+				fetchedAt: typeof raw.fetchedAt === 'string' ? raw.fetchedAt : null,
+				checkIn: typeof raw.checkIn === 'string' ? raw.checkIn : null,
+				checkOut: typeof raw.checkOut === 'string' ? raw.checkOut : null,
+				nights: numberOrNull(raw.nights),
+				adults: numberOrNull(raw.adults),
+				roomCount: Array.isArray(raw.rooms) ? (numberOrNull(raw.roomCount) === null ? 1 : Math.max(1, Math.round(raw.roomCount))) : numberOrNull(raw.rooms) === null ? 1 : Math.max(1, Math.round(raw.rooms)),
+				hotel: hotel === null ? null : {
+					name: typeof hotel.name === 'string' && hotel.name.trim() !== '' ? hotel.name.trim() : null,
+					star: numberOrNull(hotel.star),
+					score: numberOrNull(hotel.score),
+					scoreLabel: typeof hotel.scoreLabel === 'string' && hotel.scoreLabel.trim() !== '' ? hotel.scoreLabel.trim() : null,
+					address: typeof hotel.address === 'string' && hotel.address.trim() !== '' ? hotel.address.trim() : null,
+					district: typeof hotel.district === 'string' && hotel.district.trim() !== '' ? hotel.district.trim() : null,
+					cityName: typeof hotel.cityName === 'string' ? hotel.cityName : null,
+				},
+				rooms,
+				lowest,
+			};
 		}
 
 		/** API list `spark` is `[[atISO, total], ...]`, oldest first. */
@@ -1012,7 +1176,12 @@ window.__ModuleLoader__.load({
 			}
 			if (payload && payload.ok === true) return payload.data;
 			const serverMessage = payload && typeof payload.error === 'string' ? payload.error.trim() : '';
-			throw apiError(serverMessage !== '' ? serverMessage : t('error.http', { status: response.status }), response.status);
+			const error = apiError(serverMessage !== '' ? serverMessage : t('error.http', { status: response.status }), response.status);
+			// Hotel creation reports a machine-readable cause; keep it on the error so
+			// the form can render the Host's own message and its ambiguity candidates.
+			if (payload && typeof payload.code === 'string') error.code = payload.code;
+			if (payload && Array.isArray(payload.candidates)) error.candidates = payload.candidates;
+			throw error;
 		}
 		// #endregion
 
@@ -1022,7 +1191,6 @@ window.__ModuleLoader__.load({
 			'list.new': '新建监控',
 			'list.settings': '设置',
 			'list.refresh': '刷新',
-			'list.newHotelHint': '酒店监控即将支持',
 			'filter.all': '全部',
 			'filter.calendar': '行情',
 			'filter.watch': '监控',
@@ -1061,8 +1229,8 @@ window.__ModuleLoader__.load({
 			'empty.body': '没定日期就创建「行情监控」，看未来 380 天的价格日历；定了日期就创建「监控」，追踪价格走势和登录态实付价。',
 			'empty.action': '新建监控',
 			'empty.filtered': '当前筛选下没有监控。',
-			'empty.hotelTitle': '酒店监控还在开发中',
-			'empty.hotelBody': '上线后这里会列出酒店监控，现在可以先用机票监控。',
+			'empty.hotelTitle': '还没有酒店监控',
+			'empty.hotelBody': '填城市、酒店名和入住日期，系统会先校验这家酒店，通过后立即采集一次房型与价格。',
 			'error.network': '网络请求失败，请检查连接后重试',
 			'error.http': '请求失败（HTTP {status}）',
 			'common.retry': '重试',
@@ -1232,7 +1400,7 @@ window.__ModuleLoader__.load({
 			'passengers.delete': '删除乘客',
 			'passengers.deleteConfirm': '删除乘客「{name}」？',
 			'passengers.referenced': '该乘客仍被任务引用，请先在任务里取消勾选。',
-			'new.title': '新建监控',
+			'new.title': '新建机票监控',
 			'new.back': '取消',
 			'new.route.title': '航线',
 			'new.from': '出发地',
@@ -1263,6 +1431,58 @@ window.__ModuleLoader__.load({
 			'new.returnRequired': '往返需要填写返回日。',
 			'new.returnOrder': '返回日必须晚于出发日。',
 			'new.departRequired': '请选择出发日。',
+			'stepper.decrease': '减少',
+			'stepper.increase': '增加',
+			'hotel.nights': '{n} 晚',
+			'hotel.adults': '{n} 人',
+			'hotel.matched': '已匹配：{name}',
+			'hotel.lowestLabel': '最低总价',
+			'hotel.summaryNote': '{nights} · 每晚约 {nightly} · {room}',
+			'hotel.trendTitle': '价格走势',
+			'hotel.trendHint': '每轮采集的最低整段总价',
+			'hotel.trendEmpty': '还没有价格点，下一次采集后会出现在这里。',
+			'hotel.roomsTitle': '房型价格',
+			'hotel.roomsHelp': '整段含税总价 · {rooms} 间 · {adults} 人 · {nights} 晚',
+			'hotel.roomsEmpty': '还没有房型数据，等下一次采集。',
+			'hotel.room.name': '房型',
+			'hotel.room.bed': '床型',
+			'hotel.room.area': '面积',
+			'hotel.room.nightly': '每晚',
+			'hotel.room.total': '整段',
+			'hotel.room.left': '剩 {n} 间',
+			'hotel.room.noWindow': '无窗',
+			'hotel.roomFallback': '标准房',
+			'hotel.collect.never': '还没有采集过',
+			'hotel.profile.star': '{n} 星',
+			'hotel.profile.score': '评分 {score}',
+			'hotel.firstRun': '还没有采集结果，稍等自动采集，或点「立即刷新」。',
+			'hotel.card.next': '下次采集 {when}',
+			'hotel.card.error': '最近采集失败',
+			'empty.hotelAction': '新建酒店监控',
+			'new.hotel.title': '新建酒店监控',
+			'new.hotel.city': '城市',
+			'new.hotel.keyword': '酒店名称',
+			'new.hotel.keywordPlaceholder': '如：全季酒店 虹桥',
+			'new.hotel.suggest.searching': '检索中…',
+			'new.hotel.suggest.empty': '没有匹配的酒店，可以直接填全名',
+			'new.hotel.suggest.cityFirst': '先选择城市，再联想具体门店',
+			'new.hotel.dates': '入住日期',
+			'new.hotel.checkIn': '入住',
+			'new.hotel.checkOut': '离店',
+			'new.hotel.nights': '共 {n} 晚',
+			'new.hotel.adults': '入住人数',
+			'new.hotel.submit': '创建酒店监控',
+			'new.hotel.submitting': '正在校验酒店…',
+			'new.hotel.cityRequired': '请选择城市。',
+			'new.hotel.keywordRequired': '请填写酒店名称。',
+			'new.hotel.keywordLength': '酒店名称需 1–40 字。',
+			'new.hotel.checkInRequired': '请选择入住日期。',
+			'new.hotel.checkInPast': '入住日期不能早于今天。',
+			'new.hotel.checkOutRequired': '请选择离店日期。',
+			'new.hotel.checkOutOrder': '离店日期必须晚于入住日期。',
+			'new.hotel.nightsRange': '入住晚数需在 1–30 晚之间。',
+			'new.hotel.candidates': '匹配到多家同名酒店：点选下面这家直接创建，或把名称写得更完整再试。',
+			'new.hotel.candidate': '{name}{extra}',
 		};
 
 		const EN = {
@@ -1270,7 +1490,6 @@ window.__ModuleLoader__.load({
 			'list.new': 'New watch',
 			'list.settings': 'Settings',
 			'list.refresh': 'Refresh',
-			'list.newHotelHint': 'Hotel monitors are coming soon',
 			'filter.all': 'All',
 			'filter.calendar': 'Calendar',
 			'filter.watch': 'Watch',
@@ -1309,8 +1528,8 @@ window.__ModuleLoader__.load({
 			'empty.body': 'Create a calendar watch when the dates are open: it keeps the next 380 days of lowest fares. Fix the dates for a watch that tracks the price trend and the signed-in real fare.',
 			'empty.action': 'New watch',
 			'empty.filtered': 'Nothing matches this filter.',
-			'empty.hotelTitle': 'Hotel monitors are still in development',
-			'empty.hotelBody': 'Hotel price monitoring will show up here once it ships. Flight monitors work today.',
+			'empty.hotelTitle': 'No hotel monitors yet',
+			'empty.hotelBody': 'Enter a city, hotel name and stay dates. The hotel is verified first, then its rooms and prices are collected right away.',
 			'error.network': 'Network request failed. Check your connection and retry.',
 			'error.http': 'Request failed (HTTP {status})',
 			'common.retry': 'Retry',
@@ -1480,7 +1699,7 @@ window.__ModuleLoader__.load({
 			'passengers.delete': 'Delete passenger',
 			'passengers.deleteConfirm': 'Delete passenger "{name}"?',
 			'passengers.referenced': 'This passenger is still used by a watch. Uncheck it there first.',
-			'new.title': 'New watch',
+			'new.title': 'New flight watch',
 			'new.back': 'Cancel',
 			'new.route.title': 'Route',
 			'new.from': 'From',
@@ -1511,6 +1730,58 @@ window.__ModuleLoader__.load({
 			'new.returnRequired': 'Round trips need a return date.',
 			'new.returnOrder': 'Return must be after departure.',
 			'new.departRequired': 'Pick a departure date.',
+			'stepper.decrease': 'Decrease',
+			'stepper.increase': 'Increase',
+			'hotel.nights': '{n} nights',
+			'hotel.adults': '{n} guests',
+			'hotel.matched': 'Matched: {name}',
+			'hotel.lowestLabel': 'Lowest total',
+			'hotel.summaryNote': '{nights} · about {nightly}/night · {room}',
+			'hotel.trendTitle': 'Price trend',
+			'hotel.trendHint': 'Lowest stay total from each collection',
+			'hotel.trendEmpty': 'No price points yet. They appear after the next collection.',
+			'hotel.roomsTitle': 'Room prices',
+			'hotel.roomsHelp': 'Tax-included stay total · {rooms} room · {adults} guests · {nights} nights',
+			'hotel.roomsEmpty': 'No room data yet. Waiting for the next collection.',
+			'hotel.room.name': 'Room',
+			'hotel.room.bed': 'Bed',
+			'hotel.room.area': 'Area',
+			'hotel.room.nightly': 'Per night',
+			'hotel.room.total': 'Stay total',
+			'hotel.room.left': '{n} left',
+			'hotel.room.noWindow': 'No window',
+			'hotel.roomFallback': 'Standard room',
+			'hotel.collect.never': 'Not collected yet',
+			'hotel.profile.star': '{n}-star',
+			'hotel.profile.score': 'Rated {score}',
+			'hotel.firstRun': 'No snapshot yet. It will be collected shortly, or press "Collect now".',
+			'hotel.card.next': 'Next {when}',
+			'hotel.card.error': 'Last collection failed',
+			'empty.hotelAction': 'New hotel watch',
+			'new.hotel.title': 'New hotel watch',
+			'new.hotel.city': 'City',
+			'new.hotel.keyword': 'Hotel name',
+			'new.hotel.keywordPlaceholder': 'e.g. Ji Hotel Hongqiao',
+			'new.hotel.suggest.searching': 'Searching…',
+			'new.hotel.suggest.empty': 'No matching hotel — type the full name instead',
+			'new.hotel.suggest.cityFirst': 'Pick a city first, then we can suggest specific hotels',
+			'new.hotel.dates': 'Stay dates',
+			'new.hotel.checkIn': 'Check-in',
+			'new.hotel.checkOut': 'Check-out',
+			'new.hotel.nights': '{n} nights',
+			'new.hotel.adults': 'Guests',
+			'new.hotel.submit': 'Create hotel watch',
+			'new.hotel.submitting': 'Verifying hotel…',
+			'new.hotel.cityRequired': 'Pick a city.',
+			'new.hotel.keywordRequired': 'Enter the hotel name.',
+			'new.hotel.keywordLength': 'Hotel name must be 1–40 characters.',
+			'new.hotel.checkInRequired': 'Pick a check-in date.',
+			'new.hotel.checkInPast': 'Check-in cannot be before today.',
+			'new.hotel.checkOutRequired': 'Pick a check-out date.',
+			'new.hotel.checkOutOrder': 'Check-out must be after check-in.',
+			'new.hotel.nightsRange': 'The stay must be 1–30 nights.',
+			'new.hotel.candidates': 'Several hotels match. Pick one below to create it, or type a more specific name.',
+			'new.hotel.candidate': '{name}{extra}',
 		};
 
 		// #endregion
@@ -1794,6 +2065,28 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 .pw-strip-sep { color: var(--dsw-alias-border-l2); }
 @media (max-width: 780px) { .pw-spark { display: none; } .pw-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pw-head-row { flex-wrap: wrap; } .pw-head-actions { margin-left: 0; } }
 @media (max-width: 520px) { .pw-card { flex-wrap: wrap; } }
+.pw-hotel-head { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border-radius: var(--dsw-radius-lg, 16px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
+.pw-hotel-name { font-size: 15px; font-weight: 600; line-height: 22px; }
+.pw-hotel-facts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pw-hotel-address { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+.pw-hotel-candidates { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: var(--dsw-radius-md, 12px); background: var(--dsw-alias-bg-layer-2); }
+.pw-card-error { max-width: 100%; overflow: hidden; color: var(--dsw-alias-state-error-primary); font-size: 12px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.pw-hotel-candidate { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+.pw-suggest-item { display: flex; flex-direction: column; gap: 1px; width: 100%; padding: 7px 8px; border: none; border-radius: var(--dsw-radius-sm, 8px); background: transparent; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 13px; line-height: 19px; text-align: left; cursor: pointer; }
+.pw-suggest-item:hover, .pw-suggest-item[data-highlight="true"] { background: var(--dsw-alias-interactive-bg-hover); }
+.pw-suggest-item:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; }
+.pw-suggest-name { max-width: 100%; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.pw-suggest-meta { max-width: 100%; overflow: hidden; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.pw-suggest-note { padding: 7px 8px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
+.pw-stepper { display: inline-flex; align-items: center; gap: 2px; height: 30px; padding: 2px; border-radius: var(--dsw-radius-sm, 8px); border: .5px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2); }
+.pw-stepper-btn { width: 26px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 15px; line-height: 1; cursor: pointer; }
+.pw-stepper-btn:hover:not(:disabled) { background: var(--dsw-alias-bg-layer-3); }
+.pw-stepper-btn:disabled { color: var(--dsw-alias-label-tertiary); cursor: default; }
+.pw-stepper-btn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
+.pw-stepper-value { min-width: 30px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
+.pw-roomname { font-weight: 500; }
+.pw-roomcell { white-space: nowrap; }
+@media (max-width: 640px) { .pw-table .pw-room-bed, .pw-table .pw-room-area { display: none; } }
 `;
 		// #endregion
 
@@ -1953,6 +2246,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				{ className: 'pw-errbar', role: 'alert', style: props.inline === true ? { margin: 0 } : undefined },
 				h(AlertIcon, { size: 15 }),
 				h('span', { className: 'pw-grow', style: { overflowWrap: 'anywhere' } }, props.message),
+				props.action === undefined || props.action === null ? null : props.action,
 				props.onRetry === undefined ? null : h(Button, { size: 'sm', onClick: props.onRetry }, t('common.retry')),
 				props.onDismiss === undefined
 					? null
@@ -2072,6 +2366,28 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						},
 						option.label
 					)
+				)
+			);
+		}
+
+		/** Compact −/+ stepper for small bounded integers (hotel guests 1–6). */
+		function Stepper(props) {
+			const min = numberOrNull(props.min) === null ? 0 : props.min;
+			const max = numberOrNull(props.max) === null ? 99 : props.max;
+			const value = numberOrNull(props.value) === null ? min : Math.min(max, Math.max(min, Math.round(props.value)));
+			return h(
+				'div',
+				{ className: 'pw-stepper', role: 'group', 'aria-label': props.label },
+				h(
+					'button',
+					{ type: 'button', className: 'pw-stepper-btn', 'aria-label': t('stepper.decrease'), disabled: value <= min, onClick: () => props.onChange(Math.max(min, value - 1)) },
+					'−'
+				),
+				h('span', { className: 'pw-stepper-value', role: 'status' }, typeof props.format === 'function' ? props.format(value) : String(value)),
+				h(
+					'button',
+					{ type: 'button', className: 'pw-stepper-btn', 'aria-label': t('stepper.increase'), disabled: value >= max, onClick: () => props.onChange(Math.min(max, value + 1)) },
+					'+'
 				)
 			);
 		}
@@ -2867,6 +3183,85 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			);
 		}
 
+		/**
+		 * Hotel card: one stay, the lowest stay total and its own trend line. The
+		 * subtitle carries dates/nights/guests, then rhythm, then the next run; a
+		 * failed last collection becomes a small warn chip instead of a page error.
+		 */
+		function HotelMonitorCard(props) {
+			const monitor = props.monitor;
+			const latest = latestTotal(monitor);
+			const spark = normalizeSeries(monitor.spark);
+			const chip = trendChip(trendPercent(spark));
+			const disabled = monitor.enabled === false;
+			const defaults = props.cadenceDefaults && typeof props.cadenceDefaults === 'object' ? props.cadenceDefaults : null;
+			const ownCadence = monitorCadence(monitor);
+			const cadenceMinutes = ownCadence === null ? (defaults === null ? null : defaults.watch) : ownCadence;
+			const nextDue = typeof monitor.nextDue === 'string' ? formatLastCollect(monitor.nextDue) : null;
+			const failure = typeof props.failure === 'string' && props.failure.trim() !== '' ? props.failure.trim() : null;
+
+			const segments = [hotelStayLine(monitor, null)];
+			if (cadenceMinutes !== null) segments.push(cadenceEvery(cadenceMinutes));
+			if (nextDue !== null) segments.push(t('hotel.card.next', { when: nextDue }));
+			segments.push(latest === null ? t('card.waiting') : relativeTime(latest.at));
+			const metaChildren = [];
+			segments.forEach((segment, index) => {
+				if (index > 0) metaChildren.push(h('span', { className: 'pw-strip-sep', key: `sep-${index}` }, '·'));
+				metaChildren.push(h('span', { key: `seg-${index}` }, segment));
+			});
+			if (failure !== null) metaChildren.push(h('span', { key: 'failure', className: 'pw-card-error', title: failure }, failure));
+
+			const titleChildren = [h(BedIcon, { key: 'bed', size: 14 }), h('span', { key: 'name', className: 'pw-ellipsis' }, hotelNameOf(monitor))];
+			if (disabled) titleChildren.push(h(Chip, { key: 'paused', tone: 'flat' }, t('card.paused')));
+
+			const priceCell =
+				latest === null
+					? h('span', { className: 'pw-price pw-muted' }, '—')
+					: h(
+							'div',
+							{ className: 'pw-row', style: { gap: 6, justifyContent: 'flex-end' } },
+							h('span', { className: 'pw-price' }, formatMoney(latest.total)),
+							h(Chip, { tone: chip.tone }, chip.text)
+						);
+
+			return h(
+				'div',
+				{
+					className: 'pw-card',
+					role: 'button',
+					tabIndex: 0,
+					'data-disabled': disabled ? 'true' : 'false',
+					'data-mode': 'hotel',
+					'aria-label': `${hotelNameOf(monitor)} ${hotelStayLine(monitor, null)}`,
+					onClick: () => props.onOpen(monitor.id),
+					onKeyDown: (event) => {
+						if (event.target !== event.currentTarget) return;
+						if (event.key !== 'Enter' && event.key !== ' ') return;
+						event.preventDefault();
+						props.onOpen(monitor.id);
+					},
+				},
+				h(
+					'div',
+					{ className: 'pw-col pw-grow', style: { gap: 5 } },
+					h('div', { className: 'pw-card-title' }, titleChildren),
+					h('div', { className: 'pw-card-meta' }, metaChildren)
+				),
+				h(Sparkline, { points: monitor.spark, tone: chip.tone }),
+				h(
+					'div',
+					{ className: 'pw-col', style: { alignItems: 'flex-end', gap: 7, flex: 'none' } },
+					h(Switch, {
+						checked: !disabled,
+						label: disabled ? t('card.enable') : t('card.disable'),
+						disabled: props.busy === true,
+						onChange: () => props.onToggle(monitor),
+					}),
+					priceCell
+				)
+			);
+		}
+
 		/** One row of filter pills: `role="group"` + `aria-pressed`, like the native task list. */
 		function FilterTabs(props) {
 			return h(
@@ -2899,7 +3294,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const mode = props.filterMode === 'calendar' || props.filterMode === 'watch' ? props.filterMode : 'all';
 			const hotel = type === 'hotel';
 			const ofType = monitors === null ? null : monitors.filter((monitor) => monitorType(monitor) === type);
-			const filtered = ofType === null || hotel ? null : ofType.filter((monitor) => mode === 'all' || monitorMode(monitor) === mode);
+			// Hotels have no mode dimension: their whole type list is already the view.
+			const filtered = ofType === null ? null : hotel ? ofType : ofType.filter((monitor) => mode === 'all' || monitorMode(monitor) === mode);
 			const typeOptions = [
 				{ id: 'flight', label: t('filter.type.flight') },
 				{ id: 'hotel', label: t('filter.type.hotel') },
@@ -2911,7 +3307,6 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			];
 			const empty = filtered !== null && filtered.length === 0;
 			const nothingAtAll = ofType !== null && ofType.length === 0;
-			const newHint = hotel ? t('list.newHotelHint') : undefined;
 
 			const body = [];
 			if (monitors === null) {
@@ -2929,17 +3324,26 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 						)
 					)
 				);
-			} else if (hotel) {
-				body.push(h(EmptyState, { key: 'hotel', title: t('empty.hotelTitle'), body: t('empty.hotelBody'), icon: h(BedIcon, { size: 24 }) }));
 			} else if (nothingAtAll) {
 				body.push(
-					h(EmptyState, {
-						key: 'empty',
-						title: t('empty.title'),
-						body: t('empty.body'),
-						icon: h(TagIcon, { size: 22 }),
-						action: h(Button, { variant: 'primary', icon: h(PlusIcon, { size: 15 }), onClick: props.onNew }, t('empty.action')),
-					})
+					h(
+						EmptyState,
+						hotel
+							? {
+									key: 'hotel-empty',
+									title: t('empty.hotelTitle'),
+									body: t('empty.hotelBody'),
+									icon: h(BedIcon, { size: 24 }),
+									action: h(Button, { variant: 'primary', icon: h(PlusIcon, { size: 15 }), onClick: props.onNew }, t('empty.hotelAction')),
+								}
+							: {
+									key: 'empty',
+									title: t('empty.title'),
+									body: t('empty.body'),
+									icon: h(TagIcon, { size: 22 }),
+									action: h(Button, { variant: 'primary', icon: h(PlusIcon, { size: 15 }), onClick: props.onNew }, t('empty.action')),
+								}
+					)
 				);
 			} else if (empty) {
 				body.push(h(EmptyState, { key: 'filtered', title: t('empty.filtered') }));
@@ -2948,16 +3352,18 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					h(
 						'div',
 						{ className: 'pw-list', key: 'list' },
-						filtered.map((monitor) =>
-							h(MonitorCard, {
+						filtered.map((monitor) => {
+							const isHotel = monitorType(monitor) === 'hotel';
+							return h(isHotel ? HotelMonitorCard : MonitorCard, {
 								key: monitor.id,
 								monitor,
 								cadenceDefaults,
+								failure: isHotel ? monitorFailure(monitor, status) : null,
 								busy: props.busyKey === `toggle:${monitor.id}`,
 								onOpen: props.onOpen,
 								onToggle: props.onToggle,
-							})
-						)
+							});
+						})
 					)
 				);
 			}
@@ -2977,16 +3383,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					actions: [
 						h(
 							Button,
-							{
-								key: 'new',
-								variant: 'primary',
-								className: 'pw-btn-header',
-								icon: h(PlusIcon, { size: 13 }),
-								onClick: props.onNew,
-								disabled: hotel,
-								title: newHint,
-								ariaLabel: newHint,
-							},
+							{ key: 'new', variant: 'primary', className: 'pw-btn-header', icon: h(PlusIcon, { size: 13 }), onClick: props.onNew },
 							t('list.new')
 						),
 					],
@@ -3092,16 +3489,19 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				}
 			};
 
+			const editButton = h(Button, { size: 'sm', onClick: beginEdit, disabled: busy }, t('cadence.edit'));
 			return h(
 				Section,
-				{ title: t('cadence.title') },
-				h(
-					'div',
-					{ className: 'pw-row', style: { gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-					current === null ? h('span', { className: 'pw-hint' }, t('cadence.inherit')) : h(Chip, { tone: 'flat' }, cadenceEvery(current)),
-					h('span', { className: 'pw-hint' }, nextLabel),
-					h(Button, { size: 'sm', onClick: beginEdit, disabled: busy }, t('cadence.edit'))
-				),
+				{ title: typeof props.title === 'string' && props.title !== '' ? props.title : t('cadence.title') },
+				props.summary === false
+					? h('div', { className: 'pw-row', style: { justifyContent: 'flex-end' } }, editButton)
+					: h(
+							'div',
+							{ className: 'pw-row', style: { gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+							current === null ? h('span', { className: 'pw-hint' }, t('cadence.inherit')) : h(Chip, { tone: 'flat' }, cadenceEvery(current)),
+							h('span', { className: 'pw-hint' }, nextLabel),
+							editButton
+						),
 				failure === null ? null : h('span', { className: 'pw-hint', style: { color: 'var(--dsw-alias-state-error-primary)' }, role: 'status' }, t('cadence.lastError', { message: failure })),
 				editing
 					? h(
@@ -3124,7 +3524,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								h(Button, { size: 'sm', variant: 'primary', onClick: () => void save(), disabled: saving }, saving ? t('common.saving') : t('cadence.save'))
 							)
 						)
-					: null
+					: null,
+				props.children === undefined || props.children === null ? null : h('div', { className: 'pw-col', style: { gap: 2 } }, props.children)
 			);
 		}
 
@@ -3890,10 +4291,197 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			);
 		}
 
-		/** Detail dispatcher: the mode decides between the bar calendar and the watch. */
+		/** Room price table: sorted by stay total, cheapest row highlighted. */
+		function HotelRoomsTable(props) {
+			const rooms = Array.isArray(props.rooms) ? props.rooms : [];
+			if (rooms.length === 0) return h('span', { className: 'pw-hint' }, t('hotel.roomsEmpty'));
+			const headers = [t('hotel.room.name'), t('hotel.room.bed'), t('hotel.room.area'), t('hotel.room.nightly'), t('hotel.room.total')];
+			return h(
+				'div',
+				{ className: 'pw-table-wrap' },
+				h(
+					'table',
+					{ className: 'pw-table' },
+					h('thead', null, h('tr', null, headers.map((label, index) => h('th', { key: index, className: index >= 3 ? 'pw-num' : undefined }, label)))),
+					h(
+						'tbody',
+						null,
+						rooms.map((room, index) => {
+							const cheapest = index === 0;
+							const extras = [];
+							if (room.window === false) extras.push(t('hotel.room.noWindow'));
+							if (room.left !== null) extras.push(t('hotel.room.left', { n: room.left }));
+							return h(
+								'tr',
+								{ key: room.id, 'data-cheapest': cheapest ? 'true' : 'false' },
+								h(
+									'td',
+									null,
+									h(
+										'div',
+										{ className: 'pw-row', style: { gap: 6, flexWrap: 'wrap' } },
+										h('span', { className: 'pw-roomname' }, room.name),
+										extras.length === 0 ? null : h('span', { className: 'pw-hint' }, extras.join(' · '))
+									)
+								),
+								h('td', { className: 'pw-roomcell pw-room-bed' }, room.bed === null ? '—' : room.bed),
+								h('td', { className: 'pw-roomcell pw-room-area' }, room.area === null ? '—' : room.area),
+								h('td', { className: 'pw-num' }, room.nightly === null ? '—' : formatMoney(room.nightly)),
+								h('td', { className: 'pw-num' }, formatMoney(room.total))
+							);
+						})
+					)
+				)
+			);
+		}
+
+		/**
+		 * 酒店 mode: hotel profile + lowest stay total + trend (one point per
+		 * collection) + room table + collection block. Every field degrades to a
+		 * quiet placeholder, so a first-run monitor with no snapshot never breaks.
+		 */
+		function HotelDetailView(props) {
+			useLocaleRevision();
+			const monitor = props.monitor;
+			const snapshot = useMemo(() => normalizeHotelSnapshot(props.hotelSnapshot), [props.hotelSnapshot]);
+			const minSeries = useMemo(() => normalizeMinSeries(props.hotelPoints), [props.hotelPoints]);
+			const enabled = monitor.enabled !== false;
+			const busy = props.busy === true;
+			const nights = hotelNightsOf(monitor, snapshot);
+			const adults = hotelAdultsOf(monitor, snapshot);
+			const paramRooms = numberOrNull(monitorParams(monitor).rooms);
+			const roomCount = paramRooms !== null ? Math.max(1, Math.round(paramRooms)) : snapshot === null || typeof snapshot.roomCount !== 'number' ? 1 : snapshot.roomCount;
+			const failure = monitorFailure(monitor, props.status);
+			// Hotel rooms are only visible to a signed-in Ctrip session, so a failed
+			// collection can mean "please sign in" rather than "this stay has no rooms".
+			const needsLogin = failure !== null && /HOTEL_LOGIN_REQUIRED|登录/.test(failure);
+			const matchedName = typeof props.matchedName === 'string' && props.matchedName.trim() !== '' ? props.matchedName.trim() : null;
+
+			const latestPoint = minSeries.length > 0 ? minSeries[minSeries.length - 1] : null;
+			const previousPoint = minSeries.length > 1 ? minSeries[minSeries.length - 2] : null;
+			const deltaPercent = latestPoint !== null && previousPoint !== null && previousPoint.total > 0 ? ((latestPoint.total - previousPoint.total) / previousPoint.total) * 100 : null;
+			const deltaText = formatPercentDelta(deltaPercent);
+			const deltaTone = deltaPercent === null || Math.abs(deltaPercent) < 0.05 ? 'flat' : deltaPercent > 0 ? 'up' : 'down';
+
+			const hotel = snapshot !== null && snapshot.hotel !== null ? snapshot.hotel : monitor && monitor.hotel && typeof monitor.hotel === 'object' ? monitor.hotel : null;
+			const lowest = snapshot !== null ? snapshot.lowest : null;
+			const latestTotal = monitor && monitor.latest && typeof monitor.latest.total === 'number' && Number.isFinite(monitor.latest.total) ? monitor.latest.total : null;
+			const lowestTotal = lowest !== null && typeof lowest.total === 'number' ? lowest.total : latestTotal;
+			const nightly = lowest !== null && typeof lowest.nightly === 'number' ? lowest.nightly : lowestTotal !== null && nights !== null && nights > 0 ? Math.round(lowestTotal / nights) : null;
+			const roomName = lowest !== null && typeof lowest.roomName === 'string' && lowest.roomName !== '' ? lowest.roomName : null;
+			const pendingError = typeof props.hotelError === 'string' && props.hotelError.trim() !== '' ? props.hotelError.trim() : null;
+			const waiting = snapshot === null && pendingError === null;
+
+			const meta = [hotelStayLine(monitor, snapshot)];
+			if (!enabled) meta.push(h(Chip, { key: 'paused', tone: 'flat' }, t('card.paused')));
+
+			const hotelName = hotel !== null && typeof hotel.name === 'string' && hotel.name !== '' ? hotel.name : hotelNameOf(monitor);
+			const facts = [];
+			if (hotel !== null && numberOrNull(hotel.star) !== null) facts.push(h(Chip, { key: 'star', tone: 'flat' }, t('hotel.profile.star', { n: Math.round(hotel.star) })));
+			if (hotel !== null && numberOrNull(hotel.score) !== null) {
+				const label = typeof hotel.scoreLabel === 'string' && hotel.scoreLabel !== '' ? `${hotel.scoreLabel} ${hotel.score}` : t('hotel.profile.score', { score: hotel.score });
+				facts.push(h(Chip, { key: 'score', tone: 'brand' }, label));
+			}
+			if (hotel !== null && typeof hotel.district === 'string' && hotel.district !== '') facts.push(h(Chip, { key: 'district', tone: 'flat' }, hotel.district));
+
+			const profile = h(
+				'div',
+				{ className: 'pw-hotel-head', key: 'profile' },
+				h('div', { className: 'pw-row', style: { gap: 8, flexWrap: 'wrap', alignItems: 'center' } }, h('span', { className: 'pw-hotel-name pw-ellipsis' }, hotelName), facts),
+				hotel !== null && typeof hotel.address === 'string' && hotel.address !== '' ? h('span', { className: 'pw-hotel-address' }, hotel.address) : null
+			);
+
+			const summary = h(
+				'div',
+				{ className: 'pw-summary', key: 'summary' },
+				h(
+					'div',
+					{ className: 'pw-summary-main' },
+					h('span', { className: 'pw-summary-label' }, t('hotel.lowestLabel')),
+					h('span', { className: 'pw-summary-price' }, lowestTotal === null ? '—' : formatMoney(lowestTotal)),
+					lowestTotal === null
+						? h('span', { className: 'pw-summary-route' }, waiting ? t('hotel.firstRun') : t('hotel.roomsEmpty'))
+						: h(
+								'span',
+								{ className: 'pw-summary-route' },
+								t('hotel.summaryNote', {
+									nights: nights === null ? '—' : t('hotel.nights', { n: nights }),
+									nightly: nightly === null ? '—' : formatMoney(nightly),
+									room: roomName === null ? '—' : roomName,
+								})
+							),
+					deltaText === null ? null : h('span', { className: 'pw-summary-delta', 'data-tone': deltaTone }, t('watch.vsLast', { percent: deltaText, price: formatMoney(previousPoint.total) }))
+				),
+				h(Button, { variant: 'primary', icon: h(RefreshIcon, { size: 13 }), onClick: () => props.onRefresh(monitor.id), disabled: busy }, t('detail.refresh'))
+			);
+
+			return h(
+				PageShell,
+				{
+					lead: h(IconButton, { label: t('detail.back'), onClick: props.onBack }, h(BackIcon, { size: 18 })),
+					title: hotelName,
+					meta,
+					actions: [
+						h(
+							'div',
+							{ className: 'pw-head-icons', key: 'icons' },
+							h(
+								IconButton,
+								{ label: enabled ? t('detail.pause') : t('detail.resume'), onClick: () => props.onToggleEnabled(monitor), disabled: busy },
+								enabled ? h(PauseIcon, { size: 15 }) : h(PlayIcon, { size: 15 })
+							),
+							h(IconButton, { label: t('detail.delete'), tone: 'danger', onClick: () => props.onDelete(monitor), disabled: busy }, h(TrashIcon, { size: 15 }))
+						),
+					],
+				},
+				props.banner,
+				matchedName === null ? null : h('div', { className: 'pw-notice', key: 'matched' }, h(CheckIcon, { size: 14 }), h('span', null, t('hotel.matched', { name: matchedName }))),
+				profile,
+				pendingError === null ? null : h(ErrorBar, { key: 'hotel-error', message: pendingError, inline: true, onRetry: () => props.onRefresh(monitor.id) }),
+				needsLogin
+					? h(ErrorBar, {
+							key: 'login-needed',
+							message: failure,
+							inline: true,
+							action: h(
+								Button,
+								{ size: 'sm', variant: 'primary', onClick: () => { if (typeof props.onLogin === 'function') props.onLogin(); }, disabled: props.loginPending === true },
+								props.loginPending === true ? t('login.pending') : t('settings.login')
+							),
+							onRetry: () => props.onRefresh(monitor.id),
+						})
+					: null,
+				summary,
+				h(
+					Section,
+					{ key: 'trend', title: t('hotel.trendTitle'), help: t('hotel.trendHint') },
+					waiting ? h(Skeleton, { height: 150, radius: 12 }) : h(PriceChart, { points: props.hotelPoints, emptyText: t('hotel.trendEmpty') })
+				),
+				h(
+					Section,
+					{ key: 'rooms', title: t('hotel.roomsTitle'), help: t('hotel.roomsHelp', { rooms: roomCount, adults, nights: nights === null ? '—' : nights }) },
+					waiting ? h(Skeleton, { height: 96, radius: 12 }) : h(HotelRoomsTable, { rooms: snapshot === null ? [] : snapshot.rooms })
+				),
+				// 采集信息与机票监控同一套写法：只剩「采集节奏 + 下次采集 + 修改」。
+				h(CadenceEditor, {
+					key: 'collect',
+					value: monitorCadence(monitor),
+					nextDue: monitor.nextDue,
+					enabled,
+					failure: needsLogin ? null : failure,
+					busy,
+					onSave: (next) => props.onSaveCadence(monitor.id, next),
+				}),
+				h(DeliveryLine, { key: 'delivery', delivery: monitor.delivery })
+			);
+		}
+
+		/** Detail dispatcher: hotel / calendar / watch each own a different page. */
 		function DetailView(props) {
 			useLocaleRevision();
-			if (monitorMode(props.monitor) === 'calendar') return h(CalendarDetailView, props);
+			const mode = monitorMode(props.monitor);
+			if (mode === 'hotel') return h(HotelDetailView, props);
+			if (mode === 'calendar') return h(CalendarDetailView, props);
 			return h(WatchDetailView, props);
 		}
 		// #endregion
@@ -4767,6 +5355,423 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			);
 		}
 
+		/**
+		 * Hotel-name combobox. Debounced (`350ms`) `/hotels/suggest` lookups feed a
+		 * keyboard-first list; a failed lookup stays silent so the user can always
+		 * type the full name and submit. Monotonic request ids drop stale responses.
+		 */
+		function HotelSuggest(props) {
+			const [open, setOpen] = useState(false);
+			const [items, setItems] = useState([]);
+			const [loading, setLoading] = useState(false);
+			const [queried, setQueried] = useState(false);
+			const [highlight, setHighlight] = useState(0);
+			const seqRef = useRef(0);
+			const blurTimer = useRef(null);
+			const listId = useMemo(() => `pw-hotel-suggest-${Math.random().toString(36).slice(2, 8)}`, []);
+			const keyword = typeof props.keyword === 'string' ? props.keyword : '';
+			const trimmed = keyword.trim();
+			const picked = props.picked && typeof props.picked === 'object' ? props.picked : null;
+			const pickedName = picked !== null && typeof picked.hotelName === 'string' ? picked.hotelName : '';
+			// A brand-only query without a city returns brand rows, not specific hotels,
+			// so the lookup waits for a city instead of guessing.
+			const city = typeof props.cityCode === 'string' && props.cityCode !== '' ? props.cityCode : null;
+			// A picked hotel keeps the input showing its own name; do not cover it again
+			// until the user edits the text (which clears `picked`).
+			const showList = open && trimmed.length >= 2 && !(pickedName !== '' && trimmed === pickedName);
+
+			useEffect(
+				() => () => {
+					if (blurTimer.current !== null) window.clearTimeout(blurTimer.current);
+				},
+				[]
+			);
+
+			// Debounce the lookup; the cleanup also invalidates the in-flight request.
+			useEffect(() => {
+				if (trimmed.length < 2 || city === null) {
+					setItems([]);
+					setLoading(false);
+					setQueried(false);
+					return undefined;
+				}
+				const seq = seqRef.current + 1;
+				seqRef.current = seq;
+				// Switching city must not keep showing the previous city's stores while
+				// the new request is in flight; a city change re-runs this effect, so a
+				// >=2-char keyword refreshes automatically without further typing.
+				setItems([]);
+				setLoading(true);
+				setQueried(false);
+				const timer = window.setTimeout(() => {
+					apiFetch('/hotels/suggest', {
+						method: 'POST',
+						body: { city, cityName: cityLabel(city), keyword: trimmed },
+					})
+						.then((data) => {
+							if (seq !== seqRef.current) return;
+							const rows = data && Array.isArray(data.hotels) ? data.hotels.filter((row) => row && typeof row === 'object' && typeof row.name === 'string' && row.name.trim() !== '').slice(0, 8) : [];
+							setItems(rows);
+							setHighlight(0);
+							setLoading(false);
+							setQueried(true);
+						})
+						.catch(() => {
+							if (seq !== seqRef.current) return;
+							// Silent degradation: manual name entry is always available.
+							setItems([]);
+							setLoading(false);
+							setQueried(true);
+						});
+				}, 350);
+				return () => {
+					window.clearTimeout(timer);
+					seqRef.current += 1;
+				};
+			}, [trimmed, city]);
+
+			const pick = (item) => {
+				if (!item || typeof item.name !== 'string') return;
+				setOpen(false);
+				setItems([]);
+				props.onKeyword(item.name.trim());
+				props.onPick({ hotelId: item.id === undefined || item.id === null ? '' : String(item.id), hotelName: item.name.trim() });
+			};
+
+			const handleKeyDown = (event) => {
+				if (event.key === 'Escape') {
+					setOpen(false);
+					return;
+				}
+				if (!showList) {
+					if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+						if (trimmed.length >= 2) {
+							event.preventDefault();
+							setOpen(true);
+						}
+					}
+					return;
+				}
+				if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+					event.preventDefault();
+					if (items.length === 0) return;
+					setHighlight((current) => {
+						const at = Math.min(Math.max(current, 0), items.length - 1);
+						const delta = event.key === 'ArrowDown' ? 1 : -1;
+						return (at + delta + items.length) % items.length;
+					});
+					return;
+				}
+				if (event.key === 'Enter' && items.length > 0) {
+					event.preventDefault();
+					pick(items[Math.min(Math.max(highlight, 0), items.length - 1)]);
+				}
+			};
+
+			const rows = [];
+			if (showList) {
+				if (city === null) rows.push(h('div', { className: 'pw-suggest-note', key: 'city-first', role: 'presentation' }, t('new.hotel.suggest.cityFirst')));
+				else if (loading) rows.push(h('div', { className: 'pw-suggest-note', key: 'loading' }, t('new.hotel.suggest.searching')));
+				else if (queried && items.length === 0) rows.push(h('div', { className: 'pw-suggest-note', key: 'empty' }, t('new.hotel.suggest.empty')));
+				items.forEach((item, index) => {
+					// The Host sends name/cityName/district/star/score only — never an address.
+					const meta = [item.cityName, item.district].filter((value) => typeof value === 'string' && value.trim() !== '').join(' · ');
+					const star = typeof item.star === 'string' && item.star.trim() !== '' ? item.star.trim() : null;
+					const secondary = [meta, star].filter((value) => value !== null && value !== '').join(' · ');
+					rows.push(
+						h(
+							'button',
+							{
+								key: `${item.id === undefined ? 'item' : item.id}-${index}`,
+								type: 'button',
+								id: `${listId}-${index}`,
+								className: 'pw-suggest-item',
+								role: 'option',
+								'aria-selected': index === highlight ? 'true' : 'false',
+								'data-highlight': index === highlight ? 'true' : 'false',
+								onMouseEnter: () => setHighlight(index),
+								onMouseDown: (event) => {
+									event.preventDefault();
+									pick(item);
+								},
+							},
+							h('span', { className: 'pw-suggest-name' }, item.name.trim()),
+							secondary === '' ? null : h('span', { className: 'pw-suggest-meta' }, secondary)
+						)
+					);
+				});
+			}
+
+			return h(
+				'div',
+				{ className: 'pw-col', style: { gap: 4 } },
+				h(
+					'div',
+					{ className: 'pw-combo' },
+					h('input', {
+						className: 'pw-input',
+						value: keyword,
+						maxLength: 40,
+						placeholder: t('new.hotel.keywordPlaceholder'),
+						autoComplete: 'off',
+						spellCheck: false,
+						role: 'combobox',
+						'aria-autocomplete': 'list',
+						'aria-expanded': showList && rows.length > 0 ? 'true' : 'false',
+						'aria-controls': showList && rows.length > 0 ? listId : undefined,
+						'aria-activedescendant': showList && items.length > 0 ? `${listId}-${Math.min(Math.max(highlight, 0), items.length - 1)}` : undefined,
+						onChange: (event) => {
+							const value = event.target.value;
+							if (picked !== null && typeof props.onClear === 'function') props.onClear();
+							setOpen(true);
+							props.onKeyword(value);
+						},
+						onFocus: () => setOpen(true),
+						onBlur: () => {
+							blurTimer.current = window.setTimeout(() => setOpen(false), 120);
+						},
+						onKeyDown: handleKeyDown,
+					}),
+					showList && rows.length > 0 ? h('div', { className: 'pw-combo-list', role: 'listbox', id: listId }, rows) : null
+				),
+				// 选中状态不额外占一行（用户反馈那行会让表单变怪）：输入框里已经是门店全名，
+				// 想改就直接编辑文本 —— 编辑会清掉 picked，联想会自动恢复。
+				null
+			);
+		}
+
+		/**
+		 * Hotel creation form. The Host verifies the hotel remotely before storing
+		 * anything, so submit is a long-ish request: the button explains it, and a
+		 * 422 keeps the Host's own message plus its ambiguity candidates on screen.
+		 */
+		function HotelNewView(props) {
+			const [cityQuery, setCityQuery] = useState('');
+			const [cityCode, setCityCode] = useState('');
+			const [keyword, setKeyword] = useState('');
+			const [checkIn, setCheckIn] = useState('');
+			const [checkOut, setCheckOut] = useState('');
+			const [adults, setAdults] = useState(2);
+			const [cadenceMinutes, setCadenceMinutes] = useState(CADENCE_DEFAULT);
+			const [advancedOpen, setAdvancedOpen] = useState(false);
+			const [error, setError] = useState(null);
+			const [candidates, setCandidates] = useState([]);
+			// `{ hotelId, hotelName }` chosen from the suggestion list; null when typing.
+			const [picked, setPicked] = useState(null);
+			const [submitting, setSubmitting] = useState(false);
+			const today = todayDateKey();
+			const nights = daysBetween(checkIn, checkOut);
+			const nightsValid = nights !== null && nights >= 1 && nights <= 30;
+
+			// The rhythm default is the Host's watch rhythm; an explicit choice follows it.
+			useEffect(() => {
+				const cadence = settingsCadence(props.settings);
+				setCadenceMinutes(defaultCadence(cadence.watchMinutes));
+			}, [props.settings]);
+
+			// A suggestion belongs to one city; switching cities drops it.
+			useEffect(() => {
+				setPicked(null);
+			}, [cityCode]);
+
+			// `overrideName` 让候选列表可以「点一下就建这家」，不用用户手抄全名。
+			const submit = async (overrideName) => {
+				const code = resolveCity(cityQuery) || (cityCode !== '' ? cityCode : null);
+				if (code === null) {
+					setError(t('new.hotel.cityRequired'));
+					setCandidates([]);
+					return;
+				}
+				const name = (typeof overrideName === 'string' ? overrideName : keyword).trim();
+				if (name === '') {
+					setError(t('new.hotel.keywordRequired'));
+					setCandidates([]);
+					return;
+				}
+				if (name.length > 40) {
+					setError(t('new.hotel.keywordLength'));
+					setCandidates([]);
+					return;
+				}
+				if (!/^\d{4}-\d{2}-\d{2}$/.test(checkIn)) {
+					setError(t('new.hotel.checkInRequired'));
+					setCandidates([]);
+					return;
+				}
+				if (checkIn < today) {
+					setError(t('new.hotel.checkInPast'));
+					setCandidates([]);
+					return;
+				}
+				if (!/^\d{4}-\d{2}-\d{2}$/.test(checkOut)) {
+					setError(t('new.hotel.checkOutRequired'));
+					setCandidates([]);
+					return;
+				}
+				if (checkOut <= checkIn) {
+					setError(t('new.hotel.checkOutOrder'));
+					setCandidates([]);
+					return;
+				}
+				if (!nightsValid) {
+					setError(t('new.hotel.nightsRange'));
+					setCandidates([]);
+					return;
+				}
+				const body = {
+					type: 'hotel',
+					params: {
+						city: code,
+						cityName: cityLabel(code),
+						keyword: name,
+						checkIn,
+						checkOut,
+						adults: Math.min(6, Math.max(1, Math.round(adults))),
+					},
+					cadence: { minutes: defaultCadence(cadenceMinutes) },
+				};
+				// Suggestion pick: the Host verifies the id via /hotels/suggest and skips
+				// fuzzy name matching. Only the normal submit path uses it, never the
+				// ambiguity-candidate fallback.
+				if (typeof overrideName !== 'string' && picked !== null && typeof picked.hotelId === 'string' && picked.hotelId !== '') {
+					body.params.hotelId = picked.hotelId;
+					body.params.hotelName = picked.hotelName;
+				}
+				setSubmitting(true);
+				setError(null);
+				setCandidates([]);
+				try {
+					await props.onCreate(body);
+				} catch (reason) {
+					// Host text verbatim: 422 carries HOTEL_NOT_FOUND / HOTEL_AMBIGUOUS /
+					// HOTEL_LOOKUP_STALE. A stale pick must be dropped so the user re-selects.
+					setError(reason && reason.message ? reason.message : String(reason));
+					setCandidates(reason && Array.isArray(reason.candidates) ? reason.candidates.filter((row) => row && typeof row === 'object').slice(0, 5) : []);
+					if (reason && reason.code === 'HOTEL_LOOKUP_STALE') setPicked(null);
+				} finally {
+					setSubmitting(false);
+				}
+			};
+
+
+			return h(
+				PageShell,
+				{
+					lead: h(IconButton, { label: t('new.back'), onClick: props.onBack }, h(BackIcon, { size: 18 })),
+					title: t('new.hotel.title'),
+				},
+				props.banner,
+				h(
+					'div',
+					{ className: 'pw-form' },
+					h(
+						Group,
+						{ key: 'where', title: t('new.hotel.city') },
+						h(
+							'div',
+							{ className: 'pw-form-row' },
+							h(Field, { label: t('new.hotel.city') }, h(CityField, { query: cityQuery, onQuery: (value) => { setCityQuery(value); setCityCode(resolveCity(value) || ''); }, onPick: (code) => { setCityCode(code); setCityQuery(citySelectionLabel(code)); } })),
+							h(
+								Field,
+								{ label: t('new.hotel.keyword') },
+								h(HotelSuggest, {
+									cityCode,
+									keyword,
+									picked,
+									onKeyword: setKeyword,
+									onPick: setPicked,
+									onClear: () => setPicked(null),
+								})
+							)
+						)
+					),
+					h(
+						Group,
+						{ key: 'dates', title: t('new.hotel.dates') },
+						h(
+							'div',
+							{ className: 'pw-form-row' },
+							h(Field, { label: t('new.hotel.checkIn') }, h(DateField, { value: checkIn, min: today, onChange: setCheckIn })),
+							h(Field, { label: t('new.hotel.checkOut') }, h(DateField, { value: checkOut, min: checkIn !== '' ? checkIn : today, onChange: setCheckOut }))
+						),
+						nightsValid ? h('span', { className: 'pw-hint' }, t('new.hotel.nights', { n: nights })) : null
+					),
+					h(
+						Group,
+						{ key: 'guests', title: t('new.hotel.adults') },
+						h(Stepper, { value: adults, min: 1, max: 6, label: t('new.hotel.adults'), format: (count) => t('hotel.adults', { n: count }), onChange: setAdults })
+					),
+					h(
+						'div',
+						{ key: 'advanced', className: 'pw-adv' },
+						h(
+							'button',
+							{
+								type: 'button',
+								className: 'pw-adv-toggle',
+								'aria-expanded': advancedOpen ? 'true' : 'false',
+								onClick: () => setAdvancedOpen(!advancedOpen),
+							},
+							h(ChevronDownIcon, { size: 14 }),
+							h('span', null, t('new.advanced.title'))
+						),
+						advancedOpen
+							? h(
+									'div',
+									{ className: 'pw-adv-body' },
+									h(
+										Field,
+										{ label: t('new.advanced.cadence') },
+										h(
+											'select',
+											{ className: 'pw-input', value: String(cadenceMinutes), onChange: (event) => { const next = clampCadence(Number(event.target.value)); if (next !== null) setCadenceMinutes(next); } },
+											CADENCE_MINUTES.map((value) => h('option', { key: value, value: String(value) }, cadenceDuration(value)))
+										)
+									)
+								)
+							: null
+					),
+					error === null ? null : h(ErrorBar, { key: 'error', message: error, inline: true, onDismiss: () => setError(null) }),
+					candidates.length === 0
+						? null
+						: h(
+								'div',
+								{ key: 'candidates', className: 'pw-col', style: { gap: 6 } },
+								h('span', { className: 'pw-hint' }, t('new.hotel.candidates')),
+								h(
+									'div',
+									{ className: 'pw-hotel-candidates' },
+									candidates.map((row, index) => {
+										const label = typeof row.name === 'string' && row.name.trim() !== '' ? row.name.trim() : '—';
+										// Ctrip suggest returns no address; only append what actually exists.
+										return h(
+											Button,
+											{
+												key: typeof row.id === 'string' ? row.id : `candidate-${index}`,
+												size: 'sm',
+												disabled: submitting,
+												onClick: () => {
+													setKeyword(label);
+													setCandidates([]);
+													setPicked(null);
+													void submit(label);
+												},
+											},
+											t('new.hotel.candidate', { name: label, extra: hotelCandidateExtra(row) })
+										);
+									})
+								)
+							),
+					h(
+						'div',
+						{ key: 'submit', className: 'pw-row', style: { justifyContent: 'flex-end', gap: 8 } },
+						h(Button, { onClick: props.onBack, disabled: submitting }, t('new.back')),
+						h(Button, { variant: 'primary', onClick: () => void submit(), disabled: submitting }, submitting ? t('new.hotel.submitting') : t('new.hotel.submit'))
+					)
+				)
+			);
+		}
+
 		// #endregion
 
 		// #region page
@@ -4791,6 +5796,9 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const [flightsError, setFlightsError] = useState(null);
 			const [calendar, setCalendar] = useState(null);
 			const [calendarError, setCalendarError] = useState(null);
+			const [hotelDetail, setHotelDetail] = useState(null);
+			const [hotelDetailError, setHotelDetailError] = useState(null);
+			const [matchedHotelName, setMatchedHotelName] = useState(null);
 			const [busyKey, setBusyKey] = useState(null);
 			// Two filter levels: type is sticky, mode is only meaningful for flights.
 			const [filterType, setFilterType] = useState('flight');
@@ -4805,6 +5813,7 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			const coreSeq = useRef(0);
 			const pricesSeq = useRef(0);
 			const calendarSeq = useRef(0);
+			const hotelSeq = useRef(0);
 			const auxSeq = useRef(0);
 			const loginRef = useRef(false);
 
@@ -4867,6 +5876,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				setFlightsError(null);
 				setCalendar(null);
 				setCalendarError(null);
+				setHotelDetail(null);
+				setHotelDetailError(null);
 			}, [detailId]);
 
 			// Watch mode: reference + per-passenger series and the last flight snapshot.
@@ -4911,6 +5922,26 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					});
 				return () => {
 					calendarSeq.current += 1;
+				};
+			}, [detailId, detailMode, tick]);
+
+			// Hotel mode: one response carries both the snapshot and the price points.
+			useEffect(() => {
+				if (detailId === null || detailMode !== 'hotel') return undefined;
+				const seq = hotelSeq.current + 1;
+				hotelSeq.current = seq;
+				apiFetch(`/monitors/${encodeURIComponent(detailId)}`)
+					.then((data) => {
+						if (seq !== hotelSeq.current) return;
+						setHotelDetail(data && typeof data === 'object' ? data : null);
+						setHotelDetailError(null);
+					})
+					.catch((reason) => {
+						if (seq !== hotelSeq.current) return;
+						setHotelDetailError(reason && reason.message ? reason.message : String(reason));
+					});
+				return () => {
+					hotelSeq.current += 1;
 				};
 			}, [detailId, detailMode, tick]);
 
@@ -4989,10 +6020,22 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 			// #endregion
 
 			// #region navigation
-			const openDetail = useCallback((id) => setView({ kind: 'detail', monitorId: id }), []);
-			const goList = useCallback(() => setView({ kind: 'list', monitorId: null }), []);
-			const goSettings = useCallback(() => setView({ kind: 'settings', monitorId: null }), []);
-			const goNew = useCallback(() => setView({ kind: 'new', monitorId: null }), []);
+			const openDetail = useCallback((id) => {
+				setMatchedHotelName(null);
+				setView({ kind: 'detail', monitorId: id });
+			}, []);
+			const goList = useCallback(() => {
+				setMatchedHotelName(null);
+				setView({ kind: 'list', monitorId: null });
+			}, []);
+			const goSettings = useCallback(() => {
+				setMatchedHotelName(null);
+				setView({ kind: 'settings', monitorId: null });
+			}, []);
+			const goNew = useCallback(() => {
+				setMatchedHotelName(null);
+				setView({ kind: 'new', monitorId: null });
+			}, []);
 			// #endregion
 
 			// #region actions
@@ -5106,6 +6149,28 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 				[loadCore]
 			);
 
+			/**
+			 * Creates a hotel monitor. Errors are propagated untouched so the form can
+			 * show the Host's own 422 text (and ambiguity candidates); on success the
+			 * panel jumps to the new detail page with the resolved hotel name.
+			 */
+			const createHotelMonitor = useCallback(
+				async (body) => {
+					const data = await apiFetch('/monitors', { method: 'POST', body });
+					const created = data && data.monitor && typeof data.monitor === 'object' ? data.monitor : null;
+					await loadCore();
+					if (created && typeof created.id === 'string') {
+						const params = monitorParams(created);
+						setMatchedHotelName(typeof params.hotelName === 'string' && params.hotelName !== '' ? params.hotelName : hotelNameOf(created));
+						setView({ kind: 'detail', monitorId: created.id });
+					} else {
+						setView({ kind: 'list', monitorId: null });
+					}
+					return created;
+				},
+				[loadCore]
+			);
+
 			const saveSettings = useCallback(async (body) => {
 				await apiFetch('/settings', { method: 'POST', body });
 				const data = await apiFetch('/settings');
@@ -5148,6 +6213,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					// The refresh below clears the page error when it succeeds, so a login
 					// failure is raised afterwards to keep it on the status strip.
 					await loadCore();
+					// A hotel detail may have failed with HOTEL_LOGIN_REQUIRED; re-read it.
+					setTick((value) => value + 1);
 					if (failure !== null) setError(failure);
 				}
 			}, [loadCore]);
@@ -5199,6 +6266,10 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								passengers,
 								calendar,
 								calendarError,
+								hotelSnapshot: hotelDetail && hotelDetail.hotelSnapshot ? hotelDetail.hotelSnapshot : null,
+								hotelPoints: hotelDetail && Array.isArray(hotelDetail.points) ? hotelDetail.points : null,
+								hotelError: hotelDetailError,
+								matchedName: matchedHotelName,
 								prices,
 								pricesError,
 								flights,
@@ -5212,6 +6283,8 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 								onDelete: deleteMonitor,
 								onSaveCadence: saveCadence,
 								onSettings: goSettings,
+								loginPending,
+								onLogin: startLogin,
 								onPin: (selection) => void pinDate(detailMonitor, selection),
 							});
 			} else if (view.kind === 'settings') {
@@ -5235,15 +6308,23 @@ textarea.pw-input { height: auto; min-height: 60px; padding: 8px 10px; resize: v
 					onCleanupStorage: cleanupStorage,
 				});
 			} else if (view.kind === 'new') {
-				content = h(NewView, {
-					passengers,
-					settings,
-					banner,
-					onCreate: createMonitor,
-					onAddPassenger: addPassenger,
-					onDeletePassenger: deletePassenger,
-					onBack: goList,
-				});
+				content =
+					filterType === 'hotel'
+						? h(HotelNewView, {
+								settings,
+								banner,
+								onCreate: createHotelMonitor,
+								onBack: goList,
+							})
+						: h(NewView, {
+								passengers,
+								settings,
+								banner,
+								onCreate: createMonitor,
+								onAddPassenger: addPassenger,
+								onDeletePassenger: deletePassenger,
+								onBack: goList,
+							});
 			} else {
 				content = h(ListView, {
 					monitors,
