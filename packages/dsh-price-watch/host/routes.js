@@ -24,10 +24,20 @@
  * ignored instead of clearing the stored one. `POST /notify/test` sends one test
  * card through the configured channel for the settings page button.
  *
+ * Hotel v1 (docs/design/price-watch-hotel.md §6): `POST /monitors` with
+ * `{ type:'hotel' }` is dispatched to `actions.createHotelMonitor` (the route
+ * never touches the network itself) and its codes become 400/422/502;
+ * `POST /api/hotels/suggest` (contract §6.5) is the new-form typeahead — a
+ * read-only proxy to the hotel search module, 400 on a bad keyword, 502 when the
+ * module is missing or the network is down. A hotel
+ * list item adds `hotelName/checkIn/checkOut/nights/adults/latest/hotel`; its
+ * detail adds the whole `hotelSnapshot` under that **new** field name instead of
+ * reusing `flights` (different structure, same idea).
+ *
  * Write requests pass a same-origin check because plugin routes are not behind
  * the Host web token. Bodies are capped and destroyed when oversized.
  */
-import { MAX_BODY_BYTES, isoNow, minSeries } from './util.js';
+import { MAX_BODY_BYTES, isDateString, isoNow, minSeries, nightsBetween } from './util.js';
 import { renderPage } from './page.js';
 
 const API = '/api';
@@ -121,6 +131,43 @@ function calendarSummary(doc) {
 }
 
 /**
+ * Map a failed hotel creation to its HTTP answer (hotel spec §6.1):
+ * `HOTEL_NOT_FOUND` / `HOTEL_AMBIGUOUS` → 422 (the input is fine, the hotel is
+ * not), a network/collector problem → 502, everything else is a 400.
+ * The candidate list travels with 422 so the panel can show the near matches.
+ */
+function hotelCreateError(error) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  const message = String(error?.message || error || '新建酒店监控失败');
+  if (code === 'HOTEL_NOT_FOUND' || code === 'HOTEL_AMBIGUOUS' || code === 'HOTEL_LOOKUP_STALE') {
+    const candidates = Array.isArray(error?.candidates) ? error.candidates.slice(0, 5) : null;
+    return { status: 422, body: { ok: false, code, error: message, ...(candidates ? { candidates } : {}) } };
+  }
+  if (code === 'HOTEL_LOOKUP_NETWORK' || code === 'HOTEL_MODULE_UNAVAILABLE') {
+    return { status: 502, body: { ok: false, code, error: message } };
+  }
+  return { status: 400, body: { ok: false, error: message } };
+}
+
+/**
+ * Map a failed `POST /api/hotels/suggest` (hotel spec §6.5): the only 4xx is a
+ * bad keyword (plain Error), and every upstream problem is a 502 — either the
+ * hotel search module is not available yet or the network is down.
+ */
+function hotelSuggestError(error) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  const message = String(error?.message || error || '检索酒店失败');
+  if (code === 'HOTEL_SUGGEST_NETWORK' || code === 'HOTEL_MODULE_UNAVAILABLE') {
+    return { status: 502, body: { ok: false, code, error: message } };
+  }
+  const status = Number(error?.status);
+  if (Number.isFinite(status) && status >= 400 && status < 600) {
+    return { status, body: { ok: false, error: message } };
+  }
+  return { status: 400, body: { ok: false, error: message } };
+}
+
+/**
  * @param {object} deps
  * @param {ReturnType<import('./store.js').createStore>} deps.store
  * @param {object} deps.logger
@@ -205,6 +252,42 @@ export function createRouter({ store, logger, actions }) {
       l2: null,
     };
 
+    // 酒店监控（hotel spec §6.2）：只要人数不要乘客，主数字是整段最低总价。
+    if (monitor.type === 'hotel' || monitor.mode === 'hotel') {
+      const params = monitor.params || {};
+      const nights = nightsBetween(params.checkIn, params.checkOut);
+      item.hotelName = typeof params.hotelName === 'string' ? params.hotelName : '';
+      item.checkIn = isDateString(params.checkIn) ? params.checkIn : null;
+      item.checkOut = isDateString(params.checkOut) ? params.checkOut : null;
+      item.nights = Number.isFinite(nights) && nights > 0 ? nights : null;
+      item.adults = Number.isFinite(Number(params.adults)) ? Number(params.adults) : null;
+      const snapshot = await store.readHotelSnapshot(monitor.id);
+      item.hotel = snapshot?.hotel
+        ? {
+          name: snapshot.hotel.name,
+          star: snapshot.hotel.star,
+          score: snapshot.hotel.score,
+          address: snapshot.hotel.address,
+        }
+        : null;
+      const lowest = snapshot?.lowest && Number(snapshot.lowest.total) > 0 ? snapshot.lowest : null;
+      if (lowest) {
+        const total = Math.round(Number(lowest.total));
+        const stayNights = item.nights ?? (Number(snapshot?.nights) > 0 ? Number(snapshot.nights) : null);
+        const nightly = Number(lowest.nightly) > 0
+          ? Math.round(Number(lowest.nightly))
+          : (stayNights ? Math.round(total / stayNights) : total);
+        item.latest = {
+          total,
+          at: snapshot.fetchedAt || null,
+          note: stayNights ? `${stayNights} 晚 · 每晚 ¥${nightly}` : `每晚 ¥${nightly}`,
+        };
+      }
+      const points = await store.readPoints(monitor.id, { limit: SPARK_POINTS });
+      item.spark = points.map((point) => [point.at, point.price?.total ?? 0]);
+      return item;
+    }
+
     if (monitor.mode === 'calendar') {
       const summary = calendarSummary(await store.readCalendarSnapshot(monitor.id));
       item.calendarSummary = summary;
@@ -245,12 +328,38 @@ export function createRouter({ store, logger, actions }) {
       return sendJson(res, 200, { ok: true, data: await actions.status() });
     }
 
+    // /api/hotels/suggest — 新建酒店表单的实时联想（只读；纯 HTTP，无浏览器/登录）
+    if (segments[0] === 'hotels' && segments[1] === 'suggest' && method === 'POST') {
+      const body = await readBody(req);
+      try {
+        const data = await actions.hotelSuggest(body);
+        return sendJson(res, 200, { ok: true, data });
+      } catch (error) {
+        const answer = hotelSuggestError(error);
+        return sendJson(res, answer.status, answer.body);
+      }
+    }
+
     // /api/monitors[...]
     if (segments[0] === 'monitors') {
       if (segments.length === 1) {
         if (method === 'GET') return sendJson(res, 200, { ok: true, data: { monitors: await listMonitors() } });
         if (method === 'POST') {
           const body = await readBody(req);
+          // 酒店分支：远端校验 + 落库都在 actions 里（路由只做分发与错误映射）。
+          if (body && typeof body === 'object' && body.type === 'hotel') {
+            let monitor;
+            try {
+              monitor = await actions.createHotelMonitor(body);
+            } catch (error) {
+              const answer = hotelCreateError(error);
+              logger.info(`新建酒店监控被拒绝（${answer.status}）: ${answer.body.error}`);
+              return sendJson(res, answer.status, answer.body);
+            }
+            logger.info(`新建酒店监控 ${monitor.id} ${monitor.title}`);
+            // 落库后立即异步触发一次采集（actions 内部已排队，这里不再重复触发）。
+            return sendJson(res, 201, { ok: true, data: { monitor: await monitorListItem(monitor) } });
+          }
           const monitor = await store.createMonitor(body);
           logger.info(`新建监控 ${monitor.id} ${monitor.title}`);
           // 创建后立即异步触发一次采集，首次数据不用等心跳。
@@ -261,7 +370,8 @@ export function createRouter({ store, logger, actions }) {
       }
 
       const id = segments[1];
-      if (!/^m_[0-9a-f]{8}$/.test(id)) return sendJson(res, 400, { ok: false, error: '监控 ID 不合法' });
+      // `m_` flight monitor, `h_` hotel monitor (hotel spec §2).
+      if (!/^(m|h)_[0-9a-f]{8}$/.test(id)) return sendJson(res, 400, { ok: false, error: '监控 ID 不合法' });
       const monitor = store.findMonitor(id);
       if (!monitor) return sendJson(res, 404, { ok: false, error: '监控不存在' });
 
@@ -384,10 +494,11 @@ export function createRouter({ store, logger, actions }) {
           return sendJson(res, 200, { ok: true });
         }
         if (method === 'GET') {
-          return sendJson(res, 200, {
-            ok: true,
-            data: { ...(await monitorListItem(monitor)), points: await detailPoints(monitor) },
-          });
+          const item = await monitorListItem(monitor);
+          const data = { ...item, points: await detailPoints(monitor) };
+          // 酒店详情：快照用新字段名 `hotelSnapshot`，绝不复用 `flights`（结构不同）。
+          if (item.type === 'hotel') data.hotelSnapshot = (await store.readHotelSnapshot(id)) || null;
+          return sendJson(res, 200, { ok: true, data });
         }
       }
       return sendJson(res, 405, { ok: false, error: '方法不支持' });

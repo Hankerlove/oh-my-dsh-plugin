@@ -27,6 +27,15 @@
  * (no retry); the outcome lands in `state.delivery[id]` and `alerts.jsonl`.
  * Alert rules, cooldowns and the daily digest were deleted with rules.js.
  *
+ * Hotel v1 (docs/design/price-watch-hotel.md): a third mode, `mode:'hotel'`.
+ * Creating one first validates the body locally, then asks the (dynamically
+ * imported) hotel collector whether the hotel exists — a 422 carries "not found"
+ * / "ambiguous" without storing anything. A successful collection appends
+ * exactly one price point (the whole-stay lowest total) and writes
+ * `hotels/<id>.json`; failures are cards like every other mode, and a network
+ * failure is a silent skip + 15-minute retry. Hotel collection never gates on
+ * the flight browser login (the data source is anonymous).
+ *
  * Delivery channels A2.2 (spec §1/§5): the default is a self-built Feishu app
  * (`channel:'app'`): the trend is rendered locally to a PNG (`host/chart.js`),
  * uploaded for an `img_key`, and the card is sent to a group chat with the
@@ -57,7 +66,7 @@ import { renderTrendPng } from './host/chart.js';
 import { collectCalendar, probeL1 } from './host/collect/index.js';
 import { AuthError, BlockedError, createBrowserCollector } from './host/collect/browser.js';
 import { deliverAppCard } from './host/feishu.js';
-import { buildCalendarCard, buildFailureCard, buildTestCard, buildWatchCard, sendFeishu } from './host/notify.js';
+import { buildCalendarCard, buildFailureCard, buildHotelCard, buildTestCard, buildWatchCard, sendFeishu } from './host/notify.js';
 import { createRouter } from './host/routes.js';
 import { clampCadence, createStore } from './host/store.js';
 import { NETWORK_RETRY_MS, isNetworkError } from './host/net.js';
@@ -80,6 +89,39 @@ const BOOT_DELAY_MS = 8000;
 const L1_SPACING_MS = 1500;
 /** Health probe cache: the panel polls /status every 30s, do not hammer L1. */
 const PROBE_TTL_MS = 30 * 60000;
+
+/**
+ * 酒店采集器在另一个文件里（`host/collect/hotel.js`），可能还没落地（侦察/实现
+ * 归其他人）。动态 import 保证它缺失时插件照样加载，只在新建/采集时降级成一条
+ * 可读错误（面板与失败卡都能看到原因）。
+ */
+async function hotelModule() {
+  try {
+    return await import('./host/collect/hotel.js');
+  } catch (error) {
+    const wrapped = new Error(`酒店采集模块不可用：${String(error?.message || error)}`);
+    wrapped.code = 'HOTEL_MODULE_UNAVAILABLE';
+    throw wrapped;
+  }
+}
+
+/** 酒店采集错误码 → 面板/失败卡上的中文说明（hotel spec §5）。 */
+const HOTEL_ERROR_HINT = {
+  HOTEL_NOT_FOUND: '这家酒店在携程上已下架或 id 失效',
+  HOTEL_NO_ROOMS: '这段日期已经没有可订房型',
+  HOTEL_BAD_RESPONSE: '酒店接口返回的结构变了，暂时解析不出房型',
+  HOTEL_MODULE_UNAVAILABLE: '酒店采集模块不可用',
+  HOTEL_LOGIN_REQUIRED: '酒店价格需要携程登录，请先在面板里登录后重试',
+};
+
+/** 失败文案带上 code 对应的中文说明；collector 自己写清楚时不重复前缀。 */
+function hotelFailureMessage(error) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  const hint = HOTEL_ERROR_HINT[code];
+  const raw = String(error?.message || error || '酒店采集失败');
+  if (!hint) return raw;
+  return raw.includes(hint) ? raw : `${hint}（${code}）：${raw}`;
+}
 
 export function apply(ctx) {
   const logger = createLogger(ctx);
@@ -131,6 +173,18 @@ export function apply(ctx) {
    */
   function deliveryKeyFor(report) {
     if (report.kind === 'failure') return hashOf(['failure', String(report.error || '')]);
+    if (report.kind === 'hotel') {
+      // hotel spec §7：房型（名字+整段价）+ 最低总价 + 入离日期；同一份数据不重复推。
+      const rooms = (Array.isArray(report.snapshot?.rooms) ? report.snapshot.rooms : [])
+        .map((room) => [room?.name || '', Number(room?.price?.total) || null]);
+      return hashOf([
+        'hotel',
+        rooms,
+        Number(report.snapshot?.lowest?.total) || null,
+        report.snapshot?.checkIn || null,
+        report.snapshot?.checkOut || null,
+      ]);
+    }
     if (report.kind === 'watch') {
       const flights = (Array.isArray(report.flights) ? report.flights : []).map((flight) => [
         flight?.no || '',
@@ -166,6 +220,16 @@ export function apply(ctx) {
     // 面板里的「采集于 …」。
     const at = report.at || (report.snapshot && report.snapshot.fetchedAt) || undefined;
     if (report.kind === 'failure') return buildFailureCard({ monitor, error: report.error, at });
+    if (report.kind === 'hotel') {
+      return buildHotelCard({
+        monitor,
+        snapshot: report.snapshot || null,
+        previous: report.previous ?? null,
+        imageKey,
+        at,
+        trend,
+      });
+    }
     if (report.kind === 'watch') {
       const lowest = report.lowest || null;
       const lowestFlight = (Array.isArray(report.flights) ? report.flights : [])
@@ -240,12 +304,13 @@ export function apply(ctx) {
   /**
    * 走势图的数据：`{ values, labels }` 等长，labels 就是 X 轴刻度文字。
    *
-   *  - 监控模式：最近 20 次采集的最低可订价，刻度用采集日期（同一天内多次采集
-   *    则退到时分，否则 20 个点全是同一个日期标签、刻度没有信息量）；
+   *  - 监控 / 酒店：最近 20 次采集的最低可订价（酒店是整段最低总价），刻度用
+   *    采集日期（同一天内多次采集则退到时分，否则 20 个点全是同一个日期标签、
+   *    刻度没有信息量）；
    *  - 行情模式：未来 30 天的日历最低价，刻度用日期。
    */
   function trendDataFor(report) {
-    if (report?.kind === 'watch') {
+    if (report?.kind === 'watch' || report?.kind === 'hotel') {
       const points = (Array.isArray(report.minSeries) ? report.minSeries : [])
         .map((entry) => ({
           total: Number(entry?.total ?? entry),
@@ -622,10 +687,86 @@ export function apply(ctx) {
     }
   }
 
+  /**
+   * 酒店模式（hotel spec §4/§6.4）：每轮成功采集只追加 **1 个点** —— 该酒店这段
+   * 日期的最低整段总价，快照落 `hotels/<id>.json`。
+   *
+   * 与机票监控的差别（有意为之）：
+   *  - **不 gate 登录态**（`l2Ready()`）：酒店接口是匿名数据源，不该被携程登录态
+   *    挡住；collector 万一抛 `AuthError` 就走下面的通用失败分支；
+   *  - 网络类失败静默跳过（记 note + 15 分钟后补采，不发失败卡），其余失败
+   *    （HOTEL_NOT_FOUND / HOTEL_NO_ROOMS / HOTEL_BAD_RESPONSE / 其它）都记
+   *    failure + 正常节奏 + 一张失败卡，error 文案带 code 对应的中文说明。
+   */
+  async function collectHotelOne(monitor) {
+    const startedAt = isoNow();
+    try {
+      // 先读旧快照：卡片的「比上次 ±x%」用上一轮的最低整段总价。
+      const previousSnapshot = await store.readHotelSnapshot(monitor.id);
+      const previousTotal = Number(previousSnapshot?.lowest?.total);
+      const module = await hotelModule();
+      // 房型价格在匿名态是隐藏的（「登录看低价」）：酒店采集复用机票那份已登录的
+      // 持久化 profile —— 用 browser.withPage 在共享 context 里开一个临时页，
+      // 与机票采集共用同一个串行队列，用完自动关页。仍然**不** gate l2Ready()：
+      // 登录态缺失时 collector 抛 HOTEL_LOGIN_REQUIRED，走通用失败分支。
+      const snapshot = await module.collectHotel(monitor, { logger, withPage: (fn) => browser.withPage(fn) });
+      // 先落快照：writeHotelSnapshot 会把字段白名单规范化（数字取整、rooms 升序）。
+      const doc = await store.writeHotelSnapshot(monitor.id, snapshot);
+      const lowest = doc?.lowest && Number(doc.lowest.total) > 0 ? doc.lowest : null;
+      if (!lowest) {
+        // 契约 §3：一个可订房型都没有 ⇒ 按采集失败处理，不写价格点。
+        const error = new Error('酒店采集结果里没有可订房型');
+        error.code = 'HOTEL_NO_ROOMS';
+        throw error;
+      }
+      const at = typeof doc.fetchedAt === 'string' ? doc.fetchedAt : startedAt;
+      await store.appendPoints(monitor.id, [{
+        at,
+        key: { roomName: lowest.roomName },
+        price: { total: lowest.total, bare: lowest.total },
+        src: 'hotel',
+      }]);
+      const state = store.getState();
+      await store.saveState({
+        lastCollectAt: startedAt,
+        lastCollectBy: { ...(state.lastCollectBy || {}), [monitor.id]: startedAt },
+        failures: { ...(state.failures || {}), [monitor.id]: 0 },
+        lastError: { ...(state.lastError || {}), [monitor.id]: null },
+      });
+      await setNextDue(monitor.id, computeNextDue(monitor));
+      // 卡片的「最近 20 次采集走势」= 每轮最低整段总价（minSeries 天然如此）。
+      const history = await store.readPoints(monitor.id, { limit: 600 });
+      const delivery = await deliverReport(monitor, {
+        kind: 'hotel',
+        at,
+        snapshot: doc,
+        previous: Number.isFinite(previousTotal) && previousTotal > 0 ? previousTotal : null,
+        minSeries: minSeries(history).slice(-20),
+      });
+      return { ok: true, source: 'hotel', points: 1, delivery };
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (isNetworkError(error)) {
+        const note = `网络不可用（可能刚休眠/断网），本轮跳过，${Math.round(NETWORK_RETRY_MS / 60000)} 分钟后重试：${message}`;
+        logger.warn(`酒店采集跳过 ${monitor.title}: ${note}`);
+        await recordFailure(monitor, note);
+        await setNextDue(monitor.id, retrySoon());
+        return { ok: false, error: message, source: 'hotel', points: 0, delivery: { skipped: 'network' } };
+      }
+      const failureText = hotelFailureMessage(error);
+      logger.warn(`酒店采集失败 ${monitor.title}: ${failureText}`);
+      await recordFailure(monitor, failureText);
+      await setNextDue(monitor.id, computeNextDue(monitor));
+      const delivery = await deliverReport(monitor, { kind: 'failure', error: failureText });
+      return { ok: false, error: failureText, source: 'hotel', points: 0, delivery };
+    }
+  }
+
   /** Dispatch by mode; a failure never escapes into the scheduler. */
   async function collectOne(monitor) {
     try {
       if (monitor.mode === 'calendar') return await collectCalendarOne(monitor);
+      if (monitor.mode === 'hotel') return await collectHotelOne(monitor);
       return await collectWatchOne(monitor);
     } catch (error) {
       logger.warn(`采集流程异常 ${monitor?.title || monitor?.id}: ${String(error?.message || error)}`);
@@ -636,12 +777,16 @@ export function apply(ctx) {
 
   // #region expired monitors (D1)
   /**
-   * 这个监控的「最后一天」：单程看 departDate，往返看 returnDate。行情模式没有
-   * 日期（日期待定），永远返回 null —— 它不该因为时间流逝被删掉。
+   * 这个监控的「最后一天」：单程看 departDate，往返看 returnDate，酒店看
+   * checkOut（契约 §6.4：`checkOut < 今天` 即过期）。行情模式没有日期
+   * （日期待定），永远返回 null —— 它不该因为时间流逝被删掉。
    */
   function expiryDateOf(monitor) {
-    if (monitor?.mode !== 'watch') return null;
     const params = monitor?.params || {};
+    if (monitor?.mode === 'hotel') {
+      return isDateString(params.checkOut) ? params.checkOut : null;
+    }
+    if (monitor?.mode !== 'watch') return null;
     const date = params.trip === 'round' ? params.returnDate || params.departDate : params.departDate;
     return isDateString(date) ? date : null;
   }
@@ -720,6 +865,151 @@ export function apply(ctx) {
   }
 
   const actions = {
+    /**
+     * 新建酒店表单的联想下拉（hotel spec §6.5）：只读、不落库、不写日志。
+     *
+     * 纯 HTTP 数据源（60s 缓存由采集器负责），Host 这边只做参数校验与错误归类：
+     *  - keyword 1–40 字，否则普通 Error ⇒ 路由 400；
+     *  - 检索器未落地 / 没导出 suggestHotels ⇒ 502 `HOTEL_MODULE_UNAVAILABLE`；
+     *  - 网络不可用 ⇒ 502 `HOTEL_SUGGEST_NETWORK`；
+     *  - 成功原样透传（最多 8 条，字段一个不加）。
+     */
+    hotelSuggest: async (body) => {
+      const input = body && typeof body === 'object' ? body : {};
+      const keyword = String(input.keyword ?? '').trim();
+      const keywordLength = [...keyword].length;
+      if (keywordLength < 1 || keywordLength > 40) throw new Error('酒店名称需要 1–40 个字');
+
+      const module = await hotelModule();
+      if (typeof module.suggestHotels !== 'function') {
+        const missing = new Error('酒店检索模块不可用：suggestHotels 未导出');
+        missing.code = 'HOTEL_MODULE_UNAVAILABLE';
+        throw missing;
+      }
+
+      let hotels;
+      try {
+        hotels = await module.suggestHotels({
+          city: String(input.city ?? '').trim().toUpperCase(),
+          cityName: String(input.cityName ?? '').trim(),
+          keyword,
+        });
+      } catch (error) {
+        if (isNetworkError(error)) {
+          const network = new Error('检索酒店时网络不可用，请稍后再试');
+          network.code = 'HOTEL_SUGGEST_NETWORK';
+          throw network;
+        }
+        // 解析/结构异常等非网络问题：502，别把 500 堆栈丢给表单。
+        const failure = new Error(`检索酒店失败：${String(error?.message || error)}`);
+        failure.status = 502;
+        throw failure;
+      }
+      return { hotels: (Array.isArray(hotels) ? hotels : []).slice(0, 8) };
+    },
+    /**
+     * 新建酒店监控（hotel spec §6.1）：本地校验 → 远端校验酒店存在 → 落库 → 立即采集。
+     * 路由只负责把这里抛出的 `code` 映射成 400/422/502，不做任何网络请求。
+     *
+     * 返回 store 里的 monitor 对象；列表项由 routes 用 `monitorListItem()` 组装。
+     */
+    createHotelMonitor: async (body) => {
+      await store.init();
+      // 1) 本地校验（普通 Error ⇒ 路由 400）。必须在远端校验之前，省一次请求。
+      const params = store.validateHotelInput(body);
+      const cadence = body && typeof body === 'object' ? body.cadence : undefined;
+
+      // 2) 远端校验：这家酒店在携程上到底存不存在。
+      const module = await hotelModule();
+
+      // 2a) 联想下拉选中后带 hotelId（契约 §6.1）：confirmHotelId 确认这个 id 仍在
+      //     候选里（纯 HTTP，不占浏览器），通过就直接用该 id 落库、**跳过名称匹配**，
+      //     避免「全季酒店(上海虹桥中山西路店)」被错配到同品牌另一家门店。
+      //     confirmHotelId 还没落地时退回下面的名称匹配流程（不因新接口缺失报错）。
+      if (params.hotelId && typeof module.confirmHotelId === 'function') {
+        let stillValid;
+        try {
+          stillValid = await module.confirmHotelId({
+            hotelId: params.hotelId,
+            hotelName: params.hotelName || params.keyword,
+            cityName: params.cityName,
+          });
+        } catch (error) {
+          if (isNetworkError(error)) {
+            const network = new Error('校验酒店时网络不可用，请稍后再试');
+            network.code = 'HOTEL_LOOKUP_NETWORK';
+            throw network;
+          }
+          throw error;
+        }
+        if (stillValid !== true) {
+          const stale = new Error('这家酒店在携程上已下架或名称有变化，请重新选择');
+          stale.code = 'HOTEL_LOOKUP_STALE';
+          throw stale;
+        }
+        const monitor = await store.createHotelMonitor({
+          params: { ...params, hotelId: params.hotelId, hotelName: params.hotelName || params.keyword },
+          cadence,
+        });
+        void actions.refreshMonitor(monitor.id, { immediate: true }).catch(() => {});
+        return monitor;
+      }
+
+      // 2b) 名称匹配（不带 hotelId，或 confirmHotelId 尚未落地）：保持原流程。
+      let lookup;
+      try {
+        lookup = await module.lookupHotel({
+          city: params.city,
+          cityName: params.cityName,
+          keyword: params.keyword,
+          // 列表页搜索结果强依赖用户真实日期（实测：用今天搜不到目标门店、还会错配
+          // 到同品牌另一家店），所以必须把用户选的入住/离店日期透传给采集器。
+          checkIn: params.checkIn,
+          checkOut: params.checkOut,
+          // 与采集同一份已登录 context；playwright 未装时它会自己抛错，走 502/错误映射。
+          withPage: (fn) => browser.withPage(fn),
+        });
+      } catch (error) {
+        if (isNetworkError(error)) {
+          const network = new Error('校验酒店时网络不可用，请稍后再试');
+          network.code = 'HOTEL_LOOKUP_NETWORK';
+          throw network;
+        }
+        throw error;
+      }
+
+      if (!lookup || lookup.found !== true) {
+        if (lookup && lookup.reason === 'ambiguous') {
+          // 采集器可能给更具体的提示（品牌词 →「这是品牌名，请选择具体门店」），
+          // 有就用它，没有退回通用文案。客户端把 error 原文显示在表单里。
+          const hint = typeof lookup.hint === 'string' ? lookup.hint.trim() : '';
+          const ambiguous = new Error(hint !== '' ? hint : '匹配到多家同名酒店，请把酒店名称写得更完整');
+          ambiguous.code = 'HOTEL_AMBIGUOUS';
+          ambiguous.candidates = (Array.isArray(lookup.candidates) ? lookup.candidates : [])
+            .slice(0, 5)
+            .map((candidate) => ({
+              id: candidate && candidate.id !== undefined && candidate.id !== null ? String(candidate.id) : '',
+              name: String(candidate?.name || ''),
+              address: String(candidate?.address || ''),
+              score: Number.isFinite(Number(candidate?.score)) ? Number(candidate.score) : null,
+            }));
+          throw ambiguous;
+        }
+        // 不存在就不落库：422 之后 monitors.json 不能多出任何东西。
+        const notFound = new Error(`携程上没有找到「${params.keyword}」这家酒店，请检查城市和酒店名称`);
+        notFound.code = 'HOTEL_NOT_FOUND';
+        throw notFound;
+      }
+
+      const hotel = lookup.hotel && typeof lookup.hotel === 'object' ? lookup.hotel : {};
+      const monitor = await store.createHotelMonitor({
+        params: { ...params, hotelId: hotel.id, hotelName: hotel.name },
+        cadence,
+      });
+      // 3) 落库成功 → 立即异步采集一次；HTTP 响应不等它。
+      void actions.refreshMonitor(monitor.id, { immediate: true }).catch(() => {});
+      return monitor;
+    },
     /**
      * Manual "collect now" (spec §5). No `{ l2: true }` distinction any more:
      * a calendar monitor runs L1, a watch monitor runs L2. The old parameter is
@@ -804,7 +1094,7 @@ export function apply(ctx) {
       const monitors = store.listMonitors();
       const failures = Object.values(state.failures || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
       return {
-        version: '0.14.1',
+        version: '0.15.0',
         auth: { ...(state.auth || { status: 'unknown' }), available },
         lastCollectAt: state.lastCollectAt,
         monitorCount: monitors.length,
@@ -866,5 +1156,5 @@ export function apply(ctx) {
     logger.warn('price-watch 定时器注册失败，只能手动刷新', error);
   }
 
-  logger.info('price-watch 已加载（频率模型 v2：行情=L1 / 监控=L2，统一频率档位）');
+  logger.info('price-watch 已加载（行情=L1 / 监控=L2 / 酒店=匿名接口，统一频率档位）');
 }

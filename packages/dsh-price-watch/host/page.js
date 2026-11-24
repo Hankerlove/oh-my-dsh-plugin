@@ -137,6 +137,15 @@ export function renderPage({ title = '价格监控', origin = '' } = {}) {
   function dateLabel(m) {
     var p = m.params || {};
     if (m.mode === 'calendar') return p.trip === 'round' ? '往返 · 日期待定' : '单程 · 日期待定';
+    // 酒店监控（mode: 'hotel'）没有 departDate：用住期 + 晚数 + 人数，别渲染成 undefined。
+    if (m.mode === 'hotel') {
+      var nights = Number(m.nights) > 0 ? Number(m.nights) : null;
+      var adults = Number(m.adults) > 0 ? Number(m.adults) : null;
+      var parts = [String(p.checkIn || '') + ' → ' + String(p.checkOut || '')];
+      if (nights !== null) parts.push(nights + ' 晚');
+      if (adults !== null) parts.push(adults + ' 人');
+      return parts.join(' · ');
+    }
     return p.trip === 'round' ? (p.departDate + ' → ' + p.returnDate) : p.departDate;
   }
 

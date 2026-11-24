@@ -2320,9 +2320,50 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     return next;
   }
 
+  /**
+   * 在**共享的**持久化上下文里跑一个页面，然后关掉它。
+   *
+   * 酒店板块（`host/collect/hotel.js`）用它，而不是自己 `chromium.launch()`：
+   *  - 房型价格在匿名态是隐藏的（「登录看低价」），必须复用机票这份已登录的
+   *    profile；另起一个浏览器等于让用户再登录一次，而且 memory 翻倍；
+   *  - 复用同一个 `queue` 与 `collecting` 标记，机票采集与酒店采集天然串行，
+   *    不会出现两个页面同时打携程；
+   *  - 页面用完即关，空闲后 `scheduleIdleClose()` 照旧回收上下文。
+   *
+   * 传给 `fn` 的 page 已经设好默认超时；调用方自己负责 `goto` 与
+   * `waitForResponse` 的先后顺序（先挂监听再导航）。
+   */
+  function withPage(fn, { timeoutMs = 90000 } = {}) {
+    const run = async () => {
+      if (loggingIn) throw new Error('正在登录携程，请等登录窗口结束后再试');
+      const ctx = await ensureContext({ visible: false });
+      const page = await ctx.newPage();
+      try {
+        page.setDefaultTimeout(timeoutMs);
+        return await fn(page);
+      } finally {
+        await page.close().catch(() => {});
+        scheduleIdleClose();
+      }
+    };
+    const wrapped = async () => {
+      collecting = true;
+      try {
+        return await run();
+      } finally {
+        collecting = false;
+      }
+    };
+    const next = queue.then(wrapped, wrapped);
+    queue = next.catch(() => {});
+    return next;
+  }
+
   return {
     id: 'ctrip-browser',
     isAvailable: async () => Boolean(await loadPlaywright()),
+    /** 共享上下文的一个临时页面（酒店采集用；见上）。 */
+    withPage,
     /** Last `playwright-core` resolution error, for the panel's diagnostics. */
     loadError: () => lastLoadError,
     authStatus,

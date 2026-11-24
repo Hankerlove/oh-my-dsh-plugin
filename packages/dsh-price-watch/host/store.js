@@ -5,12 +5,20 @@
  * directory:
  *
  *   config.json      passengers, the two global cadences, the Feishu webhook
- *   monitors.json    the watched routes, each either `calendar` or `watch`
+ *   monitors.json    the watched targets: flight (`calendar` / `watch`) or `hotel`
  *   state.json       scheduler cursors, last-run marks, delivery bookkeeping
- *   prices/*.jsonl   one append-only series per watch monitor (L2 points only)
+ *   prices/*.jsonl   one append-only series per watch/hotel monitor
  *   calendar/*.json  latest full calendar snapshot per calendar monitor
  *   flights/*.json   latest browser flight list per watch monitor (+ D10 roundTrip)
+ *   hotels/*.json    latest room/price snapshot per hotel monitor (hotel spec §3)
  *   alerts.jsonl     the delivery log (kept under its historical name)
+ *
+ * Hotel monitors v1 (docs/design/price-watch-hotel.md): `type:'hotel'`,
+ * `mode:'hotel'`, `h_` ids, no passengers (only `params.adults`) and
+ * `params.rooms` pinned to 1. Their snapshot has its own whitelist
+ * (`normaliseHotelSnapshot`): integer prices, unknown room types dropped and
+ * rooms sorted by the whole-stay total. A bad hotel record must always load —
+ * `normaliseStoredMonitor` degrades instead of throwing.
  *
  * Storage tools (D-group follow-up): `storageReport()` sizes the data directory
  * for the settings page and `cleanupStorage()` deletes the `*.removed` leftovers
@@ -64,13 +72,16 @@ import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } fro
 import { dirname, join } from 'node:path';
 
 import {
+  CITY_NAMES,
   cityCode,
+  hotelMonitorId,
   isDateString,
   isoDate,
   isoNow,
   monitorId,
   monitorMode,
   monitorTitle,
+  nightsBetween,
   numberOr,
   passengerId,
 } from './util.js';
@@ -82,6 +93,12 @@ const MAX_DELIVERIES = 5000;
 /** Hard cap on watched routes. */
 export const MAX_MONITORS = 20;
 export const MAX_PASSENGERS = 12;
+
+/** Hotel v1 bounds (hotel spec §2): 1–30 nights, 1–6 guests, 1 room. */
+export const MAX_HOTEL_NIGHTS = 30;
+export const HOTEL_ADULTS = { min: 1, max: 6, fallback: 2 };
+/** Longest accepted hotel keyword, in characters (hotel spec §6.1). */
+export const MAX_HOTEL_KEYWORD = 40;
 
 /**
  * The one and only cadence ladder, in minutes, shared by both modes:
@@ -115,6 +132,9 @@ const DEFAULT_CONFIG = () => ({
  * State that survives A2. Written in a fixed key order so that the document
  * round-trips byte-identically through `normaliseState()`.
  */
+/** Card kinds that may appear in the delivery log; `hotel` joined in v0.15. */
+const DELIVERY_KINDS = ['calendar', 'watch', 'hotel', 'failure'];
+
 const DEFAULT_STATE = () => ({
   lastCollectAt: null,
   lastCollectBy: {},
@@ -239,12 +259,149 @@ function normaliseCadence(input, config, mode = 'watch') {
   return { minutes: clampCadence(value, fallback) };
 }
 
+// #region hotel helpers
+/**
+ * A hotel monitor is recognised from the data itself, not just `type`: hand-edited
+ * or older documents may carry `mode:'hotel'` / hotel params without a proper
+ * `type`, and `checkIn` never appears on a flight monitor.
+ */
+function isHotelMonitor(monitor) {
+  if (!monitor || typeof monitor !== 'object') return false;
+  if (monitor.type === 'hotel' || monitor.mode === 'hotel') return true;
+  return Boolean(monitor.params && typeof monitor.params === 'object' && isDateString(monitor.params.checkIn));
+}
+
+/** 入住人数：1–6 的整数，任何越界/非法输入都收进范围（读取旧数据用）。 */
+function clampAdults(value, fallback = HOTEL_ADULTS.fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(HOTEL_ADULTS.max, Math.max(HOTEL_ADULTS.min, Math.round(n)));
+}
+
+/** 严格的入住人数校验（新建/修改用）：非整数或越界直接报错。 */
+function strictAdults(value) {
+  if (value === undefined || value === null || value === '') return HOTEL_ADULTS.fallback;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < HOTEL_ADULTS.min || n > HOTEL_ADULTS.max) {
+    throw new Error(`入住人数需要是 ${HOTEL_ADULTS.min}–${HOTEL_ADULTS.max} 之间的整数`);
+  }
+  return n;
+}
+
+/**
+ * 酒店监控参数的严格校验（hotel spec §6.1）。失败 throw 普通 Error，由路由转 400。
+ *
+ * 只校验本地字段，**不做任何网络请求**；`requireIdentity` 控制是否要求
+ * `hotelId`/`hotelName`（新建时必须、改日期/人数时已有）。
+ * `requireFuture` 只用于新建：`checkIn >= 今天`；改在住行程时不再卡这条。
+ */
+function normaliseHotelParams(input, { requireIdentity = true, requireFuture = true, validateOptionalIdentity = false } = {}) {
+  const raw = input && typeof input === 'object' ? input : {};
+  const city = cityCode(raw.city);
+  if (city.length !== 3) throw new Error('城市需要是 3 位城市三字码（如 SHA）');
+  const cityName = String(raw.cityName || CITY_NAMES[city] || city).trim().slice(0, 20) || city;
+
+  const keyword = String(raw.keyword ?? '').trim();
+  const keywordLength = [...keyword].length;
+  if (keywordLength < 1) throw new Error('酒店名称不能为空');
+  if (keywordLength > MAX_HOTEL_KEYWORD) throw new Error(`酒店名称最多 ${MAX_HOTEL_KEYWORD} 个字`);
+
+  const checkIn = isDateString(raw.checkIn) ? raw.checkIn : '';
+  if (!checkIn) throw new Error('入住日期格式应为 YYYY-MM-DD');
+  const checkOut = isDateString(raw.checkOut) ? raw.checkOut : '';
+  if (!checkOut) throw new Error('离店日期格式应为 YYYY-MM-DD');
+  if (requireFuture && checkIn < isoDate()) throw new Error('入住日期不能早于今天');
+  const nights = nightsBetween(checkIn, checkOut);
+  if (!(Number.isFinite(nights) && nights > 0)) throw new Error('离店日期必须晚于入住日期');
+  if (nights > MAX_HOTEL_NIGHTS) throw new Error(`入住晚数不能超过 ${MAX_HOTEL_NIGHTS} 晚`);
+
+  // 联想下拉选中后可选带上 hotelId / hotelName（契约 §6.1）。这里只做**本地**
+  // 格式校验：id 是 4–12 位数字（携程 productId），名称给了就 1–60 字；
+  // 「这个 id 是否仍在候选里」由 index.js 的 confirmHotelId 远端确认。
+  const rawHotelId = raw.hotelId;
+  const hotelId = rawHotelId === undefined || rawHotelId === null || rawHotelId === ''
+    ? ''
+    : String(rawHotelId).trim();
+  const rawHotelName = String(raw.hotelName ?? '').trim();
+  const hotelName = rawHotelName.slice(0, 60);
+  const hasIdentityInput = rawHotelId !== undefined || raw.hotelName !== undefined;
+  if ((requireIdentity || validateOptionalIdentity || hasIdentityInput) && hotelId && !/^\d{4,12}$/.test(hotelId)) {
+    throw new Error('酒店 ID 格式不正确');
+  }
+  if ((requireIdentity || validateOptionalIdentity) && rawHotelName) {
+    const hotelNameLength = [...rawHotelName].length;
+    if (hotelNameLength < 1 || hotelNameLength > 60) throw new Error('酒店名称需要 1–60 个字');
+  }
+  if (requireIdentity) {
+    if (!hotelId || !rawHotelName) throw new Error('酒店信息不完整，请重新校验酒店');
+  }
+
+  // 字段顺序固定：monitors.json 的酒店项按契约 §2 的顺序落盘，读起来稳定。
+  return {
+    city,
+    cityName,
+    keyword,
+    hotelId,
+    hotelName,
+    checkIn,
+    checkOut,
+    adults: strictAdults(raw.adults),
+    rooms: 1,
+  };
+}
+
+/**
+ * 读取磁盘上的酒店参数：绝不 throw。坏字段保留到「能展示」的程度，
+ * 缺失的日期留空字符串（监控仍能加载，采集时自然失败并写原因）。
+ */
+function normaliseStoredHotelParams(raw) {
+  const input = raw && typeof raw === 'object' ? raw : {};
+  try {
+    return normaliseHotelParams(input, { requireIdentity: false, requireFuture: false });
+  } catch {
+    const city = cityCode(input.city);
+    return {
+      city,
+      cityName: String(input.cityName || CITY_NAMES[city] || city).trim().slice(0, 20) || city,
+      keyword: String(input.keyword ?? '').trim().slice(0, MAX_HOTEL_KEYWORD),
+      hotelId: String(input.hotelId ?? '').trim().slice(0, 64),
+      hotelName: String(input.hotelName ?? '').trim().slice(0, 80),
+      checkIn: isDateString(input.checkIn) ? input.checkIn : '',
+      checkOut: isDateString(input.checkOut) ? input.checkOut : '',
+      adults: clampAdults(input.adults),
+      rooms: 1,
+    };
+  }
+}
+
+/** 酒店监控的磁盘读取升级：保留 type/mode='hotel'，不经过机票的 normaliseParams。 */
+function normaliseStoredHotelMonitor(monitor, config) {
+  const params = normaliseStoredHotelParams(monitor?.params);
+  return {
+    id: monitor.id,
+    type: 'hotel',
+    mode: 'hotel',
+    title: monitorTitle(params),
+    enabled: monitor.enabled !== false,
+    params,
+    // 酒店只要人数，不要乘客（契约 §2：passengerIds 恒为空数组）。
+    passengerIds: [],
+    cadence: normaliseCadence(monitor.cadence, config, 'watch'),
+    createdAt: typeof monitor.createdAt === 'string' ? monitor.createdAt : isoNow(),
+    updatedAt: typeof monitor.updatedAt === 'string' ? monitor.updatedAt : isoNow(),
+  };
+}
+// #endregion
+
 /**
  * Lenient monitor upgrade: anything read from disk must survive even if it has
  * no `mode` (M1/M2 schema) or half-valid params. Never throws.
  */
 function normaliseStoredMonitor(monitor, config) {
   if (!monitor || typeof monitor !== 'object' || !monitor.id) return null;
+  // 酒店分支必须早于机票的 normaliseParams 判断：它们的 params 结构完全不同。
+  if (isHotelMonitor(monitor)) return normaliseStoredHotelMonitor(monitor, config);
   const params = { ...(monitor.params && typeof monitor.params === 'object' ? monitor.params : {}) };
   const trip = params.trip === 'round' ? 'round' : 'oneway';
   params.trip = trip;
@@ -299,7 +456,7 @@ function normaliseDelivery(raw) {
       at: typeof entry.at === 'string' ? entry.at : null,
       ok: entry.ok === true,
       error: typeof entry.error === 'string' ? entry.error : null,
-      kind: entry.kind === 'watch' || entry.kind === 'failure' ? entry.kind : 'calendar',
+      kind: DELIVERY_KINDS.includes(entry.kind) ? entry.kind : 'calendar',
     };
   }
   return out;
@@ -347,6 +504,7 @@ export function createStore(rootDir) {
   const pricesDir = join(rootDir, 'prices');
   const calendarDir = join(rootDir, 'calendar');
   const flightsDir = join(rootDir, 'flights');
+  const hotelsDir = join(rootDir, 'hotels');
   const configPath = join(rootDir, 'config.json');
   const monitorsPath = join(rootDir, 'monitors.json');
   const statePath = join(rootDir, 'state.json');
@@ -399,6 +557,7 @@ export function createStore(rootDir) {
       await mkdir(pricesDir, { recursive: true });
       await mkdir(calendarDir, { recursive: true });
       await mkdir(flightsDir, { recursive: true });
+      await mkdir(hotelsDir, { recursive: true });
 
       const configDoc = await readJson(configPath, null);
       cache.config = normaliseConfig(configDoc.value);
@@ -588,11 +747,77 @@ export function createStore(rootDir) {
     return monitor;
   }
 
+  /**
+   * Hotel v1 creation (hotel spec §6.1). Local validation only — the remote
+   * "does this hotel exist" check belongs to the scheduler action, which then
+   * passes the resolved `hotelId`/`hotelName` in here. Re-validates everything
+   * on purpose so a bypassing caller still cannot store garbage.
+   */
+  async function createHotelMonitor(rawInput) {
+    if (cache.monitors.length >= MAX_MONITORS) throw new Error(`监控任务已达上限（${MAX_MONITORS}）`);
+    const input = rawInput && typeof rawInput === 'object' ? rawInput : {};
+    const params = normaliseHotelParams(inputParams(input), { requireIdentity: true, requireFuture: true });
+    const now = isoNow();
+    const monitor = {
+      id: hotelMonitorId(),
+      type: 'hotel',
+      mode: 'hotel',
+      title: monitorTitle(params),
+      enabled: true,
+      params,
+      passengerIds: [],
+      cadence: normaliseCadence(input.cadence, cache.config, 'watch'),
+      createdAt: now,
+      updatedAt: now,
+    };
+    cache.monitors.push(monitor);
+    await saveMonitors();
+    return monitor;
+  }
+
+  /**
+   * Local validation for the HTTP layer, exposed so `actions.createHotelMonitor`
+   * can reject a bad body **before** it spends a network lookup.
+   * Accepts the flat params object or `{ params:{...} }`; throws a plain Error.
+   */
+  function validateHotelInput(rawInput) {
+    const input = rawInput && typeof rawInput === 'object' ? rawInput : {};
+    // 新建前只做本地校验（不查远端）：日期要合法且在未来，联想下拉带来的
+    // 可选 hotelId / hotelName 也要先过格式（非法 → 路由 400）。
+    return normaliseHotelParams(inputParams(input), {
+      requireIdentity: false,
+      requireFuture: true,
+      validateOptionalIdentity: true,
+    });
+  }
+
+  async function updateHotelMonitor(index, current, input) {
+    const next = { ...current, updatedAt: isoNow() };
+    if (input.enabled !== undefined) next.enabled = Boolean(input.enabled);
+    if (input.params !== undefined) {
+      // 改日期/人数：只做本地校验 + 重算 title，**不重新校验酒店**（id 已在库）。
+      next.params = normaliseHotelParams(
+        { ...current.params, ...inputParams(input.params) },
+        { requireIdentity: false, requireFuture: false },
+      );
+      next.title = monitorTitle(next.params);
+    }
+    if (input.cadence !== undefined) next.cadence = normaliseCadence(input.cadence, cache.config, 'watch');
+    // 酒店只有一种模式：任何路径都不能把它改成 calendar/watch。
+    next.type = 'hotel';
+    next.mode = 'hotel';
+    next.passengerIds = [];
+    cache.monitors[index] = next;
+    await saveMonitors();
+    return next;
+  }
+
   async function updateMonitor(id, patch) {
     const index = cache.monitors.findIndex((item) => item.id === id);
     if (index < 0) return null;
     const input = patch && typeof patch === 'object' ? patch : {};
     const current = cache.monitors[index];
+    if (isHotelMonitor(current)) return updateHotelMonitor(index, current, input);
     const next = { ...current, updatedAt: isoNow() };
 
     if (input.enabled !== undefined) next.enabled = Boolean(input.enabled);
@@ -627,7 +852,12 @@ export function createStore(rootDir) {
     await saveMonitors();
     // Snapshots and the series are per monitor: move them aside, never delete
     // in place, so a mistaken removal can still be recovered by hand.
-    for (const path of [join(pricesDir, `${id}.jsonl`), join(calendarDir, `${id}.json`), join(flightsDir, `${id}.json`)]) {
+    for (const path of [
+      join(pricesDir, `${id}.jsonl`),
+      join(calendarDir, `${id}.json`),
+      join(flightsDir, `${id}.json`),
+      join(hotelsDir, `${id}.json`),
+    ]) {
       try {
         await rename(path, `${path}.removed`);
       } catch {
@@ -897,6 +1127,128 @@ export function createStore(rootDir) {
   }
   // #endregion
 
+  // #region hotel snapshots
+  /** 金额：正整数元；无效返回 null。 */
+  function hotelMoney(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+  }
+
+  /** 文本字段：去空白、限长；空串/非字符串 → null。 */
+  function hotelText(value, max = 120) {
+    if (typeof value !== 'string') return null;
+    const text = value.trim();
+    return text ? text.slice(0, max) : null;
+  }
+
+  /** 契约 §3 的酒店信息，字段齐全、类型稳定。 */
+  function normaliseHotelInfo(value) {
+    const input = value && typeof value === 'object' ? value : {};
+    const star = Number(input.star);
+    const score = Number(input.score);
+    return {
+      id: input.id === undefined || input.id === null ? '' : String(input.id).trim().slice(0, 64),
+      name: hotelText(input.name) || '',
+      star: Number.isFinite(star) && star > 0 ? Math.round(star) : null,
+      score: Number.isFinite(score) && score > 0 ? Math.round(score * 10) / 10 : null,
+      scoreLabel: hotelText(input.scoreLabel, 20),
+      address: hotelText(input.address, 200),
+      district: hotelText(input.district, 60),
+      cityName: hotelText(input.cityName, 20),
+    };
+  }
+
+  /**
+   * 契约 §3 的房型数组：只留「有名字 + 可订 + 整段总价有效」的房型，按整段
+   * 总价升序；未知/残缺房型直接丢弃（面板和卡片都不该出现占位脏行）。
+   * `nightly` 缺省时用 `total / nights` 取整补齐（契约的价格口径）。
+   */
+  function normaliseHotelRooms(list, nights) {
+    if (!Array.isArray(list)) return [];
+    const rooms = [];
+    for (const room of list) {
+      if (!room || typeof room !== 'object') continue;
+      const name = hotelText(room.name, 60);
+      if (!name) continue;
+      if (room.bookable === false) continue;
+      const total = hotelMoney(room.price?.total);
+      if (total === null) continue;
+      const nightly = hotelMoney(room.price?.nightly) ?? (nights > 0 ? Math.round(total / nights) : total);
+      // 「数字转整数」：采集器若给了数字字符串也收下，非法值给 null。
+      const left = Number.isFinite(Number(room.left)) ? Math.max(0, Math.round(Number(room.left))) : null;
+      rooms.push({
+        id: room.id === undefined || room.id === null ? '' : String(room.id).slice(0, 40),
+        name,
+        bed: hotelText(room.bed, 40),
+        area: hotelText(room.area, 20),
+        window: room.window === true ? true : room.window === false ? false : null,
+        // v1 不区分含早/可取消（契约 §3）：恒为 null，别让采集器顺手塞值。
+        breakfast: null,
+        cancellable: null,
+        left,
+        bookable: true,
+        price: { nightly, total },
+      });
+    }
+    rooms.sort((a, b) => a.price.total - b.price.total);
+    return rooms;
+  }
+
+  /**
+   * 契约 §3 快照白名单。未知字段全部丢弃，数字转整数，`lowest` 缺省用
+   * `rooms[0]` 补齐；`rooms` 只作为**房型数组**落盘（契约 §3 的示例里同名
+   * 数字型 key 是笔误，间数口径由 `monitor.params.rooms` 承担）。
+   */
+  function normaliseHotelSnapshot(snapshot) {
+    const input = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    const checkIn = isDateString(input.checkIn) ? input.checkIn : '';
+    const checkOut = isDateString(input.checkOut) ? input.checkOut : '';
+    const computedNights = nightsBetween(checkIn, checkOut);
+    const nights = computedNights !== null && computedNights > 0
+      ? computedNights
+      : Math.max(0, Math.round(Number(input.nights) || 0));
+    const rooms = normaliseHotelRooms(input.rooms, nights);
+    const first = rooms[0] || null;
+    const lowestInput = input.lowest && typeof input.lowest === 'object' ? input.lowest : null;
+    const lowestTotal = hotelMoney(lowestInput?.total) ?? (first ? first.price.total : null);
+    const lowest = lowestTotal === null
+      ? null
+      : {
+        roomId: typeof lowestInput?.roomId === 'string' && lowestInput.roomId
+          ? lowestInput.roomId
+          : (first ? first.id : ''),
+        roomName: typeof lowestInput?.roomName === 'string' && lowestInput.roomName
+          ? lowestInput.roomName
+          : (first ? first.name : ''),
+        nightly: hotelMoney(lowestInput?.nightly) ?? (nights > 0 ? Math.round(lowestTotal / nights) : lowestTotal),
+        total: lowestTotal,
+      };
+    return {
+      fetchedAt: typeof input.fetchedAt === 'string' ? input.fetchedAt : isoNow(),
+      checkIn,
+      checkOut,
+      nights,
+      adults: clampAdults(input.adults),
+      source: typeof input.source === 'string' && input.source ? input.source.slice(0, 20) : 'ctrip',
+      hotel: normaliseHotelInfo(input.hotel),
+      rooms,
+      lowest,
+    };
+  }
+
+  async function readHotelSnapshot(id) {
+    const doc = (await readJson(join(hotelsDir, `${id}.json`), null)).value;
+    if (!doc || typeof doc !== 'object') return null;
+    return normaliseHotelSnapshot(doc);
+  }
+
+  async function writeHotelSnapshot(id, snapshot) {
+    const doc = normaliseHotelSnapshot(snapshot);
+    await writeJsonAtomic(join(hotelsDir, `${id}.json`), doc);
+    return doc;
+  }
+  // #endregion
+
   // #region state
   function getState() {
     return cache.state;
@@ -961,7 +1313,7 @@ export function createStore(rootDir) {
     const line = JSON.stringify({
       monitorId: String(entry?.monitorId || ''),
       title: String(entry?.title || ''),
-      kind: entry?.kind === 'watch' || entry?.kind === 'failure' ? entry.kind : 'calendar',
+      kind: DELIVERY_KINDS.includes(entry?.kind) ? entry.kind : 'calendar',
       at: typeof entry?.at === 'string' ? entry.at : isoNow(),
       ok: entry?.ok === true,
       error: typeof entry?.error === 'string' ? entry.error : null,
@@ -1074,10 +1426,10 @@ export function createStore(rootDir) {
     return { bytes };
   }
 
-  /** 所有 `*.removed` 残留（根目录 + 三个数据目录）。 */
+  /** 所有 `*.removed` 残留（根目录 + 四个数据目录）。 */
   async function removedStats() {
     const isRemoved = (name) => name.endsWith('.removed');
-    const parts = await Promise.all([rootDir, pricesDir, calendarDir, flightsDir].map((dir) => dirStats(dir, isRemoved)));
+    const parts = await Promise.all([rootDir, pricesDir, calendarDir, flightsDir, hotelsDir].map((dir) => dirStats(dir, isRemoved)));
     return parts.reduce((sum, part) => ({ files: sum.files + part.files, bytes: sum.bytes + part.bytes }), { files: 0, bytes: 0 });
   }
 
@@ -1094,6 +1446,7 @@ export function createStore(rootDir) {
       const prices = await dirStats(pricesDir, notRemoved);
       const calendar = await dirStats(calendarDir, notRemoved);
       const flights = await dirStats(flightsDir, notRemoved);
+      const hotels = await dirStats(hotelsDir, notRemoved);
       const removed = await removedStats();
       let profileBytes = null;
       try {
@@ -1101,7 +1454,7 @@ export function createStore(rootDir) {
       } catch {
         profileBytes = null;
       }
-      const buckets = { root: rootFiles, prices, calendar, flights };
+      const buckets = { root: rootFiles, prices, calendar, flights, hotels };
       let totalBytes = 0;
       let totalFiles = 0;
       for (const part of Object.values(buckets)) {
@@ -1119,15 +1472,17 @@ export function createStore(rootDir) {
         prices: { files: prices.files, bytes: prices.bytes },
         calendar: { files: calendar.files, bytes: calendar.bytes },
         flights: { files: flights.files, bytes: flights.bytes },
+        // v0.15 酒店快照目录：additive 键，老客户端读不到就忽略（挡不住谎报占用）。
+        hotels: { files: hotels.files, bytes: hotels.bytes },
         profileBytes,
       };
     } catch {
-      return { ...stats, totalBytes: 0, totalFiles: 0, removed: { files: 0, bytes: 0 }, prices: { files: 0, bytes: 0 }, calendar: { files: 0, bytes: 0 }, flights: { files: 0, bytes: 0 }, profileBytes: null };
+      return { ...stats, totalBytes: 0, totalFiles: 0, removed: { files: 0, bytes: 0 }, prices: { files: 0, bytes: 0 }, calendar: { files: 0, bytes: 0 }, flights: { files: 0, bytes: 0 }, hotels: { files: 0, bytes: 0 }, profileBytes: null };
     }
   }
 
   /**
-   * `POST /api/storage/cleanup`：删除根目录与三个数据目录里的 `*.removed`。
+   * `POST /api/storage/cleanup`：删除根目录与四个数据目录里的 `*.removed`。
    *
    * 安全约束（写死在这里，路由层不需要也不允许放宽）：
    *  - 只删文件名以 `.removed` 结尾的**普通文件**，其它一律不碰；
@@ -1138,7 +1493,7 @@ export function createStore(rootDir) {
     let removed = 0;
     let freedBytes = 0;
     let failed = 0;
-    for (const dir of [rootDir, pricesDir, calendarDir, flightsDir]) {
+    for (const dir of [rootDir, pricesDir, calendarDir, flightsDir, hotelsDir]) {
       const entries = await readDirEntries(dir);
       if (!Array.isArray(entries)) {
         failed += 1;
@@ -1174,12 +1529,16 @@ export function createStore(rootDir) {
     listMonitors,
     findMonitor,
     createMonitor,
+    createHotelMonitor,
+    validateHotelInput,
     updateMonitor,
     removeMonitor,
     readCalendarSnapshot,
     writeCalendarSnapshot,
     readFlightsSnapshot,
     writeFlightsSnapshot,
+    readHotelSnapshot,
+    writeHotelSnapshot,
     getState,
     saveState,
     appendPoints,

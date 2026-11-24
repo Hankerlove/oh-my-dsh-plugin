@@ -82,6 +82,11 @@ export function monitorId() {
   return `m_${mint(8)}`;
 }
 
+/** `h_` + 8 hex — hotel monitors use their own prefix so logs stay readable. */
+export function hotelMonitorId() {
+  return `h_${mint(8)}`;
+}
+
 /** `p_` + 6 hex. */
 export function passengerId() {
   return `p_${mint(6)}`;
@@ -95,11 +100,26 @@ function mint(length) {
 }
 
 /**
- * Which collection model a monitor uses: a real `departDate` means the user has
- * picked a date (watch), anything else means "date not decided yet" (calendar).
+ * Which collection model a monitor uses.
+ *
+ * `checkIn` is the hotel marker (hotel monitors always carry it, flight params
+ * never do), then a real `departDate` means the user has picked a flight date
+ * (watch), anything else means "date not decided yet" (calendar).
  */
 export function monitorMode(params) {
+  if (isDateString(params?.checkIn)) return 'hotel';
   return isDateString(params?.departDate) ? 'watch' : 'calendar';
+}
+
+/**
+ * Whole nights between two `YYYY-MM-DD` dates, or `null` when either date is
+ * not a real calendar day. Pure date maths (UTC midnight), so it can never be
+ * shifted by the Host's local timezone; callers validate the 1–30 range.
+ */
+export function nightsBetween(checkIn, checkOut) {
+  if (!isDateString(checkIn) || !isDateString(checkOut)) return null;
+  const nights = Math.round((Date.parse(`${checkOut}T00:00:00Z`) - Date.parse(`${checkIn}T00:00:00Z`)) / 86400000);
+  return Number.isFinite(nights) ? nights : null;
 }
 
 /**
@@ -118,14 +138,23 @@ export function monthDay(dateString) {
 
 /**
  * Human title for a monitor, computed on the Host so both halves agree.
- * The mode is derived from `departDate`, exactly like the model itself.
+ * The mode is derived from the params, exactly like the model itself.
  */
 export function monitorTitle(options) {
   const params = options?.params && typeof options.params === 'object' ? options.params : options || {};
+  const mode = monitorMode(params);
+  if (mode === 'hotel') {
+    // `全季酒店(上海虹桥店) · 12月05日–12月07日`（契约 §2）
+    const hotelName = String(params.hotelName || params.keyword || '酒店').trim();
+    const checkIn = monthDay(params.checkIn);
+    const checkOut = monthDay(params.checkOut);
+    if (!checkIn) return hotelName;
+    return checkOut ? `${hotelName} · ${checkIn}–${checkOut}` : `${hotelName} · ${checkIn}`;
+  }
   const name = (code) => CITY_NAMES[code] || code;
   const round = params.trip === 'round';
   const route = round ? `${name(params.dep)} ⇄ ${name(params.arr)}` : `${name(params.dep)} → ${name(params.arr)}`;
-  if (monitorMode(params) === 'calendar') {
+  if (mode === 'calendar') {
     return round ? `${route} · 往返 · 日期待定` : `${route} · 日期待定`;
   }
   const depart = monthDay(params.departDate);
