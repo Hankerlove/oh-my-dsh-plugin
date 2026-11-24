@@ -1,0 +1,127 @@
+{
+ "note": "真实响应片段（2026-11-24，city=2&keyword=全季 虹桥，匿名 HTTP 200）；已剔除图片/追踪串",
+ "cityId": 2,
+ "keyword": "全季 虹桥",
+ "checkIn": "2026-12-05",
+ "checkOut": "2026-12-07",
+ "hotelTotalCount": 8904,
+ "hotelList": [
+  {
+   "hotelId": "1565886",
+   "name": "全季酒店(上海虹桥中山西路店)",
+   "enName": "JI Hotel (Shanghai Hongqiao Zhongshan West Road)",
+   "star": 3,
+   "score": "4.6",
+   "scoreLabel": "很好",
+   "address": "中山西路908号"
+  },
+  {
+   "hotelId": "125442316",
+   "name": "上海丽呈花园酒店",
+   "enName": "Shanghai Garden Rezen Hotel",
+   "star": 5,
+   "score": "4.8",
+   "scoreLabel": "超棒",
+   "address": "川沙新镇连民村179号53幢"
+  },
+  {
+   "hotelId": "479628",
+   "name": "美豪丽致酒店(上海徐家汇衡山路店)",
+   "enName": "MEHOOD LESTIE Hotel (Shanghai Xujiahui Hengshan Road)",
+   "star": 4,
+   "score": "4.6",
+   "scoreLabel": "很好",
+   "address": "建国西路691号"
+  },
+  {
+   "hotelId": "425174",
+   "name": "上海外滩东方美仑美奂酒店",
+   "enName": "MaxX By Steigenberger on the Bund Shanghai",
+   "star": 5,
+   "score": "4.8",
+   "scoreLabel": "超棒",
+   "address": "金陵东路1号"
+  },
+  {
+   "hotelId": "345046",
+   "name": "上海衡山花园酒店",
+   "enName": "Hengshan Garden Hotel",
+   "star": 5,
+   "score": "4.6",
+   "scoreLabel": "很好",
+   "address": "衡山路516号"
+  },
+  {
+   "hotelId": "6435064",
+   "name": "全季酒店(上海虹桥枢纽徐泾店)",
+   "enName": "JI Hotel (Shanghai Hongqiao Hub Xujing)",
+   "star": 3,
+   "score": "4.4",
+   "scoreLabel": "",
+   "address": "徐泾镇沪青平公路1929号"
+  },
+  {
+   "hotelId": "445563",
+   "name": "上海松江开元名都大酒店",
+   "enName": "New Century Grand Hotel Shanghai Songjiang",
+   "star": 5,
+   "score": "4.8",
+   "scoreLabel": "超棒",
+   "address": "人民北路1799号开元地中海商业广场旁边"
+  },
+  {
+   "hotelId": "434019",
+   "name": "上海吉臣维景酒店",
+   "enName": "Metropark Jichen Hotel Shanghai",
+   "star": 4,
+   "score": "4.7",
+   "scoreLabel": "超棒",
+   "address": "万航渡路818号"
+  },
+  {
+   "hotelId": "441585",
+   "name": "上海万信R酒店(陆家嘴金融街区店)",
+   "enName": "Wassim R Hotel",
+   "star": 4,
+   "score": "4.7",
+   "scoreLabel": "超棒",
+   "address": "崮山路688号"
+  },
+  {
+   "hotelId": "433981",
+   "name": "上海延安饭店",
+   "enName": "Yan An Hotel",
+   "star": 4,
+   "score": "4.4",
+   "scoreLabel": "",
+   "address": "延安中路1111号"
+  },
+  {
+   "hotelId": "98063418",
+   "name": "全季酒店(上海东靖路地铁站店)",
+   "enName": "JI Hotel (Shanghai Dongjing Road Subway Station)",
+   "star": 3,
+   "score": "4.7",
+   "scoreLabel": "超棒",
+   "address": "张杨北路1933弄1号"
+  },
+  {
+   "hotelId": "60182899",
+   "name": "上海陆家嘴禧玥酒店",
+   "enName": "JOYA Hotel Shanghai Lujiazui",
+   "star": 5,
+   "score": "4.8",
+   "scoreLabel": "超棒",
+   "address": "浦明路868弄3号楼"
+  },
+  {
+   "hotelId": "76482502",
+   "name": "上海百万石温泉酒店(比斯特购物村店)",
+   "enName": "Shanghai Hyakumangoku Onsen Hotel",
+   "star": 5,
+   "score": "4.7",
+   "scoreLabel": "超棒",
+   "address": "申迪东路99号"
+  }
+ ]
+}

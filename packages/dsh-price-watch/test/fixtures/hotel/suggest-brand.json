@@ -1,0 +1,65 @@
+{
+ "note": "真实响应脱敏瘦身（2026-11-24，纯 HTTP suggest 接口）；已删 lat/lon/scoreDesc/extMsg/trace 等",
+ "data": [
+  {
+   "type": "hotelbrand",
+   "productId": 49,
+   "word": "临汾的全季酒店",
+   "cityId": 139,
+   "cityName": "临汾",
+   "districtName": "",
+   "zoneName": "",
+   "url": "https://hotels.ctrip.com/hotels/list?city=139&optionName=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&display=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&directSearch=1"
+  },
+  {
+   "type": "hotelbrand",
+   "productId": 49,
+   "word": "徐州的全季酒店",
+   "cityId": 512,
+   "cityName": "徐州",
+   "districtName": "",
+   "zoneName": "",
+   "url": "https://hotels.ctrip.com/hotels/list?city=512&optionName=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&display=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&directSearch=1"
+  },
+  {
+   "type": "hotelbrand",
+   "productId": 49,
+   "word": "通辽的全季酒店",
+   "cityId": 458,
+   "cityName": "通辽",
+   "districtName": "",
+   "zoneName": "",
+   "url": "https://hotels.ctrip.com/hotels/list?city=458&optionName=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&display=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&directSearch=1"
+  },
+  {
+   "type": "hotelbrand",
+   "productId": 49,
+   "word": "南宁的全季酒店",
+   "cityId": 380,
+   "cityName": "南宁",
+   "districtName": "",
+   "zoneName": "",
+   "url": "https://hotels.ctrip.com/hotels/list?city=380&optionName=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&display=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&directSearch=1"
+  },
+  {
+   "type": "hotelbrand",
+   "productId": 49,
+   "word": "马鞍山的全季酒店",
+   "cityId": 1024,
+   "cityName": "马鞍山",
+   "districtName": "",
+   "zoneName": "",
+   "url": "https://hotels.ctrip.com/hotels/list?city=1024&optionName=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&display=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&directSearch=1"
+  },
+  {
+   "type": "hotelbrand",
+   "productId": 49,
+   "word": "惠州的全季酒店",
+   "cityId": 299,
+   "cityName": "惠州",
+   "districtName": "",
+   "zoneName": "",
+   "url": "https://hotels.ctrip.com/hotels/list?city=299&optionName=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&display=%E5%85%A8%E5%AD%A3%E9%85%92%E5%BA%97&directSearch=1"
+  }
+ ]
+}

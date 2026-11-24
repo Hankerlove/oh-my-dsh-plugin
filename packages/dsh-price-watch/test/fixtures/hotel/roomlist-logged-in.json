@@ -1,0 +1,454 @@
+{
+ "note": "真实登录态响应（2026-11-24，hotelId=1565886，checkIn=20261205/checkOut=20261207，adult=2）。已脱敏瘦身：删除图片、追踪串、取消罚金、促销明细；价格字段原样保留。",
+ "data": {
+  "isLogin": true,
+  "roomCount": 12,
+  "searchBoxInfo": {
+   "checkIn": "20261205",
+   "checkOut": "20261207",
+   "adult": 2,
+   "childInfoItems": [],
+   "roomQuantity": 1
+  },
+  "physicRoomMap": {
+   "4222432": {
+    "id": 4222432,
+    "name": "高级双床房（电视投屏）"
+   },
+   "4222434": {
+    "id": 4222434,
+    "name": "高级大床房（电视投屏）"
+   },
+   "5489440": {
+    "id": 5489440,
+    "name": "大床房（电视投屏）"
+   },
+   "17156830": {
+    "id": 17156830,
+    "name": "商务大床房（电视投屏）"
+   }
+  },
+  "saleRoomMap": {
+   "1655119205_R24X5G": {
+    "id": 1655119205,
+    "physicalRoomId": 5489440,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 299,
+     "displayPrice": "¥299",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥650.9"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥597.9",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥53"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 6,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "无早餐"
+    }
+   },
+   "1655119209_R24X5Z": {
+    "id": 1655119209,
+    "physicalRoomId": 5489440,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 336,
+     "displayPrice": "¥336",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥730.9"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥671.9",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥59"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 6,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "1份早餐"
+    }
+   },
+   "1655119200_R24X50": {
+    "id": 1655119200,
+    "physicalRoomId": 5489440,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 373,
+     "displayPrice": "¥373",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥810.9"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥744.9",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥66"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 6,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "2份早餐"
+    }
+   },
+   "1655119216_R24X5Y": {
+    "id": 1655119216,
+    "physicalRoomId": 4222432,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 312,
+     "displayPrice": "¥312",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥677.36"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥622.36",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥55"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 59,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "无早餐"
+    }
+   },
+   "1655119217_R24X5S": {
+    "id": 1655119217,
+    "physicalRoomId": 4222432,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 348,
+     "displayPrice": "¥348",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥757.36"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥695.36",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥62"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 59,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "1份早餐"
+    }
+   },
+   "1655119208_R24X5J": {
+    "id": 1655119208,
+    "physicalRoomId": 4222432,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 385,
+     "displayPrice": "¥385",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥837.36"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥769.36",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥68"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 59,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "2份早餐"
+    }
+   },
+   "1655119197_R24X5M": {
+    "id": 1655119197,
+    "physicalRoomId": 4222434,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 324,
+     "displayPrice": "¥324",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥703.82"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥646.82",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥57"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 67,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "无早餐"
+    }
+   },
+   "1655119203_R24X56": {
+    "id": 1655119203,
+    "physicalRoomId": 4222434,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 360,
+     "displayPrice": "¥360",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥783.82"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥719.82",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥64"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 67,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "1份早餐"
+    }
+   },
+   "1655119185_R24XDW": {
+    "id": 1655119185,
+    "physicalRoomId": 4222434,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 397,
+     "displayPrice": "¥397",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥863.82"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥793.82",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥70"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 67,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "2份早餐"
+    }
+   },
+   "1655119199_R24X59": {
+    "id": 1655119199,
+    "physicalRoomId": 17156830,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 348,
+     "displayPrice": "¥348",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥756.74"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥695.74",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥61"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 133,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "无早餐"
+    }
+   },
+   "1655119207_R24X58": {
+    "id": 1655119207,
+    "physicalRoomId": 17156830,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 385,
+     "displayPrice": "¥385",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥836.74"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥768.74",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥68"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 133,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "1份早餐"
+    }
+   },
+   "1655119195_R24X5F": {
+    "id": 1655119195,
+    "physicalRoomId": 17156830,
+    "priceInfo": {
+     "currency": "CNY",
+     "price": 422,
+     "displayPrice": "¥422",
+     "displayPricePrefix": "均",
+     "taxText": ""
+    },
+    "totalPriceInfo": {
+     "quantityDays": {
+      "title": "1间 x 2晚",
+      "content": "¥916.74"
+     },
+     "total": {
+      "title": "在线付",
+      "content": "¥842.74",
+      "localPriceDesc": ""
+     },
+     "totalDiscount": "-¥74"
+    },
+    "bookingStatusInfo": {
+     "isBooking": true,
+     "isFullRoom": false,
+     "guaranteeText": "",
+     "buttonText": "预订",
+     "remainRoomQuantity": 133,
+     "isHidePrice": false,
+     "buttonType": 1
+    },
+    "mealInfo": {
+     "title": "2份早餐"
+    }
+   }
+  }
+ }
+}

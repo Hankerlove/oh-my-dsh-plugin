@@ -1,0 +1,49 @@
+{
+ "note": "真实响应脱敏瘦身（2026-11-24，纯 HTTP suggest 接口）；已删 lat/lon/scoreDesc/extMsg/trace 等",
+ "data": [
+  {
+   "type": "hotel",
+   "productId": 1565886,
+   "word": "全季酒店(上海虹桥中山西路店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "zoneName": "上海-虹桥",
+   "starRating": "舒适型",
+   "url": "http://hotels.ctrip.com/hotel/1565886.html?cityid=2"
+  },
+  {
+   "type": "sightplay",
+   "productId": 148930981,
+   "word": "曲水兰亭(上海虹桥店)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "url": "http://you.ctrip.com/sight/qushuilantingshanghaihongqiaodian2/148930981.html"
+  },
+  {
+   "type": "sight",
+   "productId": 1700629,
+   "word": "国家会展中心(上海)",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "url": "http://you.ctrip.com/sight/guojiahuizhanzhongxinshanghai2/1700629.html"
+  },
+  {
+   "type": "sightplay",
+   "productId": 157455745,
+   "word": "上海 · 李永钦TEN「TENCORE0110」十周年纪念演唱会",
+   "cityId": 2,
+   "cityName": "上海",
+   "districtName": "上海",
+   "url": "http://you.ctrip.com/sight/shanghailiyongqinshizhounianjinianyanchanghui2/157455745.html"
+  },
+  {
+   "type": "hotellist",
+   "word": "上海的全部酒店",
+   "districtName": "中国",
+   "url": "http://hotels.ctrip.com/hotel/shanghai2#ctm_ref=www_hp_bs_lst"
+  }
+ ]
+}
