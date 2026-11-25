@@ -69,8 +69,8 @@ import { deliverAppCard } from './host/feishu.js';
 import { buildCalendarCard, buildFailureCard, buildHotelCard, buildTestCard, buildWatchCard, sendFeishu } from './host/notify.js';
 import { createRouter } from './host/routes.js';
 import { clampCadence, createStore } from './host/store.js';
-import { NETWORK_RETRY_MS, isNetworkError } from './host/net.js';
-import { createLogger, isDateString, isoDate, isoNow, minSeries, sleep } from './host/util.js';
+import { NETWORK_RETRY_MS, isBrowserSessionError, isNetworkError, isTransientFailure } from './host/net.js';
+import { createLogger, isDateString, isWakeUpGap, isoDate, isoNow, minSeries, sleep } from './host/util.js';
 
 export const name = 'price-watch';
 
@@ -139,6 +139,8 @@ export function apply(ctx) {
 
   let running = false;
   let disposed = false;
+  /** 上一次心跳的时刻，用来识别「机器刚睡过」的大空档（只做诊断日志）。 */
+  let lastTickAt = null;
   /** Timestamp of the last Ctrip request; enforces the global 1500ms gap. */
   let l1LastAt = 0;
   /** Cached L1 health probe so a status poll never costs a request. */
@@ -397,8 +399,12 @@ export function apply(ctx) {
         result = await sendFeishu(channel.webhook, buildCardFor(monitor, report, null, trend), { logger });
       }
       const at = isoNow();
+      // 推送失败的「环境暂时不可用」类错误（网络没就绪 / 浏览器会话刚失效）**不写指纹**：
+      // 下一轮同样的内容还会再试一次，避免一条消息恰好落在唤醒窗口里被永久吞掉
+      // （指纹一旦写入，内容不变就再也不会推）。配置类错误仍然写指纹，免得每轮白撞。
+      const transient = result.ok !== true && isTransientFailure({ message: String(result.error || '') });
       const entry = {
-        hash,
+        hash: transient ? '' : hash,
         at,
         ok: result.ok === true,
         error: result.ok === true ? null : String(result.error || '投递失败'),
@@ -510,6 +516,19 @@ export function apply(ctx) {
   }
 
   /**
+   * 「环境暂时不可用」类失败的统一文案：网络不通，或浏览器会话在休眠后失效。
+   * 这两类都不是站点故障、也不是用户配置错误，处理方式一样——跳过本轮、
+   * 写下面板原因、15 分钟后补采，**不推失败卡片**（否则每次维护唤醒都刷一张）。
+   */
+  function transientNote(error, message) {
+    const minutes = Math.round(NETWORK_RETRY_MS / 60000);
+    if (isBrowserSessionError(error)) {
+      return `浏览器会话在休眠后失效，本轮跳过，${minutes} 分钟后重试并自动重建浏览器：${message}`;
+    }
+    return `网络不可用（可能刚休眠/断网），本轮跳过，${minutes} 分钟后重试：${message}`;
+  }
+
+  /**
    * 记一次失败的采集：累加失败次数 + 最近一次原因。面板的「上次采集失败原因」
    * 与 `/status.failures` 都读这里；投递失败卡片由 `deliverReport` 单独负责。
    */
@@ -582,8 +601,8 @@ export function apply(ctx) {
       const message = String(error?.message || error);
       // 休眠/断网：不当成「采集失败」处理——不发失败卡（否则每次维护唤醒都推一张），
       // 只把原因写进面板，并在 15 分钟后补采。
-      if (isNetworkError(error)) {
-        const note = `网络不可用（可能刚休眠/断网），本轮跳过，${Math.round(NETWORK_RETRY_MS / 60000)} 分钟后重试：${message}`;
+      if (isNetworkError(error) || isBrowserSessionError(error)) {
+        const note = transientNote(error, message);
         logger.warn(`日历采集跳过 ${monitor.title}: ${note}`);
         await recordFailure(monitor, note);
         await setNextDue(monitor.id, retrySoon());
@@ -655,8 +674,8 @@ export function apply(ctx) {
     } catch (error) {
       const message = String(error?.message || error);
       const state = store.getState();
-      if (isNetworkError(error)) {
-        const note = `网络不可用（可能刚休眠/断网），本轮跳过，${Math.round(NETWORK_RETRY_MS / 60000)} 分钟后重试：${message}`;
+      if (isNetworkError(error) || isBrowserSessionError(error)) {
+        const note = transientNote(error, message);
         logger.warn(`监控采集跳过 ${monitor.title}: ${note}`);
         await store.saveState({
           l2LastRunBy: { ...(state.l2LastRunBy || {}), [monitor.id]: isoNow() },
@@ -746,8 +765,8 @@ export function apply(ctx) {
       return { ok: true, source: 'hotel', points: 1, delivery };
     } catch (error) {
       const message = String(error?.message || error);
-      if (isNetworkError(error)) {
-        const note = `网络不可用（可能刚休眠/断网），本轮跳过，${Math.round(NETWORK_RETRY_MS / 60000)} 分钟后重试：${message}`;
+      if (isNetworkError(error) || isBrowserSessionError(error)) {
+        const note = transientNote(error, message);
         logger.warn(`酒店采集跳过 ${monitor.title}: ${note}`);
         await recordFailure(monitor, note);
         await setNextDue(monitor.id, retrySoon());
@@ -830,10 +849,24 @@ export function apply(ctx) {
   async function tick() {
     if (running || disposed) return { ok: true, skipped: 'busy' };
     running = true;
+    // B 方案（用户 2026-11-25 拍板）：机器刚睡醒的那一拍**只记时间，不动手**。
+    // 睡眠期间进程被冻结、定时器不跑；macOS 电池模式每 15–20 分钟只有 2–3 秒的
+    // 维护唤醒（DarkWake），在这种窗口里起 Chrome / 打携程必然被打断。等下一拍
+    // （间隔正常 ≈60 秒，说明系统真的醒着）再采；DarkWake 窗口撑不到第二拍，
+    // 于是被自然过滤掉。手动「立即采集」不走这里，永远立即执行。
+    const gapMs = lastTickAt === null ? null : Date.now() - lastTickAt;
+    lastTickAt = Date.now();
+    const justWoke = isWakeUpGap(gapMs, { tickMs: TICK_MS });
     try {
       await store.init();
       // D1：先清过期监控，再决定采集目标（删除必须早于任何一次采集）。
       const removed = await purgeExpiredMonitors();
+      if (justWoke) {
+        const gapText = gapMs === null ? '首次心跳' : `心跳间隔 ${Math.round(gapMs / 60000)} 分钟`;
+        logger.info(`检测到休眠唤醒（${gapText}），本拍只记时间不采集，下一拍（约 60 秒后）再采`);
+        // nextDue 保持原样（仍然过期），所以下一拍会立刻补上这一次。
+        return { ok: true, collected: 0, removed, skipped: 'just-woke' };
+      }
       let collected = 0;
       const targets = store.listMonitors().filter((monitor) => monitor.enabled !== false);
       for (const monitor of targets) {

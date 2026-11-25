@@ -185,6 +185,31 @@ export function cityCode(value) {
 }
 
 /**
+ * 心跳间隔是不是「大空档」——也就是机器刚睡过。
+ *
+ * 背景：进程在系统睡眠期间被冻结，定时器不跑；macOS 电池模式下每 15–20 分钟
+ * 会有一次 2–3 秒的维护唤醒（DarkWake），醒来瞬间定时器补一拍。如果这一拍
+ * 立刻开始采集，几乎必然落在窗口里被打断（页面只渲染出壳 / Chrome 已被回收）。
+ *
+ * 所以调度用这个判断来决定「这一拍只记时间，不动手」：间隔超过 3 拍（默认
+ * 3 分钟）就认为刚睡醒；下一拍如果间隔正常（≈60 秒），说明系统真的醒着，才采。
+ *
+ * 第一拍（`gapMs === null`）同样返回 true：DSH 刚启动时先记一拍再采，
+ * 这样「休眠后被系统杀掉、进程重启」也走同一条保护路径。
+ *
+ * @param {number|null} gapMs 距上次心跳的毫秒数（null = 还没有过心跳）
+ * @param {{tickMs?: number, factor?: number}} [options]
+ * @returns {boolean}
+ */
+export function isWakeUpGap(gapMs, { tickMs = 60_000, factor = 3 } = {}) {
+  if (gapMs === null || gapMs === undefined) return true;
+  const gap = Number(gapMs);
+  if (!Number.isFinite(gap)) return true;
+  if (gap < 0) return true;
+  return gap > tickMs * factor;
+}
+
+/**
  * A logger facade: the Host may run without `ctx.logger`, and a failing log
  * call must never disturb price collection.
  */

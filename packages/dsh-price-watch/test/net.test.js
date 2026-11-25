@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { NETWORK_RETRY_MS, NetworkError, isNetworkError } from '../host/net.js';
+import { BrowserSessionError, NETWORK_RETRY_MS, NetworkError, isBrowserSessionError, isNetworkError, isTransientFailure } from '../host/net.js';
 
 test('浏览器网络栈错误算网络问题', () => {
   for (const message of [
@@ -61,4 +61,31 @@ test('NetworkError 的类型与 code 可直接判', () => {
 
 test('补采间隔是 15 分钟', () => {
   assert.equal(NETWORK_RETRY_MS, 15 * 60 * 1000);
+});
+
+test('浏览器会话失效（休眠后）算可恢复错误', () => {
+  // 2026-11-25 02:18 真实报错：笔记本休眠后 Chrome 被回收，Playwright 仍拿着旧 context
+  for (const message of [
+    'browserContext.newPage: Protocol error (Target.createTarget): Failed to open a new tab',
+    'Target page, context or browser has been closed',
+    'Browser has been closed',
+    'Protocol error (Target.createTarget): Failed to open a new tab',
+  ]) {
+    assert.equal(isBrowserSessionError(new Error(message)), true, message);
+  }
+  const error = new BrowserSessionError();
+  assert.equal(error.name, 'BrowserSessionError');
+  assert.equal(error.code, 'BROWSER_SESSION');
+  assert.equal(isBrowserSessionError(error), true);
+  assert.equal(isBrowserSessionError(null), false);
+});
+
+test('浏览器会话错误不算网络错误，但都算「可恢复」', () => {
+  const browserGone = new Error('Target page, context or browser has been closed');
+  assert.equal(isNetworkError(browserGone), false);
+  assert.equal(isTransientFailure(browserGone), true);
+  assert.equal(isTransientFailure(new Error('fetch failed')), true);
+  // 站点风控 / 解析失败仍然不算可恢复，必须让用户看到失败卡
+  assert.equal(isTransientFailure(new Error('航班列表被限频（重载后仍为空，页面壳正常、日期条有价）: 2626 字')), false);
+  assert.equal(isTransientFailure(new Error('携程返回验证/风控页：whaleguard block')), false);
 });
