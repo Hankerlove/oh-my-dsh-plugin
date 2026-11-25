@@ -59,7 +59,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
-import { NetworkError, isNetworkError, probeNetwork } from '../net.js';
+import { NetworkError, isBrowserSessionError, isNetworkError, probeNetwork } from '../net.js';
 import { isoNow } from '../util.js';
 
 const LIST_BASE = 'https://flights.ctrip.com';
@@ -805,6 +805,24 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     return context;
   }
 
+  /**
+   * 丢弃当前上下文（休眠后 Chrome 常被挂起/回收，Playwright 缓存里的 context
+   * 已经打不开新页面了）。下一次 `ensureContext()` 会重新 launch 一个。
+   * 只做清理，不在这里重试：重试策略由调用方/调度器决定。
+   */
+  async function resetContext(reason) {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    if (!context) return;
+    const closing = context;
+    context = null;
+    contextHeadless = null;
+    logger.warn(`浏览器会话失效，丢弃上下文待下次重建: ${String(reason || '').slice(0, 140)}`);
+    await closing.close().catch(() => {});
+  }
+
   function scheduleIdleClose() {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(async () => {
@@ -987,7 +1005,25 @@ export function createBrowserCollector({ rootDir, logger, store }) {
     // The page shell and the date strip render, but the flight rows are withheld:
     // that is Ctrip throttling the list endpoint rather than a layout change.
     if (diag.priceChips > 0 && diag.len > 200) {
-      throw new BlockedError(`航班列表被限频（页面壳正常、日期条有价、航班行为空）: ${diag.len} 字`);
+      // 休眠唤醒后的头几秒，页面常常只渲染出壳：日期条有价、航班行还没挂上来。
+      // 这种情况重载一次通常就正常，直接判「限频」会误报（2026-11-25 01:28 真实踩到）。
+      logger.warn('航班行为空但页面壳正常，重载一次再判断');
+      try {
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 25000 });
+        const deadline = Date.now() + 20000;
+        while (Date.now() < deadline) {
+          const rows = await page.evaluate(() => Math.max(
+            document.querySelectorAll('.flight-item').length,
+            document.querySelectorAll('.btn-book').length,
+          )).catch(() => 0);
+          if (rows > 0) return true;
+          await page.waitForTimeout(1000);
+        }
+      } catch (error) {
+        if (isBrowserSessionError(error)) throw error;
+        logger.warn(`重载列表页失败: ${String(error?.message || error).slice(0, 120)}`);
+      }
+      throw new BlockedError(`航班列表被限频（重载后仍为空，页面壳正常、日期条有价）: ${diag.len} 字`);
     }
     throw new Error(`航班列表未加载出来（${diag.len} 字，价格标记 ${diag.priceChips} 个）`);
   }
@@ -2301,6 +2337,9 @@ export function createBrowserCollector({ rootDir, logger, store }) {
         }));
 
         return { points, flights, tax, lowest };
+      } catch (error) {
+        if (isBrowserSessionError(error)) await resetContext(error?.message);
+        throw error;
       } finally {
         scheduleIdleClose();
       }
@@ -2336,13 +2375,18 @@ export function createBrowserCollector({ rootDir, logger, store }) {
   function withPage(fn, { timeoutMs = 90000 } = {}) {
     const run = async () => {
       if (loggingIn) throw new Error('正在登录携程，请等登录窗口结束后再试');
-      const ctx = await ensureContext({ visible: false });
-      const page = await ctx.newPage();
+      let page = null;
       try {
+        const ctx = await ensureContext({ visible: false });
+        page = await ctx.newPage();
         page.setDefaultTimeout(timeoutMs);
         return await fn(page);
+      } catch (error) {
+        // 休眠后 common case：context 还在但已打不开新页面 → 丢掉它，下次重建。
+        if (isBrowserSessionError(error)) await resetContext(error?.message);
+        throw error;
       } finally {
-        await page.close().catch(() => {});
+        if (page) await page.close().catch(() => {});
         scheduleIdleClose();
       }
     };

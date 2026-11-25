@@ -63,6 +63,52 @@ export function isNetworkError(error) {
 }
 
 /**
+ * 浏览器会话本身失效（不是网络问题，也不是站点问题）。
+ *
+ * 典型场景：笔记本休眠期间 Chrome 被挂起/回收，Playwright 手里还留着一个已经
+ * 不存在的 context，采集一开始就报
+ * `browserContext.newPage: Protocol error (Target.createTarget): Failed to open a new tab`
+ * 或 `Target closed`。这类错误重开一个浏览器就能恢复，不该推失败卡片。
+ */
+export class BrowserSessionError extends Error {
+  constructor(message = '浏览器会话不可用') {
+    super(message);
+    this.name = 'BrowserSessionError';
+    this.code = 'BROWSER_SESSION';
+  }
+}
+
+const BROWSER_SESSION_PATTERNS = [
+  /Protocol error \(Target\.createTarget\)/i,
+  /Failed to open a new tab/i,
+  /browserContext\.newPage/i,
+  /Target (?:page, context or browser )?closed/i,
+  /Target\.(?:createTarget|page|closeTarget)/i,
+  /Browser has been closed/i,
+  /Connection closed/i,
+  /Session closed/i,
+  /Protocol error \(Page\.(?:navigate|reload|close)\)/i,
+  /Target page, context or browser has been closed/i,
+];
+
+/** 这次失败算不算「浏览器会话失效」（休眠后最常见）。 */
+export function isBrowserSessionError(error) {
+  if (!error) return false;
+  if (error.code === 'BROWSER_SESSION' || error.name === 'BrowserSessionError') return true;
+  const texts = [error?.message, error?.cause?.message, error?.code]
+    .filter((value) => typeof value === 'string' && value.trim() !== '');
+  return texts.some((text) => BROWSER_SESSION_PATTERNS.some((pattern) => pattern.test(text)));
+}
+
+/**
+ * 一次失败是否属于「环境暂时不可用」：网络不通，或浏览器会话在休眠后失效。
+ * 调度的处理方式一样（跳过本轮 + 15 分钟后补采、不发失败卡片），只是文案不同。
+ */
+export function isTransientFailure(error) {
+  return isNetworkError(error) || isBrowserSessionError(error);
+}
+
+/**
  * 采集前探一下网络（6 秒）。
  *
  * 用 HEAD 请求首页：**只要能拿到 HTTP 响应就算通**（携程偶尔回 4xx/5xx 也无所谓，
