@@ -7,7 +7,7 @@
 | 项 | 值 |
 | --- | --- |
 | npm 包名 | [`@ultraslow/dsh-price-watch`](https://www.npmjs.com/package/@ultraslow/dsh-price-watch) |
-| 版本 | `0.15.1` |
+| 版本 | `0.15.2` |
 | 适用 | DSH Web UI |
 | 协议 | [MIT](../../LICENSE) |
 
